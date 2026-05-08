@@ -44,7 +44,6 @@ win:
     - target: nsis
       arch:
         - x64
-        - ia32
   icon: assets/icon.ico
   artifactName: ${productName}-${version}-${arch}-setup.${ext}
 
@@ -54,20 +53,15 @@ nsis:
   perMachine: true
   allowToChangeInstallationDirectory: true
   allowElevation: true
-  installerIcon: assets/icon.ico
-  uninstallerIcon: assets/icon.ico
-  installerHeaderIcon: assets/icon.ico
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: FinHack Pro
-  include: build/installer.nsh
   deleteAppDataOnUninstall: false
   displayLanguageSelector: false
   installerLanguages:
     - zh_CN
     - en_US
   language: "2052"
-  license: LICENSE
 
 # macOS 配置
 mac:
@@ -78,44 +72,15 @@ mac:
         - arm64
   icon: assets/icon.png
   category: public.app-category.finance
-  hardenedRuntime: true
-  gatekeeperAssess: false
-  entitlements: build/entitlements.mac.plist
-  entitlementsInherit: build/entitlements.mac.plist
   artifactName: ${productName}-${version}-${arch}.${ext}
 
 # DMG 配置
 dmg:
-  contents:
-    - x: 130
-      y: 220
-    - x: 410
-      y: 220
-      type: link
-      path: /Applications
   window:
     width: 540
     height: 380
   iconSize: 100
   iconTextSize: 12
-
-# Linux 配置
-linux:
-  target:
-    - target: AppImage
-      arch:
-        - x64
-    - target: deb
-      arch:
-        - x64
-  icon: assets/icon.png
-  category: Office
-  maintainer: FinHack Team
-  desktop:
-    Name: FinHack Pro
-    Comment: 多智能体量化交易系统
-    Categories: Office;Finance;
-    StartupWMClass: finhack-pro
 
 # 发布配置
 publish:

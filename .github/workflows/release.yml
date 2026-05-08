@@ -86,7 +86,8 @@ jobs:
 
       - name: List backend files
         run: |
-          ls -la desktop/backend/ 2>/dev/null || dir desktop\backend\ 2>nul || echo "Backend directory not found"
+          if [ -d "desktop/backend" ]; then ls -la desktop/backend/; else echo "Backend directory not found"; fi
+        shell: bash
 
       - name: Build Electron app (${{ matrix.platform }})
         working-directory: desktop
