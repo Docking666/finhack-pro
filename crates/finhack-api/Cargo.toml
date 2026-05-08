@@ -1,0 +1,21 @@
+[package]
+name = "finhack-api"
+version.workspace = true
+edition.workspace = true
+description = "FinHack Pro REST API + WebSocket 服务"
+
+[dependencies]
+finhack-core = { workspace = true }
+finhack-bus = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+rust_decimal = { workspace = true }
+futures-util = "0.3"

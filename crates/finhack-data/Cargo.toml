@@ -1,0 +1,17 @@
+[package]
+name = "finhack-data"
+version.workspace = true
+edition.workspace = true
+description = "FinHack Pro 数据引擎"
+
+[dependencies]
+finhack-core = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+chrono = { workspace = true }
+csv = { workspace = true }

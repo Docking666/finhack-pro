@@ -1,0 +1,63 @@
+system:
+  name: "FinHack Pro"
+  version: "1.0.0"
+  mode: "backtest"  # backtest | paper | live
+
+data:
+  storage_type: "csv"  # csv | parquet | database
+  data_dir: "./data"
+  symbols:
+    - "000001.SZ"
+    - "600519.SH"
+
+risk:
+  max_position_pct: 0.2       # 单标的最大仓位占比
+  max_drawdown: 0.15          # 最大回撤限制
+  var_limit: 0.05             # VaR限制
+  max_leverage: 2.0           # 最大杠杆
+  daily_loss_limit: 0.03      # 日内亏损限制
+
+execution:
+  algorithm: "twap"           # twap | vwap | iceberg
+  slippage_bps: 2             # 滑点(基点)
+  commission_rate: 0.0003     # 佣金费率(万三)
+  stamp_tax_rate: 0.001       # 印花税率(千一,仅卖出)
+
+backtest:
+  initial_capital: 1000000    # 初始资金(元)
+  start_date: "2023-01-01"
+  end_date: "2024-12-31"
+  benchmark: "000300.SH"      # 基准指数
+
+api:
+  host: "0.0.0.0"
+  port: 8080
+
+agents:
+  market_analyzer:
+    model: "gpt-4"
+    temperature: 0.3
+  news_analyst:
+    model: "gpt-4"
+    temperature: 0.3
+    max_tokens: 2000
+  fundamental_analyst:
+    model: "gpt-4"
+    temperature: 0.2
+    max_tokens: 2500
+  strategy_generator:
+    model: "gpt-4"
+    temperature: 0.5
+  risk_manager:
+    enabled: true
+  trade_executor:
+    enabled: true
+
+shared_memory:
+  enabled: true
+  persist_dir: "./data/memory"
+  max_short_term: 1000
+  decay_hours: 24
+
+tool_registry:
+  enabled: true

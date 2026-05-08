@@ -1,0 +1,86 @@
+version: "3.8"
+
+services:
+  # Rust核心服务
+  finhack-core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: finhack-core
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgres://finhack:finhack123@postgres:5432/finhack
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - finhack-net
+    restart: unless-stopped
+
+  # PostgreSQL数据库
+  postgres:
+    image: postgres:16-alpine
+    container_name: finhack-postgres
+    environment:
+      POSTGRES_USER: finhack
+      POSTGRES_PASSWORD: finhack123
+      POSTGRES_DB: finhack
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finhack"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - finhack-net
+
+  # Redis缓存/消息队列
+  redis:
+    image: redis:7-alpine
+    container_name: finhack-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - finhack-net
+
+  # Grafana监控面板
+  grafana:
+    image: grafana/grafana:latest
+    container_name: finhack-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=finhack123
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - postgres
+    networks:
+      - finhack-net
+
+volumes:
+  postgres_data:
+  redis_data:
+  grafana_data:
+
+networks:
+  finhack-net:
+    driver: bridge
