@@ -51,12 +51,10 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-build.txt
 
-      - name: Set up Node.js 18
+      - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: desktop/package-lock.json
+          node-version: '20'
 
       - name: Install Electron dependencies
         run: |
