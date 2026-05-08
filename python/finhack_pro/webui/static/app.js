@@ -495,6 +495,12 @@ function configPage() {
         testing: { openai: false, anthropic: false, tushare: false },
         testResults: { openai: null, anthropic: null, tushare: null },
         saving: false,
+        sharing: false,
+        shareCode: '',
+        importing: false,
+        importCode: '',
+        importError: '',
+        importSuccess: '',
 
         async init() {
             await this.loadConfig();
@@ -564,6 +570,96 @@ function configPage() {
             this.loadConfig();
             window.__alpineApp.showToast('配置已重置', 'info');
         },
+
+        async shareStrategy() {
+            this.sharing = true;
+            this.shareCode = '';
+            try {
+                // 构建策略配置
+                const strategyConfig = {
+                    strategy: 'dual_thrust', // 默认策略
+                    config: {
+                        llm: this.config.llm,
+                        data: this.config.data,
+                        risk: this.config.risk,
+                        backtest: this.config.backtest,
+                    },
+                };
+
+                const response = await fetch('/api/export/strategy/share', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ strategy_config: strategyConfig }),
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    this.shareCode = result.data.share_code;
+                    window.__alpineApp.showToast('分享码生成成功', 'success');
+                } else {
+                    throw new Error(result.message || '生成失败');
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('生成分享码失败: ' + e.message, 'error');
+            } finally {
+                this.sharing = false;
+            }
+        },
+
+        copyShareCode() {
+            if (navigator.clipboard && this.shareCode) {
+                navigator.clipboard.writeText(this.shareCode).then(() => {
+                    window.__alpineApp.showToast('分享码已复制到剪贴板', 'success');
+                }).catch(() => {
+                    // Fallback
+                    const input = document.createElement('input');
+                    input.value = this.shareCode;
+                    document.body.appendChild(input);
+                    input.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(input);
+                    window.__alpineApp.showToast('分享码已复制', 'success');
+                });
+            }
+        },
+
+        async importStrategy() {
+            if (!this.importCode) return;
+
+            this.importing = true;
+            this.importError = '';
+            this.importSuccess = '';
+
+            try {
+                const response = await fetch('/api/export/strategy/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ share_code: this.importCode }),
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    const config = result.data.strategy_config;
+                    if (config && config.config) {
+                        // 应用导入的配置
+                        if (config.config.llm) Object.assign(this.config.llm, config.config.llm);
+                        if (config.config.data) Object.assign(this.config.data, config.config.data);
+                        if (config.config.risk) Object.assign(this.config.risk, config.config.risk);
+                        if (config.config.backtest) Object.assign(this.config.backtest, config.config.backtest);
+
+                        this.importSuccess = '策略配置导入成功';
+                        window.__alpineApp.showToast('策略配置已导入', 'success');
+                    }
+                } else {
+                    throw new Error(result.message || '导入失败');
+                }
+            } catch (e) {
+                this.importError = '导入失败: ' + e.message;
+                window.__alpineApp.showToast('导入策略失败: ' + e.message, 'error');
+            } finally {
+                this.importing = false;
+            }
+        },
     };
 }
 
@@ -589,6 +685,8 @@ function backtestPage() {
         tradePage: 1,
         equityChart: null,
         currentTaskId: null,
+        exporting: false,
+        currentResult: null,
 
         async init() {
             window.__backtestPage = this;
@@ -757,6 +855,7 @@ function backtestPage() {
                     const result = resp.data;
                     this.metrics = result.metrics || {};
                     this.trades = result.trades || [];
+                    this.currentResult = result; // 保存完整结果用于导出
 
                     // 更新权益曲线
                     if (result.equity_curve && this.equityChart) {
@@ -774,6 +873,102 @@ function backtestPage() {
                 }
             } catch (e) {
                 console.error('获取回测结果失败:', e);
+            }
+        },
+
+        async exportPDF() {
+            if (!this.currentResult) {
+                window.__alpineApp.showToast('请先运行回测', 'warning');
+                return;
+            }
+
+            this.exporting = true;
+            try {
+                const response = await fetch('/api/export/backtest/pdf', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        format: 'pdf',
+                        backtest_result: this.currentResult,
+                        params: {
+                            strategy: this.params.strategy,
+                            symbols: this.params.symbols,
+                            start_date: this.params.start_date,
+                            end_date: this.params.end_date,
+                            initial_capital: this.params.initial_capital,
+                        },
+                    }),
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '导出失败');
+                }
+
+                // 下载文件
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `backtest_${this.params.strategy}_${new Date().toISOString().slice(0,10)}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+
+                window.__alpineApp.showToast('PDF导出成功', 'success');
+            } catch (e) {
+                window.__alpineApp.showToast('导出失败: ' + e.message, 'error');
+            } finally {
+                this.exporting = false;
+            }
+        },
+
+        async exportExcel() {
+            if (!this.currentResult) {
+                window.__alpineApp.showToast('请先运行回测', 'warning');
+                return;
+            }
+
+            this.exporting = true;
+            try {
+                const response = await fetch('/api/export/backtest/excel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        format: 'excel',
+                        backtest_result: this.currentResult,
+                        params: {
+                            strategy: this.params.strategy,
+                            symbols: this.params.symbols,
+                            start_date: this.params.start_date,
+                            end_date: this.params.end_date,
+                            initial_capital: this.params.initial_capital,
+                        },
+                    }),
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '导出失败');
+                }
+
+                // 下载文件
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `backtest_${this.params.strategy}_${new Date().toISOString().slice(0,10)}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+
+                window.__alpineApp.showToast('Excel导出成功', 'success');
+            } catch (e) {
+                window.__alpineApp.showToast('导出失败: ' + e.message, 'error');
+            } finally {
+                this.exporting = false;
             }
         },
     };

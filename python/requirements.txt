@@ -22,6 +22,13 @@ websockets>=12.0
 loguru>=0.7
 rich>=13.0
 
+# 导出功能依赖
+reportlab>=4.0.0
+openpyxl>=3.1.0
+xlsxwriter>=3.1.0
+qrcode>=7.4
+Pillow>=10.0.0
+
 # 开发依赖 (可选)
 pytest>=7.0
 pytest-asyncio>=0.21

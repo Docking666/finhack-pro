@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse
 from loguru import logger
 
 from finhack_pro.webui.api_routes import router as api_router
+from finhack_pro.webui.export_routes import router as export_router
 from finhack_pro.webui.services import (
     AgentService,
     BacktestService,
@@ -71,6 +72,7 @@ def create_app(config_path: Optional[str] = None) -> FastAPI:
 
     # ---- 注册路由 ----
     app.include_router(api_router)
+    app.include_router(export_router)
     app.include_router(ws_router)
 
     # ---- 静态文件目录 ----

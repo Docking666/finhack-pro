@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
+  <title>FinHack Pro - 启动中...</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="splash-container">
+    <!-- Logo 区域 -->
+    <div class="logo-section">
+      <div class="logo-icon">
+        <svg viewBox="0 0 100 100" width="80" height="80">
+          <!-- 图表图标 -->
+          <defs>
+            <linearGradient id="logoGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" style="stop-color:#4F46E5;stop-opacity:1" />
+              <stop offset="100%" style="stop-color:#7C3AED;stop-opacity:1" />
+            </linearGradient>
+          </defs>
+          <!-- 背景圆 -->
+          <circle cx="50" cy="50" r="45" fill="url(#logoGradient)" />
+          <!-- 图表线条 -->
+          <polyline points="20,65 35,45 50,55 65,35 80,40" 
+                    fill="none" 
+                    stroke="white" 
+                    stroke-width="4" 
+                    stroke-linecap="round" 
+                    stroke-linejoin="round" />
+          <!-- 数据点 -->
+          <circle cx="20" cy="65" r="4" fill="white" />
+          <circle cx="35" cy="45" r="4" fill="white" />
+          <circle cx="50" cy="55" r="4" fill="white" />
+          <circle cx="65" cy="35" r="4" fill="white" />
+          <circle cx="80" cy="40" r="4" fill="white" />
+        </svg>
+      </div>
+      <h1 class="app-name">FinHack Pro</h1>
+      <p class="app-subtitle">多智能体量化交易系统</p>
+    </div>
+    
+    <!-- 加载动画区域 -->
+    <div class="loading-section">
+      <div class="loading-spinner">
+        <div class="spinner-ring"></div>
+        <div class="spinner-ring"></div>
+        <div class="spinner-ring"></div>
+      </div>
+      <p class="loading-text" id="loadingText">正在启动 FinHack Pro...</p>
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      <p class="progress-text" id="progressText">初始化中...</p>
+    </div>
+    
+    <!-- 版本信息 -->
+    <div class="version-section">
+      <p>版本 1.0.0</p>
+    </div>
+  </div>
+  
+  <script>
+    // 加载状态管理
+    const loadingText = document.getElementById('loadingText');
+    const progressFill = document.getElementById('progressFill');
+    const progressText = document.getElementById('progressText');
+    
+    // 加载阶段
+    const loadingStages = [
+      { message: '正在初始化应用...', progress: 10 },
+      { message: '正在检查运行环境...', progress: 20 },
+      { message: '正在启动后端服务...', progress: 40 },
+      { message: '正在连接数据库...', progress: 60 },
+      { message: '正在加载系统模块...', progress: 80 },
+      { message: '正在准备用户界面...', progress: 95 }
+    ];
+    
+    let currentStage = 0;
+    
+    // 模拟加载进度
+    function simulateLoading() {
+      if (currentStage < loadingStages.length) {
+        const stage = loadingStages[currentStage];
+        progressText.textContent = stage.message;
+        progressFill.style.width = stage.progress + '%';
+        currentStage++;
+        setTimeout(simulateLoading, 800);
+      }
+    }
+    
+    // 开始模拟加载
+    simulateLoading();
+    
+    // 监听主进程的加载状态更新
+    if (window.electronAPI && window.electronAPI.receive) {
+      window.electronAPI.receive('loading-status', (data) => {
+        if (data.message) {
+          progressText.textContent = data.message;
+        }
+        if (data.progress !== undefined) {
+          progressFill.style.width = data.progress + '%';
+        }
+      });
+    }
+    
+    // 加载完成后的处理
+    window.addEventListener('load', () => {
+      loadingText.textContent = '正在启动 FinHack Pro...';
+      progressFill.style.width = '100%';
+      progressText.textContent = '启动完成！';
+    });
+  </script>
+</body>
+</html>

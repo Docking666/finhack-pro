@@ -749,3 +749,34 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 ---
 
 **免责声明**：本系统仅供学习和研究使用，不构成投资建议。量化交易有风险，入市需谨慎。
+
+---
+
+## 桌面版
+
+FinHack Pro 提供开箱即用的桌面版应用，无需配置开发环境。
+
+### 下载
+
+| 平台 | 文件 | 大小 |
+|------|------|------|
+| Windows | [FinHack-Pro-Setup.exe](releases/latest) | ~200MB |
+| macOS | [FinHack-Pro.dmg](releases/latest) | ~250MB |
+
+### 功能特点
+
+- 双击启动，无需命令行
+- 预置茅台、平安银行等热门标的数据
+- 可视化配置界面
+- 一键回测和结果导出
+- Agent思考过程实时展示
+
+### 首次使用
+
+1. 下载并安装应用
+2. 启动后在"API配置"页面填入OpenAI API Key
+3. 开始体验回测和Agent分析
+
+### 自行构建
+
+详见 [构建文档](docs/BUILD.md)

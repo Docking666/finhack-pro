@@ -1,0 +1,5 @@
+# FinHack Pro 打包依赖
+# PyInstaller 打包所需的额外依赖
+
+pyinstaller>=6.0.0
+pyinstaller-hooks-contrib>=2024.0
