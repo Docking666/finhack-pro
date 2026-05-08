@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinHack Pro - 多智能体量化交易系统</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        dark: {
+                            bg: '#0f172a',
+                            card: '#1e293b',
+                            border: '#334155',
+                            hover: '#334155',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Alpine.js CDN -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <!-- Marked.js CDN (Markdown渲染) -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        /* 自定义滚动条 */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+        /* 加载动画 */
+        .spinner { border: 3px solid #334155; border-top: 3px solid #3b82f6; border-radius: 50%; width: 24px; height: 24px; animation: spin 0.8s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* 脉冲动画 */
+        .pulse-dot { animation: pulse-dot 2s infinite; }
+        @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+        /* 淡入动画 */
+        .fade-in { animation: fadeIn 0.3s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* Markdown样式 */
+        .markdown-content h1, .markdown-content h2, .markdown-content h3 { font-weight: 600; margin: 0.5em 0; }
+        .markdown-content h1 { font-size: 1.25rem; }
+        .markdown-content h2 { font-size: 1.125rem; }
+        .markdown-content h3 { font-size: 1rem; }
+        .markdown-content p { margin: 0.25em 0; }
+        .markdown-content ul, .markdown-content ol { padding-left: 1.5em; margin: 0.25em 0; }
+        .markdown-content code { background: #0f172a; padding: 0.125em 0.375em; border-radius: 4px; font-size: 0.875rem; }
+        .markdown-content pre { background: #0f172a; padding: 0.75em; border-radius: 6px; overflow-x: auto; margin: 0.5em 0; }
+        .markdown-content pre code { background: none; padding: 0; }
+        .markdown-content blockquote { border-left: 3px solid #3b82f6; padding-left: 0.75em; color: #94a3b8; margin: 0.5em 0; }
+
+        /* Toast通知 */
+        .toast-enter { animation: toastIn 0.3s ease-out; }
+        .toast-exit { animation: toastOut 0.3s ease-in forwards; }
+        @keyframes toastIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        @keyframes toastOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
+
+        /* 导航激活状态 */
+        .nav-item.active { background: rgba(59, 130, 246, 0.15); color: #3b82f6; border-right: 3px solid #3b82f6; }
+        .nav-item:hover:not(.active) { background: rgba(51, 65, 85, 0.5); }
+
+        /* 思考流打字效果 */
+        .typing-cursor::after { content: '|'; animation: blink 1s infinite; color: #3b82f6; }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+    </style>
+</head>
+<body class="bg-[#0f172a] text-gray-200 min-h-screen" x-data="app()" x-init="init()">
+
+    <!-- Toast通知容器 -->
+    <div class="fixed top-4 right-4 z-50 space-y-2" id="toast-container">
+        <template x-for="toast in toasts" :key="toast.id">
+            <div class="toast-enter flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg max-w-sm"
+                 :class="{
+                    'bg-green-900/80 border border-green-700': toast.type === 'success',
+                    'bg-red-900/80 border border-red-700': toast.type === 'error',
+                    'bg-blue-900/80 border border-blue-700': toast.type === 'info',
+                    'bg-yellow-900/80 border border-yellow-700': toast.type === 'warning',
+                 }">
+                <span x-text="toast.message"></span>
+                <button @click="removeToast(toast.id)" class="ml-auto text-gray-400 hover:text-white">&times;</button>
+            </div>
+        </template>
+    </div>
+
+    <!-- 主布局 -->
+    <div class="flex h-screen overflow-hidden">
+
+        <!-- 左侧导航栏 -->
+        <aside class="w-60 bg-[#1e293b] border-r border-[#334155] flex flex-col flex-shrink-0">
+            <!-- Logo -->
+            <div class="p-4 border-b border-[#334155]">
+                <div class="flex items-center gap-2">
+                    <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-white text-sm">FH</div>
+                    <div>
+                        <div class="font-semibold text-white text-sm">FinHack Pro</div>
+                        <div class="text-xs text-gray-500">多智能体量化交易</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 导航菜单 -->
+            <nav class="flex-1 py-2">
+                <template x-for="item in navItems" :key="item.id">
+                    <button @click="navigate(item.id)"
+                            class="nav-item w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-400 transition-colors"
+                            :class="{ 'active': currentPage === item.id }">
+                        <span class="text-lg" x-text="item.icon"></span>
+                        <span x-text="item.label"></span>
+                        <span x-show="item.badge" class="ml-auto bg-blue-600 text-white text-xs px-1.5 py-0.5 rounded-full" x-text="item.badge"></span>
+                    </button>
+                </template>
+            </nav>
+
+            <!-- 底部系统状态 -->
+            <div class="p-4 border-t border-[#334155]">
+                <div class="flex items-center gap-2 text-xs">
+                    <span class="w-2 h-2 rounded-full pulse-dot" :class="systemStatus === 'healthy' ? 'bg-green-500' : 'bg-red-500'"></span>
+                    <span class="text-gray-400" x-text="systemStatus === 'healthy' ? '系统正常' : '系统异常'"></span>
+                </div>
+                <div class="text-xs text-gray-500 mt-1" x-text="'v' + systemInfo.version"></div>
+            </div>
+        </aside>
+
+        <!-- 右侧主内容 -->
+        <div class="flex-1 flex flex-col overflow-hidden">
+
+            <!-- 顶部状态栏 -->
+            <header class="h-12 bg-[#1e293b] border-b border-[#334155] flex items-center justify-between px-4 flex-shrink-0">
+                <div class="flex items-center gap-4">
+                    <h1 class="text-sm font-medium text-white" x-text="currentPageTitle"></h1>
+                </div>
+                <div class="flex items-center gap-4 text-xs text-gray-400">
+                    <div class="flex items-center gap-1.5">
+                        <span class="w-1.5 h-1.5 rounded-full" :class="wsConnected ? 'bg-green-500' : 'bg-red-500'"></span>
+                        <span x-text="wsConnected ? 'WS已连接' : 'WS未连接'"></span>
+                    </div>
+                    <div x-text="'模式: ' + systemInfo.mode"></div>
+                    <div x-text="'运行时间: ' + formatUptime(systemInfo.uptime_seconds)"></div>
+                </div>
+            </header>
+
+            <!-- 主内容区域 -->
+            <main class="flex-1 overflow-auto p-4">
+
+                <!-- 仪表盘页面 -->
+                <div x-show="currentPage === 'dashboard'" x-transition>
+                    <div x-html="loadPage('dashboard')"></div>
+                </div>
+
+                <!-- API配置页面 -->
+                <div x-show="currentPage === 'config'" x-transition>
+                    <div x-html="loadPage('config')"></div>
+                </div>
+
+                <!-- 回测面板页面 -->
+                <div x-show="currentPage === 'backtest'" x-transition>
+                    <div x-html="loadPage('backtest')"></div>
+                </div>
+
+                <!-- Agent监控页面 -->
+                <div x-show="currentPage === 'agents'" x-transition>
+                    <div x-html="loadPage('agents')"></div>
+                </div>
+
+                <!-- 记忆浏览器页面 -->
+                <div x-show="currentPage === 'memory'" x-transition>
+                    <div x-html="loadPage('memory')"></div>
+                </div>
+
+            </main>
+        </div>
+    </div>
+
+    <!-- 前端JavaScript -->
+    <script src="/static/app.js"></script>
+</body>
+</html>

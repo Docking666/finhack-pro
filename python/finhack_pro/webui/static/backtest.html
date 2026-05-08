@@ -1,0 +1,184 @@
+<!-- 回测面板页面模板 -->
+<div class="fade-in space-y-4" x-data="backtestPage()">
+    <!-- 回测参数表单 -->
+    <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+        <h3 class="text-sm font-medium text-white mb-4">回测参数</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">策略选择</label>
+                <select x-model="params.strategy" class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                    <option value="dual_thrust">Dual Thrust</option>
+                    <option value="momentum">动量策略</option>
+                    <option value="mean_reversion">均值回归</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">标的代码 (逗号分隔)</label>
+                <input type="text" x-model="params.symbols" placeholder="600519.SH, 000001.SZ"
+                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">初始资金 (元)</label>
+                <input type="number" x-model.number="params.initial_capital" min="10000" step="10000"
+                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">开始日期</label>
+                <input type="date" x-model="params.start_date"
+                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">结束日期</label>
+                <input type="date" x-model="params.end_date"
+                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+            </div>
+            <div class="flex items-end">
+                <button @click="startBacktest()" :disabled="running"
+                        class="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white text-sm rounded-lg transition-colors flex items-center justify-center gap-2">
+                    <template x-if="!running">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path></svg>
+                    </template>
+                    <template x-if="running"><span class="spinner !w-4 !h-4 !border-2"></span></template>
+                    <span x-text="running ? '回测运行中...' : '开始回测'"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 回测进度 -->
+    <div x-show="running || progress > 0" class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-sm text-gray-400" x-text="progressMessage || '准备中...'"></span>
+            <span class="text-sm text-white font-mono" x-text="progress.toFixed(1) + '%'"></span>
+        </div>
+        <div class="w-full bg-[#0f172a] rounded-full h-2.5">
+            <div class="bg-blue-600 h-2.5 rounded-full transition-all duration-300" :style="'width: ' + progress + '%'"></div>
+        </div>
+    </div>
+
+    <!-- 权益曲线图 + 回测指标 -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <!-- 权益曲线 -->
+        <div class="lg:col-span-2 bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+            <h3 class="text-sm font-medium text-white mb-3">权益曲线</h3>
+            <div class="relative" style="height: 300px;">
+                <canvas id="equity-chart"></canvas>
+            </div>
+        </div>
+
+        <!-- 回测指标 -->
+        <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+            <h3 class="text-sm font-medium text-white mb-3">回测指标</h3>
+            <div class="space-y-3">
+                <div class="flex justify-between items-center">
+                    <span class="text-xs text-gray-400">总收益率</span>
+                    <span class="text-sm font-mono font-bold" :class="metrics.total_return >= 0 ? 'text-green-400' : 'text-red-400'" x-text="(metrics.total_return || 0).toFixed(2) + '%'"></span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-xs text-gray-400">年化收益率</span>
+                    <span class="text-sm font-mono" :class="metrics.annual_return >= 0 ? 'text-green-400' : 'text-red-400'" x-text="(metrics.annual_return || 0).toFixed(2) + '%'"></span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-xs text-gray-400">夏普比率</span>
+                    <span class="text-sm font-mono text-white" x-text="(metrics.sharpe_ratio || 0).toFixed(2)"></span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-xs text-gray-400">Sortino比率</span>
+                    <span class="text-sm font-mono text-white" x-text="(metrics.sortino_ratio || 0).toFixed(2)"></span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-xs text-gray-400">最大回撤</span>
+                    <span class="text-sm font-mono text-red-400" x-text="(metrics.max_drawdown || 0).toFixed(2) + '%'"></span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-xs text-gray-400">胜率</span>
+                    <span class="text-sm font-mono text-white" x-text="(metrics.win_rate || 0).toFixed(2) + '%'"></span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-xs text-gray-400">盈亏比</span>
+                    <span class="text-sm font-mono text-white" x-text="(metrics.profit_loss_ratio || 0).toFixed(2)"></span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-xs text-gray-400">交易次数</span>
+                    <span class="text-sm font-mono text-white" x-text="metrics.total_trades || 0"></span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-xs text-gray-400">最终权益</span>
+                    <span class="text-sm font-mono font-bold text-white" x-text="formatMoney(metrics.final_equity || 0)"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 交易记录 -->
+    <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+        <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-medium text-white">交易记录</h3>
+            <span class="text-xs text-gray-500" x-text="'共 ' + trades.length + ' 条'"></span>
+        </div>
+        <div x-show="trades.length > 0" class="overflow-auto max-h-64">
+            <table class="w-full text-sm">
+                <thead class="sticky top-0 bg-[#1e293b]">
+                    <tr class="text-gray-500 text-xs border-b border-[#334155]">
+                        <th class="text-left py-2 px-2">日期</th>
+                        <th class="text-left py-2 px-2">标的</th>
+                        <th class="text-left py-2 px-2">方向</th>
+                        <th class="text-right py-2 px-2">价格</th>
+                        <th class="text-right py-2 px-2">数量</th>
+                        <th class="text-right py-2 px-2">盈亏</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="(trade, idx) in trades.slice(0, tradePage * 20)" :key="idx">
+                        <tr class="border-b border-[#334155]/50 hover:bg-[#334155]/30">
+                            <td class="py-1.5 px-2 text-gray-400" x-text="trade.date"></td>
+                            <td class="py-1.5 px-2 text-white font-mono" x-text="trade.symbol"></td>
+                            <td class="py-1.5 px-2">
+                                <span class="px-1.5 py-0.5 rounded text-xs"
+                                      :class="trade.direction === 'buy' ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'"
+                                      x-text="trade.direction === 'buy' ? '买入' : '卖出'"></span>
+                            </td>
+                            <td class="py-1.5 px-2 text-right text-white font-mono" x-text="trade.price.toFixed(2)"></td>
+                            <td class="py-1.5 px-2 text-right text-gray-400" x-text="trade.volume"></td>
+                            <td class="py-1.5 px-2 text-right font-mono" :class="trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'" x-text="(trade.pnl >= 0 ? '+' : '') + trade.pnl.toFixed(2)"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+            <div x-show="trades.length > tradePage * 20" class="text-center py-2">
+                <button @click="tradePage++" class="text-xs text-blue-400 hover:text-blue-300">加载更多</button>
+            </div>
+        </div>
+        <div x-show="trades.length === 0" class="text-sm text-gray-500 py-4 text-center">暂无交易记录，请先运行回测</div>
+    </div>
+
+    <!-- 历史回测 -->
+    <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+        <h3 class="text-sm font-medium text-white mb-3">历史回测</h3>
+        <div x-show="history.length > 0">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-gray-500 text-xs border-b border-[#334155]">
+                        <th class="text-left py-2 px-2">标的</th>
+                        <th class="text-left py-2 px-2">策略</th>
+                        <th class="text-left py-2 px-2">时间范围</th>
+                        <th class="text-right py-2 px-2">收益率</th>
+                        <th class="text-right py-2 px-2">夏普比率</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="record in history.slice().reverse()" :key="record.task_id">
+                        <tr class="border-b border-[#334155]/50 hover:bg-[#334155]/30">
+                            <td class="py-2 px-2 text-white font-mono" x-text="record.symbol"></td>
+                            <td class="py-2 px-2 text-gray-400" x-text="record.strategy"></td>
+                            <td class="py-2 px-2 text-gray-400" x-text="record.start_date + ' ~ ' + record.end_date"></td>
+                            <td class="py-2 px-2 text-right font-mono" :class="record.total_return >= 0 ? 'text-green-400' : 'text-red-400'" x-text="record.total_return.toFixed(2) + '%'"></td>
+                            <td class="py-2 px-2 text-right font-mono text-white" x-text="record.sharpe_ratio.toFixed(2)"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+        <div x-show="history.length === 0" class="text-sm text-gray-500 py-4 text-center">暂无历史回测</div>
+    </div>
+</div>
