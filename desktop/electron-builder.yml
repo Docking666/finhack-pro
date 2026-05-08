@@ -1,16 +1,12 @@
 # FinHack Pro Electron Builder 配置
-# 多智能体量化交易系统桌面版打包配置
-
 appId: com.finhack.pro
 productName: FinHack Pro
 copyright: Copyright (c) 2024 FinHack Team
 
-# 目录配置
 directories:
   output: dist
   buildResources: assets
 
-# 文件包含配置
 files:
   - "src/**/*"
   - "package.json"
@@ -27,7 +23,6 @@ files:
   - "!**/{appveyor.yml,.travis.yml,circle.yml}"
   - "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
 
-# 额外资源 - 包含Python后端
 extraResources:
   - from: "backend"
     to: "backend"
@@ -38,16 +33,13 @@ extraResources:
     filter:
       - "**/*"
 
-# Windows 配置
 win:
   target:
     - target: nsis
       arch:
         - x64
-  icon: assets/icon.ico
   artifactName: ${productName}-${version}-${arch}-setup.${ext}
 
-# NSIS 安装程序配置
 nsis:
   oneClick: false
   perMachine: true
@@ -63,32 +55,16 @@ nsis:
     - en_US
   language: "2052"
 
-# macOS 配置
 mac:
   target:
     - target: dmg
       arch:
         - x64
         - arm64
-  icon: assets/icon.png
   category: public.app-category.finance
   artifactName: ${productName}-${version}-${arch}.${ext}
 
-# DMG 配置
 dmg:
   window:
     width: 540
     height: 380
-  iconSize: 100
-  iconTextSize: 12
-
-# 发布配置
-publish:
-  provider: generic
-  url: https://releases.finhack.pro
-
-# 更新配置
-updater:
-  enabled: true
-  endpoints:
-    - https://releases.finhack.pro/update/${platform}/${arch}/${version}
