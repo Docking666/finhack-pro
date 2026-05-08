@@ -75,14 +75,14 @@ jobs:
         if: matrix.platform == 'win'
         run: |
           if not exist "desktop\backend" mkdir "desktop\backend"
-          xcopy /E /I /Y "python\dist\finhack-backend" "desktop\backend\finhack-backend"
+          copy "python\dist\finhack-backend.exe" "desktop\backend\finhack-backend.exe"
         shell: cmd
 
       - name: Copy backend artifacts (macOS)
         if: matrix.platform == 'mac'
         run: |
           mkdir -p desktop/backend
-          cp -r python/dist/finhack-backend desktop/backend/finhack-backend
+          cp python/dist/finhack-backend desktop/backend/finhack-backend
 
       - name: List backend files
         run: |

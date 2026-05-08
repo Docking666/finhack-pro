@@ -9,7 +9,6 @@ copyright: Copyright (c) 2024 FinHack Team
 directories:
   output: dist
   buildResources: assets
-  app: .
 
 # 文件包含配置
 files:
@@ -117,10 +116,6 @@ linux:
     Comment: 多智能体量化交易系统
     Categories: Office;Finance;
     StartupWMClass: finhack-pro
-
-# AppImage 配置
-appImage:
-  systemIntegration: ask
 
 # 发布配置
 publish:
