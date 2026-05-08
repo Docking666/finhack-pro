@@ -117,6 +117,22 @@ jobs:
     if: always() && needs.build.result == 'success'
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Generate version
+        id: version
+        run: |
+          # 如果指定了版本号，使用指定的
+          if [ -n "${{ inputs.version }}" ] && [ "${{ inputs.version }}" != "1.0.0" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            # 自动生成版本号: 日期格式 YYYYMMDD.HHMM
+            VERSION=$(date +'%Y%m%d.%H%M')
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Generated version: $VERSION"
+
       - name: Download Windows artifacts
         uses: actions/download-artifact@v8
         with:
@@ -135,10 +151,10 @@ jobs:
       - name: Create Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ inputs.version }}
-          name: FinHack Pro v${{ inputs.version }}
+          tag_name: v${{ steps.version.outputs.version }}
+          name: FinHack Pro v${{ steps.version.outputs.version }}
           body: |
-            ## FinHack Pro v${{ inputs.version }}
+            ## FinHack Pro v${{ steps.version.outputs.version }}
 
             ### Downloads
             - **Windows**: NSIS installer (`.exe`)
