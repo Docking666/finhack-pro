@@ -25,6 +25,7 @@ from loguru import logger
 
 from finhack_pro.webui.api_routes import router as api_router
 from finhack_pro.webui.export_routes import router as export_router
+from finhack_pro.webui.strategy_routes import router as strategy_router
 from finhack_pro.webui.services import (
     AgentService,
     BacktestService,
@@ -73,6 +74,7 @@ def create_app(config_path: Optional[str] = None) -> FastAPI:
     # ---- 注册路由 ----
     app.include_router(api_router)
     app.include_router(export_router)
+    app.include_router(strategy_router)
     app.include_router(ws_router)
 
     # ---- 静态文件目录 ----
@@ -109,6 +111,11 @@ def create_app(config_path: Optional[str] = None) -> FastAPI:
     @app.get("/memory", response_class=FileResponse)
     async def memory_page():
         """记忆页面(兼容直接访问)"""
+        return FileResponse(str(static_dir / "index.html"))
+
+    @app.get("/workshop", response_class=FileResponse)
+    async def workshop_page():
+        """策略工坊页面(兼容直接访问)"""
         return FileResponse(str(static_dir / "index.html"))
 
     # ---- 启动事件 ----

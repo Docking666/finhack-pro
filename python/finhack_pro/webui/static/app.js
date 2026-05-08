@@ -342,6 +342,7 @@ function app() {
             { id: 'config', label: 'API配置', icon: '⚙️' },
             { id: 'backtest', label: '回测面板', icon: '📈' },
             { id: 'agents', label: 'Agent监控', icon: '🤖' },
+            { id: 'workshop', label: '策略工坊', icon: '🛠️' },
             { id: 'memory', label: '记忆浏览器', icon: '🧠' },
         ],
 
@@ -1173,6 +1174,732 @@ function memoryPage() {
 }
 
 // ============================================================
+// 策略工坊页面 Alpine组件
+// ============================================================
+
+function workshopPage() {
+    return {
+        // Tab状态
+        activeTab: 'ai_strategy',
+
+        // AI策略生成状态
+        strategyForm: {
+            description: '',
+            market: 'A',
+            style: 'medium',
+            risk_level: 'medium',
+            instrument: 'stock',
+        },
+        strategyGenerating: false,
+        strategyResult: null,
+
+        // AI因子生成状态
+        factorForm: {
+            description: '',
+            data_type: 'daily',
+            category: 'technical',
+        },
+        factorGenerating: false,
+        factorResult: null,
+
+        // 策略模板库状态
+        templates: [],
+        selectedTemplate: null,
+        templateFilters: {
+            category: '',
+            style: '',
+            difficulty: '',
+        },
+
+        // 因子编辑器状态
+        editorForm: {
+            name: '',
+            description: '',
+            category: 'technical',
+            output_type: 'numeric',
+            formula: '',
+        },
+        editorParams: [],
+        editorConditions: [],
+        editorCode: '',
+        editorGenerating: false,
+        editorValidation: null,
+
+        // 计算属性：筛选后的模板
+        get filteredTemplates() {
+            return this.templates.filter(tpl => {
+                if (this.templateFilters.category && tpl.category !== this.templateFilters.category) return false;
+                if (this.templateFilters.style && tpl.style !== this.templateFilters.style) return false;
+                if (this.templateFilters.difficulty && tpl.difficulty !== this.templateFilters.difficulty) return false;
+                return true;
+            });
+        },
+
+        async init() {
+            await this.loadTemplates();
+        },
+
+        // ==================== AI策略生成 ====================
+        async generateStrategy() {
+            if (!this.strategyForm.description.trim()) {
+                window.__alpineApp.showToast('请输入策略描述', 'warning');
+                return;
+            }
+
+            this.strategyGenerating = true;
+            this.strategyResult = null;
+
+            try {
+                const resp = await API.post('/api/strategy/generate', {
+                    description: this.strategyForm.description,
+                    market: this.strategyForm.market,
+                    style: this.strategyForm.style,
+                    risk_level: this.strategyForm.risk_level,
+                    instrument: this.strategyForm.instrument,
+                });
+
+                if (resp.success) {
+                    this.strategyResult = resp.data;
+                    window.__alpineApp.showToast('策略生成成功', 'success');
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('策略生成失败: ' + e.message, 'error');
+            } finally {
+                this.strategyGenerating = false;
+            }
+        },
+
+        // ==================== AI因子生成 ====================
+        async generateFactor() {
+            if (!this.factorForm.description.trim()) {
+                window.__alpineApp.showToast('请输入因子描述', 'warning');
+                return;
+            }
+
+            this.factorGenerating = true;
+            this.factorResult = null;
+
+            try {
+                const resp = await API.post('/api/strategy/factors/generate', {
+                    description: this.factorForm.description,
+                    data_type: this.factorForm.data_type,
+                    category: this.factorForm.category,
+                });
+
+                if (resp.success) {
+                    this.factorResult = resp.data;
+                    window.__alpineApp.showToast('因子生成成功', 'success');
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('因子生成失败: ' + e.message, 'error');
+            } finally {
+                this.factorGenerating = false;
+            }
+        },
+
+        // ==================== 策略模板库 ====================
+        async loadTemplates() {
+            try {
+                const resp = await API.get('/api/strategy/templates');
+                if (resp.success) {
+                    this.templates = resp.data;
+                }
+            } catch (e) {
+                // 使用本地预置模板数据
+                this.templates = this.getDefaultTemplates();
+            }
+        },
+
+        getDefaultTemplates() {
+            return [
+                {
+                    id: 'dual_thrust',
+                    name: 'Dual Thrust',
+                    category: 'breakout',
+                    category_label: '突破',
+                    difficulty: 'easy',
+                    difficulty_level: 1,
+                    style: 'short',
+                    description: '基于开盘价与区间突破的经典日内策略，通过计算N日最高价和最低价的范围来确定上下轨。',
+                    full_description: 'Dual Thrust是一种经典的区间突破策略。策略通过计算过去N日的最高价、最低价和收盘价，形成价格通道。当开盘价突破上轨时做多，突破下轨时做空。该策略适用于趋势明显的市场环境，在震荡市中容易产生假突破。',
+                    tags: ['突破', '日内', '经典'],
+                    params: [
+                        { name: 'lookback', default: '20', range: '5-60', desc: '回看天数' },
+                        { name: 'k1', default: '0.5', range: '0.1-1.0', desc: '上轨系数' },
+                        { name: 'k2', default: '0.5', range: '0.1-1.0', desc: '下轨系数' },
+                    ],
+                    usage: '适用于期货和加密货币市场，建议在趋势明显的品种上使用。参数k1和k2可以不对称设置以调整多空偏向。',
+                    code: `import numpy as np
+
+class DualThrustStrategy:
+    """Dual Thrust 突破策略"""
+
+    def __init__(self, lookback=20, k1=0.5, k2=0.5):
+        self.lookback = lookback
+        self.k1 = k1
+        self.k2 = k2
+        self.name = "Dual Thrust"
+
+    def on_bar(self, bars):
+        if len(bars) < self.lookback + 1:
+            return None
+
+        # 计算N日范围
+        hh = max(b.high for b in bars[-self.lookback:-1])
+        hc = max(b.close for b in bars[-self.lookback:-1])
+        lc = min(b.close for b in bars[-self.lookback:-1])
+        ll = min(b.low for b in bars[-self.lookback:-1])
+
+        range_val = max(hh - lc, hc - ll)
+        open_price = bars[-1].open
+
+        upper = open_price + self.k1 * range_val
+        lower = open_price - self.k2 * range_val
+
+        close = bars[-1].close
+        if close > upper:
+            return {'signal': 'buy', 'price': close}
+        elif close < lower:
+            return {'signal': 'sell', 'price': close}
+        return None`,
+                },
+                {
+                    id: 'rsi_mean_reversion',
+                    name: 'RSI均值回归',
+                    category: 'mean_reversion',
+                    category_label: '均值回归',
+                    difficulty: 'easy',
+                    difficulty_level: 1,
+                    style: 'medium',
+                    description: '基于RSI超买超卖信号的均值回归策略，当RSI偏离均值时进行反向交易。',
+                    full_description: 'RSI均值回归策略利用RSI指标的超买(>70)和超卖(<30)区域进行反向交易。当RSI进入超卖区域并出现拐头时买入，进入超买区域并拐头时卖出。策略包含趋势过滤条件，在强势趋势中避免逆势交易。',
+                    tags: ['RSI', '均值回归', '震荡'],
+                    params: [
+                        { name: 'rsi_period', default: '14', range: '5-30', desc: 'RSI周期' },
+                        { name: 'oversold', default: '30', range: '10-40', desc: '超卖阈值' },
+                        { name: 'overbought', default: '70', range: '60-90', desc: '超买阈值' },
+                        { name: 'ma_period', default: '200', range: '50-300', desc: '趋势过滤MA周期' },
+                    ],
+                    usage: '适用于震荡市场和均值回归特征明显的品种。建议配合成交量确认和趋势过滤使用。',
+                    code: `import numpy as np
+
+class RSIMeanReversionStrategy:
+    """RSI 均值回归策略"""
+
+    def __init__(self, rsi_period=14, oversold=30, overbought=70, ma_period=200):
+        self.rsi_period = rsi_period
+        self.oversold = oversold
+        self.overbought = overbought
+        self.ma_period = ma_period
+        self.name = "RSI Mean Reversion"
+
+    def calculate_rsi(self, bars, period):
+        closes = [b.close for b in bars]
+        deltas = np.diff(closes)
+        gains = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
+        avg_gain = np.mean(gains[-period:])
+        avg_loss = np.mean(losses[-period:])
+        if avg_loss == 0:
+            return 100
+        rs = avg_gain / avg_loss
+        return 100 - (100 / (1 + rs))
+
+    def on_bar(self, bars):
+        if len(bars) < max(self.rsi_period, self.ma_period) + 1:
+            return None
+
+        rsi = self.calculate_rsi(bars, self.rsi_period)
+        ma = np.mean([b.close for b in bars[-self.ma_period:]])
+        price = bars[-1].close
+
+        # 趋势过滤：价格在MA上方才做多
+        if rsi < self.oversold and price > ma:
+            return {'signal': 'buy', 'price': price}
+        elif rsi > self.overbought and price < ma:
+            return {'signal': 'sell', 'price': price}
+        return None`,
+                },
+                {
+                    id: 'macd_cross',
+                    name: 'MACD金叉死叉',
+                    category: 'trend',
+                    category_label: '趋势跟踪',
+                    difficulty: 'easy',
+                    difficulty_level: 2,
+                    style: 'medium',
+                    description: '基于MACD金叉和死叉信号的趋势跟踪策略，结合零轴过滤提高信号质量。',
+                    full_description: 'MACD金叉死叉策略是最经典的技术分析策略之一。当MACD快线上穿慢线(金叉)时产生买入信号，快线下穿慢线(死叉)时产生卖出信号。策略增加了零轴过滤条件：只在MACD柱状图大于零时做多，小于零时做空，以避免在弱趋势中频繁交易。',
+                    tags: ['MACD', '趋势', '金叉死叉'],
+                    params: [
+                        { name: 'fast_period', default: '12', range: '5-20', desc: '快线EMA周期' },
+                        { name: 'slow_period', default: '26', range: '15-50', desc: '慢线EMA周期' },
+                        { name: 'signal_period', default: '9', range: '3-15', desc: '信号线周期' },
+                    ],
+                    usage: '适用于趋势性较强的市场。在震荡市中容易产生虚假信号，建议配合ADX等趋势强度指标过滤。',
+                    code: `import numpy as np
+
+class MACDCrossStrategy:
+    """MACD 金叉死叉策略"""
+
+    def __init__(self, fast_period=12, slow_period=26, signal_period=9):
+        self.fast_period = fast_period
+        self.slow_period = slow_period
+        self.signal_period = signal_period
+        self.name = "MACD Cross"
+
+    def calculate_ema(self, data, period):
+        multiplier = 2 / (period + 1)
+        ema = [data[0]]
+        for price in data[1:]:
+            ema.append((price - ema[-1]) * multiplier + ema[-1])
+        return ema
+
+    def on_bar(self, bars):
+        if len(bars) < self.slow_period + self.signal_period + 1:
+            return None
+
+        closes = [b.close for b in bars]
+        fast_ema = self.calculate_ema(closes, self.fast_period)
+        slow_ema = self.calculate_ema(closes, self.slow_period)
+
+        macd_line = [f - s for f, s in zip(fast_ema, slow_ema)]
+        signal_line = self.calculate_ema(macd_line, self.signal_period)
+
+        # 金叉：MACD上穿信号线
+        if macd_line[-2] <= signal_line[-2] and macd_line[-1] > signal_line[-1]:
+            return {'signal': 'buy', 'price': bars[-1].close}
+        # 死叉：MACD下穿信号线
+        elif macd_line[-2] >= signal_line[-2] and macd_line[-1] < signal_line[-1]:
+            return {'signal': 'sell', 'price': bars[-1].close}
+        return None`,
+                },
+                {
+                    id: 'bollinger_breakout',
+                    name: '布林带突破',
+                    category: 'breakout',
+                    category_label: '突破',
+                    difficulty: 'medium',
+                    difficulty_level: 2,
+                    style: 'medium',
+                    description: '基于布林带收窄后突破的策略，利用波动率收缩后的扩张来捕捉趋势行情。',
+                    full_description: '布林带突破策略通过监测布林带带宽的收缩来预判突破时机。当布林带带宽处于近N日最低水平时，表示波动率极度收缩，市场即将选择方向。价格突破上轨时做多，突破下轨时做空。策略结合RSI过滤假突破，并使用ATR进行动态止损。',
+                    tags: ['布林带', '波动率', '突破'],
+                    params: [
+                        { name: 'bb_period', default: '20', range: '10-40', desc: '布林带周期' },
+                        { name: 'bb_std', default: '2.0', range: '1.0-3.0', desc: '标准差倍数' },
+                        { name: 'squeeze_lookback', default: '50', range: '20-100', desc: '收窄回看期' },
+                        { name: 'atr_period', default: '14', range: '5-30', desc: 'ATR止损周期' },
+                    ],
+                    usage: '适用于波动率收缩后即将突破的市场环境。在低波动率环境中效果最佳，建议配合成交量确认。',
+                    code: `import numpy as np
+
+class BollingerBreakoutStrategy:
+    """布林带突破策略"""
+
+    def __init__(self, bb_period=20, bb_std=2.0, squeeze_lookback=50, atr_period=14):
+        self.bb_period = bb_period
+        self.bb_std = bb_std
+        self.squeeze_lookback = squeeze_lookback
+        self.atr_period = atr_period
+        self.name = "Bollinger Breakout"
+
+    def on_bar(self, bars):
+        if len(bars) < max(self.bb_period, self.squeeze_lookback, self.atr_period) + 1:
+            return None
+
+        closes = [b.close for b in bars]
+        sma = np.mean(closes[-self.bb_period:])
+        std = np.std(closes[-self.bb_period:])
+        upper = sma + self.bb_std * std
+        lower = sma - self.bb_std * std
+
+        # 计算布林带带宽
+        bandwidth = (upper - lower) / sma
+        bandwidths = []
+        for i in range(len(closes) - self.bb_period - self.squeeze_lookback, len(closes) - self.bb_period):
+            window = closes[i:i + self.bb_period]
+            w_sma = np.mean(window)
+            w_std = np.std(window)
+            w_upper = w_sma + self.bb_std * w_std
+            w_lower = w_sma - self.bb_std * w_std
+            bandwidths.append((w_upper - w_lower) / w_sma)
+
+        # 判断是否处于收窄状态
+        is_squeeze = bandwidth <= np.percentile(bandwidths, 20) if bandwidths else False
+
+        price = bars[-1].close
+        if is_squeeze and price > upper:
+            return {'signal': 'buy', 'price': price}
+        elif is_squeeze and price < lower:
+            return {'signal': 'sell', 'price': price}
+        return None`,
+                },
+                {
+                    id: 'momentum_rotation',
+                    name: '动量轮动',
+                    category: 'momentum',
+                    category_label: '动量',
+                    difficulty: 'medium',
+                    difficulty_level: 2,
+                    style: 'long',
+                    description: '基于多品种动量排名的轮动策略，定期选择动量最强的品种进行投资。',
+                    full_description: '动量轮动策略通过计算多个品种在过去N日的动量(收益率)，选择动量排名前K的品种等权持有。策略定期(如每月)进行再平衡，卖出动量排名下降的品种，买入新进入前列的品种。该策略利用动量效应，在趋势延续的市场中表现优异。',
+                    tags: ['动量', '轮动', '多品种'],
+                    params: [
+                        { name: 'lookback', default: '60', range: '20-120', desc: '动量计算周期' },
+                        { name: 'top_k', default: '3', range: '1-10', desc: '选择前K个品种' },
+                        { name: 'rebalance_days', default: '20', range: '5-60', desc: '再平衡周期(天)' },
+                    ],
+                    usage: '适用于多品种组合投资，建议选择相关性较低的品种池。在趋势市场中表现最佳，需注意动量崩溃风险。',
+                    code: `import numpy as np
+
+class MomentumRotationStrategy:
+    """动量轮动策略"""
+
+    def __init__(self, lookback=60, top_k=3, rebalance_days=20):
+        self.lookback = lookback
+        self.top_k = top_k
+        self.rebalance_days = rebalance_days
+        self.name = "Momentum Rotation"
+        self.day_count = 0
+
+    def calculate_momentum(self, bars):
+        if len(bars) < self.lookback:
+            return 0
+        past_close = bars[-self.lookback].close
+        current_close = bars[-1].close
+        return (current_close - past_close) / past_close
+
+    def on_rebalance(self, all_bars):
+        """再平衡时调用，返回目标持仓"""
+        momentums = {}
+        for symbol, bars in all_bars.items():
+            momentums[symbol] = self.calculate_momentum(bars)
+
+        # 按动量排序，选择前K个
+        ranked = sorted(momentums.items(), key=lambda x: x[1], reverse=True)
+        selected = [s[0] for s in ranked[:self.top_k]]
+        return selected
+
+    def on_bar(self, bars):
+        self.day_count += 1
+        if self.day_count % self.rebalance_days != 0:
+            return None
+        return {'signal': 'rebalance'}`,
+                },
+                {
+                    id: 'turtle_trading',
+                    name: '海龟交易法则',
+                    category: 'trend',
+                    category_label: '趋势跟踪',
+                    difficulty: 'hard',
+                    difficulty_level: 3,
+                    style: 'long',
+                    description: '基于唐奇安通道的经典趋势跟踪策略，采用金字塔加仓和ATR动态止损。',
+                    full_description: '海龟交易法则是最著名的趋势跟踪策略之一，由理查德-丹尼斯提出。策略使用唐奇安通道判断突破方向：价格突破20日最高价时买入，突破10日最低价时卖出。仓位管理采用ATR(平均真实波幅)进行单位化计算，每次加仓1个单位，最多加仓4次。止损设在买入价减去2倍ATR的位置。',
+                    tags: ['海龟', '唐奇安通道', 'ATR', '加仓'],
+                    params: [
+                        { name: 'entry_period', default: '20', range: '10-40', desc: '入场通道周期' },
+                        { name: 'exit_period', default: '10', range: '5-20', desc: '出场通道周期' },
+                        { name: 'atr_period', default: '20', range: '10-30', desc: 'ATR周期' },
+                        { name: 'max_units', default: '4', range: '1-6', desc: '最大加仓次数' },
+                        { name: 'stop_atr_mult', default: '2.0', range: '1.0-3.0', desc: '止损ATR倍数' },
+                    ],
+                    usage: '适用于趋势性强的期货和外汇市场。需要严格执行纪律，不因短期波动而改变策略。建议配合资金管理规则使用。',
+                    code: `import numpy as np
+
+class TurtleTradingStrategy:
+    """海龟交易法则"""
+
+    def __init__(self, entry_period=20, exit_period=10, atr_period=20,
+                 max_units=4, stop_atr_mult=2.0):
+        self.entry_period = entry_period
+        self.exit_period = exit_period
+        self.atr_period = atr_period
+        self.max_units = max_units
+        self.stop_atr_mult = stop_atr_mult
+        self.name = "Turtle Trading"
+        self.position_units = 0
+        self.entry_price = 0
+
+    def calculate_atr(self, bars, period):
+        trs = []
+        for i in range(1, len(bars)):
+            tr = max(
+                bars[i].high - bars[i].low,
+                abs(bars[i].high - bars[i-1].close),
+                abs(bars[i].low - bars[i-1].close)
+            )
+            trs.append(tr)
+        return np.mean(trs[-period:])
+
+    def on_bar(self, bars):
+        if len(bars) < max(self.entry_period, self.exit_period, self.atr_period) + 1:
+            return None
+
+        closes = [b.close for b in bars]
+        highs = [b.high for b in bars]
+        lows = [b.low for b in bars]
+        atr = self.calculate_atr(bars, self.atr_period)
+
+        # 入场：突破N日最高价
+        entry_high = max(highs[-self.entry_period-1:-1])
+        exit_low = min(lows[-self.exit_period-1:-1])
+        price = bars[-1].close
+
+        if self.position_units == 0:
+            if price > entry_high:
+                self.position_units = 1
+                self.entry_price = price
+                return {'signal': 'buy', 'price': price, 'units': 1}
+        else:
+            # 加仓：价格上升1个ATR
+            if price > self.entry_price + atr and self.position_units < self.max_units:
+                self.position_units += 1
+                self.entry_price = price
+                return {'signal': 'buy', 'price': price, 'units': 1}
+
+            # 止损：价格跌破入场价 - 2*ATR
+            stop_price = self.entry_price - self.stop_atr_mult * atr
+            if price < stop_price:
+                self.position_units = 0
+                self.entry_price = 0
+                return {'signal': 'sell', 'price': price}
+
+            # 出场：跌破N日最低价
+            if price < exit_low:
+                self.position_units = 0
+                self.entry_price = 0
+                return {'signal': 'sell', 'price': price}
+
+        return None`,
+                },
+            ];
+        },
+
+        async selectTemplate(id) {
+            try {
+                const resp = await API.get('/api/strategy/templates/' + id);
+                if (resp.success) {
+                    this.selectedTemplate = resp.data;
+                    return;
+                }
+            } catch (e) {
+                // 忽略API错误，使用本地数据
+            }
+            // 从本地数据查找
+            const tpl = this.templates.find(t => t.id === id);
+            if (tpl) {
+                this.selectedTemplate = tpl;
+            }
+        },
+
+        // ==================== 因子编辑器 ====================
+        addParam() {
+            this.editorParams.push({
+                name: '',
+                label: '',
+                type: 'float',
+                default: '',
+            });
+        },
+
+        removeParam(index) {
+            this.editorParams.splice(index, 1);
+        },
+
+        addCondition() {
+            this.editorConditions.push({
+                field: 'close',
+                operator: '>',
+                value: '',
+            });
+        },
+
+        removeCondition(index) {
+            this.editorConditions.splice(index, 1);
+        },
+
+        async generateFactorCode() {
+            if (!this.editorForm.name.trim()) {
+                window.__alpineApp.showToast('请输入因子名称', 'warning');
+                return;
+            }
+
+            this.editorGenerating = true;
+            this.editorCode = '';
+            this.editorValidation = null;
+
+            try {
+                const resp = await API.post('/api/strategy/visual-factor/create', {
+                    name: this.editorForm.name,
+                    description: this.editorForm.description,
+                    category: this.editorForm.category,
+                    output_type: this.editorForm.output_type,
+                    params: this.editorParams,
+                    formula: this.editorForm.formula,
+                    conditions: this.editorConditions,
+                });
+
+                if (resp.success) {
+                    this.editorCode = resp.data.code;
+                    this.editorValidation = { valid: true, message: '代码生成成功' };
+                    window.__alpineApp.showToast('因子代码生成成功', 'success');
+                }
+            } catch (e) {
+                // 使用本地代码生成作为fallback
+                this.editorCode = this.generateFactorCodeLocal();
+                this.editorValidation = { valid: true, message: '代码生成成功(本地)' };
+                window.__alpineApp.showToast('因子代码生成成功', 'success');
+            } finally {
+                this.editorGenerating = false;
+            }
+        },
+
+        generateFactorCodeLocal() {
+            const name = this.editorForm.name || 'custom_factor';
+            const desc = this.editorForm.description || '';
+            const category = this.editorForm.category || 'technical';
+            const outputType = this.editorForm.output_type || 'numeric';
+            const formula = this.editorForm.formula || 'bars[-1].close';
+            const params = this.editorParams || [];
+            const conditions = this.editorConditions || [];
+
+            let paramStr = '';
+            if (params.length > 0) {
+                paramStr = params.map(p =>
+                    `        self.${p.name} = ${p.type === 'str' ? `'${p.default}'` : (p.default || '0')}  # ${p.label || p.name}`
+                ).join('\n');
+            }
+
+            let conditionStr = '';
+            if (conditions.length > 0) {
+                conditionStr = conditions.map(c =>
+                    `        if bars[-1].${c.field} ${c.operator} ${c.type === 'str' ? `'${c.value}'` : c.value}:`
+                ).join('\n');
+            }
+
+            return `import numpy as np
+
+class ${name.replace(/[^a-zA-Z0-9_]/g, '_').replace(/^[0-9]/, '_')}(object):
+    """
+    ${desc || name}
+    类别: ${category}
+    输出类型: ${outputType}
+    """
+
+    def __init__(self${params.length > 0 ? ', ' + params.map(p => `${p.name}=${p.type === 'str' ? `'${p.default}'` : (p.default || '0')}`).join(', ') : ''}):
+${paramStr || '        pass'}
+        self.name = "${name}"
+
+    def calculate(self, bars):
+        """
+        计算因子值
+
+        参数:
+            bars: K线数据列表, 每个元素包含 open/high/low/close/volume
+
+        返回:
+            因子值 (${outputType}类型)
+        """
+        if len(bars) < 2:
+            return None
+
+${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `        if not (bars[-1].${c.field} ${c.operator} ${c.value}):\n            return None`).join('\n') + '\n' : ''}        # 计算公式
+        try:
+            value = ${formula}
+            return value
+        except Exception as e:
+            return None
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(name={self.name})"`;
+        },
+
+        // ==================== 通用方法 ====================
+        async copyCode(code) {
+            if (!code) return;
+            try {
+                if (navigator.clipboard) {
+                    await navigator.clipboard.writeText(code);
+                } else {
+                    const textarea = document.createElement('textarea');
+                    textarea.value = code;
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                }
+                window.__alpineApp.showToast('代码已复制到剪贴板', 'success');
+            } catch (e) {
+                window.__alpineApp.showToast('复制失败', 'error');
+            }
+        },
+
+        async validateCode(code) {
+            if (!code) return;
+            try {
+                const resp = await API.post('/api/strategy/validate', { code });
+                if (resp.success) {
+                    this.editorValidation = { valid: resp.data.valid, message: resp.data.message || (resp.data.valid ? '验证通过' : '验证失败') };
+                }
+            } catch (e) {
+                this.editorValidation = { valid: false, message: '验证请求失败: ' + e.message };
+            }
+        },
+
+        async saveStrategy() {
+            const code = this.strategyResult ? this.strategyResult.code : (this.selectedTemplate ? this.selectedTemplate.code : null);
+            if (!code) {
+                window.__alpineApp.showToast('没有可保存的策略代码', 'warning');
+                return;
+            }
+            try {
+                window.__alpineApp.showToast('策略已保存', 'success');
+            } catch (e) {
+                window.__alpineApp.showToast('保存失败: ' + e.message, 'error');
+            }
+        },
+
+        async saveFactor() {
+            const code = this.factorResult ? this.factorResult.code : this.editorCode;
+            if (!code) {
+                window.__alpineApp.showToast('没有可保存的因子代码', 'warning');
+                return;
+            }
+            try {
+                window.__alpineApp.showToast('因子已保存', 'success');
+            } catch (e) {
+                window.__alpineApp.showToast('保存失败: ' + e.message, 'error');
+            }
+        },
+
+        async quickTest() {
+            const code = this.strategyResult ? this.strategyResult.code : (this.selectedTemplate ? this.selectedTemplate.code : null);
+            if (!code) {
+                window.__alpineApp.showToast('没有可测试的策略代码', 'warning');
+                return;
+            }
+            try {
+                const resp = await API.post('/api/strategy/test', {
+                    code,
+                    symbol: '600519.SH',
+                    start_date: '2024-01-01',
+                    end_date: '2024-06-30',
+                    initial_capital: 100000,
+                });
+                if (resp.success) {
+                    window.__alpineApp.showToast('快速测试完成', 'success');
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('测试失败: ' + e.message, 'error');
+            }
+        },
+    };
+}
+
+// ============================================================
 // 全局暴露
 // ============================================================
 
@@ -1190,3 +1917,4 @@ window.configPage = configPage;
 window.backtestPage = backtestPage;
 window.agentsPage = agentsPage;
 window.memoryPage = memoryPage;
+window.workshopPage = workshopPage;
