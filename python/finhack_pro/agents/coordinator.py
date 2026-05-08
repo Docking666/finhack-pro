@@ -5,11 +5,13 @@ Agent协调器
 1. 定时触发市场分析Agent -> 技术面分析报告
 2. 新闻社媒分析Agent -> 新闻情感报告
 3. 基本面分析Agent -> 基本面分析报告
-4. 策略生成Agent(多空研究员) -> 综合三方报告+多空辩论 -> 策略信号
-5. 风险管理Agent -> 风控决策
-6. 交易执行Agent -> 执行报告
+4. 微观事件Agent -> 微观事件分析报告(新增)
+5. 策略生成Agent(多空研究员) -> 综合多方报告+多空辩论 -> 策略信号
+6. 风险管理Agent -> 风控决策
+7. 交易执行Agent -> 执行报告
 
 所有Agent共享 SharedMemory(共享记忆) 和 ToolRegistry(共享工具集)。
+支持微观事件驱动和另类数据分析。
 """
 
 from __future__ import annotations
@@ -22,12 +24,14 @@ from loguru import logger
 from finhack_pro.agents.base import AgentMessage, BaseAgent
 from finhack_pro.agents.fundamental_analyst import FundamentalAnalystAgent
 from finhack_pro.agents.market_analyzer import MarketAnalyzerAgent
+from finhack_pro.agents.micro_event_agent import MicroEventAgent
 from finhack_pro.agents.news_analyst import NewsAnalystAgent
 from finhack_pro.agents.risk_manager import RiskManagerAgent
 from finhack_pro.agents.shared_memory import SharedMemory
 from finhack_pro.agents.strategy_generator import StrategyGeneratorAgent
 from finhack_pro.agents.tool_registry import ToolRegistry, create_default_toolkit
 from finhack_pro.agents.trade_executor import TradeExecutorAgent
+from finhack_pro.agents.alternative_data_tools import register_alternative_data_tools
 from finhack_pro.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -81,6 +85,9 @@ class AgentCoordinator:
 
         # 共享工具集
         self.tool_registry = create_default_toolkit()
+        
+        # 注册另类数据工具
+        register_alternative_data_tools(self.tool_registry)
 
         # ---- 创建所有Agent实例 ----
         agent_config = self.config.get("agents", {})
@@ -106,6 +113,12 @@ class AgentCoordinator:
             shared_memory=self.shared_memory,
             tool_registry=self.tool_registry,
         )
+        # 新增: 微观事件Agent
+        self._agents["micro_event_agent"] = MicroEventAgent(
+            config=_merge_config(agent_config.get("micro_event_agent", {})),
+            shared_memory=self.shared_memory,
+            tool_registry=self.tool_registry,
+        )
         self._agents["strategy_generator"] = StrategyGeneratorAgent(
             config=_merge_config(agent_config.get("strategy_generator", {})),
             shared_memory=self.shared_memory,
@@ -124,7 +137,7 @@ class AgentCoordinator:
 
         self._logger.info(
             f"协调器初始化完成: {len(self._agents)} 个Agent, "
-            f"共享记忆和工具集已就绪"
+            f"共享记忆和工具集已就绪(含另类数据工具)"
         )
 
     # ============================================================
@@ -145,6 +158,11 @@ class AgentCoordinator:
     def fundamental_analyst(self) -> FundamentalAnalystAgent:
         """获取基本面分析Agent"""
         return self._agents["fundamental_analyst"]  # type: ignore
+
+    @property
+    def micro_event_agent(self) -> MicroEventAgent:
+        """获取微观事件Agent"""
+        return self._agents["micro_event_agent"]  # type: ignore
 
     @property
     def strategy_generator(self) -> StrategyGeneratorAgent:
@@ -221,13 +239,14 @@ class AgentCoordinator:
     ) -> Dict[str, Any]:
         """运行完整的分析流水线
 
-        新的6步流水线:
+        新的7步流水线:
         1. 市场分析Agent -> 技术面分析报告
         2. 新闻社媒分析Agent -> 新闻情感报告
         3. 基本面分析Agent -> 基本面分析报告
-        4. 策略生成Agent(多空研究员) -> 综合三方报告+多空辩论 -> 策略信号
-        5. 风险管理Agent -> 风控决策
-        6. 交易执行Agent -> 执行报告
+        4. 微观事件Agent -> 微观事件分析报告(新增)
+        5. 策略生成Agent(多空研究员) -> 综合多方报告+多空辩论 -> 策略信号
+        6. 风险管理Agent -> 风控决策
+        7. 交易执行Agent -> 执行报告
 
         每一步的输出都存储到共享记忆中。
 
@@ -245,7 +264,7 @@ class AgentCoordinator:
 
         try:
             # ---- 第1步: 市场分析(技术面) ----
-            self._logger.info("[Step 1/6] 市场分析(技术面)...")
+            self._logger.info("[Step 1/7] 市场分析(技术面)...")
             analysis_report = await self.market_analyzer.analyze(
                 symbol=symbol,
                 market_data=market_data,
@@ -269,7 +288,7 @@ class AgentCoordinator:
             )
 
             # ---- 第2步: 新闻社媒分析 ----
-            self._logger.info("[Step 2/6] 新闻社媒分析...")
+            self._logger.info("[Step 2/7] 新闻社媒分析...")
             news_report = await self.news_analyst.analyze(
                 symbol=symbol,
             )
@@ -291,7 +310,7 @@ class AgentCoordinator:
             )
 
             # ---- 第3步: 基本面分析 ----
-            self._logger.info("[Step 3/6] 基本面分析...")
+            self._logger.info("[Step 3/7] 基本面分析...")
             fundamental_report = await self.fundamental_analyst.analyze(
                 symbol=symbol,
             )
@@ -312,13 +331,37 @@ class AgentCoordinator:
                 tags=[symbol, "fundamental", "analysis_report"],
             )
 
-            # ---- 第4步: 策略生成(多空辩论) ----
-            self._logger.info("[Step 4/6] 策略生成(多空辩论)...")
+            # ---- 第4步: 微观事件分析(新增) ----
+            self._logger.info("[Step 4/7] 微观事件分析...")
+            micro_event_report = await self.micro_event_agent.scan_events(
+                symbol=symbol,
+                days=7,
+            )
+            result["micro_event_analysis"] = micro_event_report.model_dump()
+            self._logger.info(
+                f"微观事件分析完成: 发现{micro_event_report.events_count}个事件, "
+                f"情绪变化={micro_event_report.sentiment_shift}"
+            )
+
+            # 存储到共享记忆
+            await self.shared_memory.store(
+                agent_id=self.micro_event_agent.agent_id,
+                memory_type=self.shared_memory.MemoryType.MICRO_EVENT,
+                content=f"{symbol} 微观事件分析: 发现{micro_event_report.events_count}个事件, "
+                        f"情绪变化={micro_event_report.sentiment_shift}",
+                structured_data=micro_event_report.model_dump(),
+                importance=self.shared_memory.MemoryImportance.HIGH,
+                tags=[symbol, "micro_event", "alternative_data"],
+            )
+
+            # ---- 第5步: 策略生成(多空辩论) ----
+            self._logger.info("[Step 5/7] 策略生成(多空辩论)...")
             strategy_signal = await self._generate_strategy_with_debate(
                 symbol=symbol,
                 analysis_report=analysis_report,
                 news_report=news_report,
                 fundamental_report=fundamental_report,
+                micro_event_report=micro_event_report,
                 current_price=current_price,
             )
             result["signal"] = strategy_signal.model_dump()
@@ -345,8 +388,8 @@ class AgentCoordinator:
                 result["execution"] = None
                 return result
 
-            # ---- 第5步: 风控审批 ----
-            self._logger.info("[Step 5/6] 风控审批...")
+            # ---- 第6步: 风控审批 ----
+            self._logger.info("[Step 6/7] 风控审批...")
             risk_decision = await self.risk_manager.evaluate_risk(
                 signal=strategy_signal,
             )
@@ -371,8 +414,8 @@ class AgentCoordinator:
                 result["execution"] = None
                 return result
 
-            # ---- 第6步: 交易执行 ----
-            self._logger.info("[Step 6/6] 交易执行...")
+            # ---- 第7步: 交易执行 ----
+            self._logger.info("[Step 7/7] 交易执行...")
             execution_report = await self.trade_executor.execute(
                 signal=strategy_signal,
                 decision=risk_decision,
@@ -417,11 +460,12 @@ class AgentCoordinator:
         analysis_report: Any,
         news_report: Any,
         fundamental_report: Any,
+        micro_event_report: Any = None,
         current_price: Optional[float] = None,
     ) -> Any:
         """使用多空辩论模式生成策略
 
-        综合技术面、新闻面、基本面三方报告，通过策略生成Agent的
+        综合技术面、新闻面、基本面、微观事件四方报告，通过策略生成Agent的
         多空辩论机制生成最终策略信号。
 
         Args:
@@ -429,6 +473,7 @@ class AgentCoordinator:
             analysis_report: 技术面分析报告
             news_report: 新闻分析报告
             fundamental_report: 基本面分析报告
+            micro_event_report: 微观事件分析报告(新增)
             current_price: 当前价格
 
         Returns:
@@ -442,6 +487,7 @@ class AgentCoordinator:
                     analysis_report=analysis_report,
                     news_report=news_report,
                     fundamental_report=fundamental_report,
+                    micro_event_report=micro_event_report,
                     current_price=current_price,
                 )
                 return signal

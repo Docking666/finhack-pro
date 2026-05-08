@@ -30,6 +30,13 @@ class MemoryType(str, Enum):
     TRADE_RESULT = "trade_result"                # 交易结果
     AGENT_THOUGHT = "agent_thought"              # Agent思考过程
     SYSTEM_EVENT = "system_event"                # 系统事件
+    # 微观事件驱动相关
+    MICRO_EVENT = "micro_event"                  # 微观事件(公告/龙虎榜/异常交易)
+    ALTERNATIVE_DATA = "alternative_data"        # 另类数据(舆情/供应链/行业热度)
+    SUPPLY_CHAIN = "supply_chain"                # 供应链数据
+    INDUSTRY_TREND = "industry_trend"            # 行业趋势
+    DRAGON_TIGER = "dragon_tiger"                # 龙虎榜数据
+    EXCHANGE_NOTICE = "exchange_notice"          # 交易所公告
 
 
 class MemoryImportance(str, Enum):
