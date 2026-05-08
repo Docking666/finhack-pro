@@ -97,7 +97,8 @@ jobs:
 
       - name: List dist files
         run: |
-          ls -la desktop/dist/ 2>/dev/null || dir desktop\dist\ 2>nul || echo "Dist directory not found"
+          if [ -d "desktop/dist" ]; then ls -la desktop/dist/; else echo "Dist directory not found"; fi
+        shell: bash
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
