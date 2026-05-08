@@ -69,7 +69,7 @@ jobs:
         working-directory: python
         run: pyinstaller pyinstaller.spec --clean --noconfirm
         env:
-          PYTHONUTF8: utf-8
+          PYTHONIOENCODING: utf-8
 
       - name: Copy backend artifacts (Windows)
         if: matrix.platform == 'win'

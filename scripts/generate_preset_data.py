@@ -2,10 +2,17 @@
 生成预置示例数据
 用于桌面版开箱即用体验
 """
+import sys
+import io
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import os
+
+# 修复Windows控制台编码问题
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 def generate_stock_data(symbol, name, start_price, volatility, trend, days=500):
     """
