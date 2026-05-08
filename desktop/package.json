@@ -5,6 +5,10 @@
   "main": "src/main.js",
   "author": "FinHack Team",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Docking666/finhack-pro.git"
+  },
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
