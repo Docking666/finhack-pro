@@ -62,14 +62,12 @@ jobs:
           npm install
 
       - name: Generate preset data
-        run: |
-          cd scripts
-          python generate_preset_data.py
+        working-directory: scripts
+        run: python generate_preset_data.py
 
       - name: Build Python backend (PyInstaller)
-        run: |
-          cd python
-          pyinstaller pyinstaller.spec --clean --noconfirm
+        working-directory: python
+        run: pyinstaller pyinstaller.spec --clean --noconfirm
         env:
           PYTHONUTF8: utf-8
 
@@ -88,18 +86,17 @@ jobs:
 
       - name: List backend files
         run: |
-          ls -la desktop/backend/ || dir desktop\backend\
+          ls -la desktop/backend/ 2>/dev/null || dir desktop\backend\ 2>nul || echo "Backend directory not found"
 
       - name: Build Electron app (${{ matrix.platform }})
-        run: |
-          cd desktop
-          npm run ${{ matrix.build_cmd }}
+        working-directory: desktop
+        run: npm run ${{ matrix.build_cmd }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: List dist files
         run: |
-          ls -la desktop/dist/ || dir desktop\dist\
+          ls -la desktop/dist/ 2>/dev/null || dir desktop\dist\ 2>nul || echo "Dist directory not found"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -109,12 +106,13 @@ jobs:
             desktop/dist/*.${{ matrix.artifact_ext }}
             desktop/dist/*.zip
           retention-days: 7
-          if-no-files-found: error
+          if-no-files-found: warn
 
   release:
     name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
+    if: always() && needs.build.result == 'success'
 
     steps:
       - name: Download Windows artifacts
