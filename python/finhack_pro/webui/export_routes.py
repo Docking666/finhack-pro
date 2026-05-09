@@ -17,8 +17,14 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from finhack_pro.webui.exporters.excel_exporter import ExcelExporter
-from finhack_pro.webui.exporters.pdf_exporter import PDFExporter
 from finhack_pro.webui.exporters.strategy_share import StrategySharer
+
+try:
+    from finhack_pro.webui.exporters.pdf_exporter import PDFExporter
+    _HAS_REPORTLAB = True
+except ImportError:
+    PDFExporter = None  # type: ignore[assignment,misc]
+    _HAS_REPORTLAB = False
 from finhack_pro.webui.models import APIResponse
 
 router = APIRouter(prefix="/api/export", tags=["export"])
@@ -57,8 +63,10 @@ class StrategyValidateRequest(BaseModel):
 # 导出器实例
 # ============================================================
 
-def get_pdf_exporter() -> PDFExporter:
+def get_pdf_exporter():
     """获取PDF导出器实例"""
+    if not _HAS_REPORTLAB or PDFExporter is None:
+        raise HTTPException(status_code=503, detail="reportlab 未安装，无法导出 PDF")
     return PDFExporter()
 
 
