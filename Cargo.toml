@@ -9,6 +9,7 @@ members = [
     "crates/finhack-data",
     "crates/finhack-api",
     "crates/finhack-bridge",
+    "crates/finhack-pyo3",
 ]
 
 [workspace.package]

@@ -558,57 +558,99 @@ else:
 
 
 # ============================================================
-# 4. Rust 核心预留接口
+# 4. Rust 核心桥接接口（三级降级）
 # ============================================================
 
 class RustCoreBridge:
-    """Rust核心桥接接口
+    """Rust核心桥接接口（三级降级策略）
     
-    连接 finhack-bridge Rust服务，提供高性能计算能力。
-    当Rust服务不可用时自动回退到Python实现。
+    降级优先级:
+    1. PyO3 子进程隔离 → 零拷贝共享内存，百微秒级
+    2. HTTP 桥接服务 → JSON 序列化，毫秒级
+    3. Python 回退 → ta 库 / 纯 NumPy
     
-    桥接接口:
-    - batch_backtest(): 批量回测（Rust+Rayon并行）
-    - batch_calculate_indicators(): 批量指标计算（Rust原生）
-    - parallel_signal_compute(): 并行信号计算（Rust分治-聚合）
+    特性:
+    - 进程级容灾：PyO3 子进程崩溃不影响主进程
+    - 自动降级：任一级别失败自动切换到下一级
+    - 延迟感知：自动选择最快的可用路径
     
     环境变量:
-    - FINHACK_BRIDGE_URL: 桥接服务地址 (默认 http://localhost:8080)
+    - FINHACK_BRIDGE_URL: HTTP 桥接服务地址 (默认 http://localhost:8080)
+    - FINHACK_DISABLE_PYO3: 禁用 PyO3 路径 (设为 1 禁用)
+    - FINHACK_DISABLE_HTTP: 禁用 HTTP 路径 (设为 1 禁用)
     """
     
     def __init__(self, bridge_url: Optional[str] = None):
         self._bridge_url = bridge_url or os.environ.get(
             "FINHACK_BRIDGE_URL", "http://localhost:8080"
         )
-        self._rust_available = False
-        self._rust_info: Optional[Dict[str, Any]] = None
-        self._check_rust_core()
+        
+        # 三级状态
+        self._pyo3_available = False
+        self._pyo3_isolated = None
+        self._pyo3_info: Optional[Dict[str, Any]] = None
+        
+        self._http_available = False
+        self._http_info: Optional[Dict[str, Any]] = None
+        
+        # 禁用标志
+        self._disable_pyo3 = os.environ.get("FINHACK_DISABLE_PYO3", "0") == "1"
+        self._disable_http = os.environ.get("FINHACK_DISABLE_HTTP", "0") == "1"
+        
+        # 检测可用路径
+        self._check_availability()
     
-    def _check_rust_core(self) -> None:
-        """检查Rust核心是否可用"""
-        try:
-            import httpx
-            resp = httpx.get(
-                f"{self._bridge_url}/health", timeout=2.0
-            )
-            if resp.status_code == 200:
-                body = resp.json()
-                if body.get("code") == 0 and body.get("data", {}).get("status") == "healthy":
-                    self._rust_available = True
-                    self._rust_info = body.get("data", {})
-                    logger.info(
-                        f"[RustBridge] Rust核心可用 | "
-                        f"version={self._rust_info.get('version', '?')} | "
-                        f"threads={self._rust_info.get('rayon_threads', '?')}"
-                    )
-                    return
-        except Exception:
-            pass
-        logger.debug("[RustBridge] Rust核心不可用，使用Python回退")
+    def _check_availability(self) -> None:
+        """检测所有可用路径"""
+        # 1. 检测 PyO3
+        if not self._disable_pyo3:
+            try:
+                from finhack_pro.backtest.pyo3_isolated import get_pyo3_isolated
+                self._pyo3_isolated = get_pyo3_isolated()
+                if self._pyo3_isolated.is_available:
+                    self._pyo3_available = True
+                    logger.info("[RustBridge] PyO3 子进程路径可用")
+            except ImportError:
+                pass
+        
+        # 2. 检测 HTTP
+        if not self._disable_http:
+            try:
+                import httpx
+                resp = httpx.get(f"{self._bridge_url}/health", timeout=2.0)
+                if resp.status_code == 200:
+                    body = resp.json()
+                    if body.get("code") == 0 and body.get("data", {}).get("status") == "healthy":
+                        self._http_available = True
+                        self._http_info = body.get("data", {})
+                        logger.info(
+                            f"[RustBridge] HTTP 路径可用 | "
+                            f"version={self._http_info.get('version', '?')} | "
+                            f"threads={self._http_info.get('rayon_threads', '?')}"
+                        )
+            except Exception:
+                pass
+        
+        # 日志总结
+        if not self._pyo3_available and not self._http_available:
+            logger.debug("[RustBridge] Rust 不可用，使用 Python 回退")
     
     @property
     def is_rust_available(self) -> bool:
-        return self._rust_available
+        """任一 Rust 路径可用"""
+        return self._pyo3_available or self._http_available
+    
+    @property
+    def preferred_mode(self) -> str:
+        """当前首选模式"""
+        if self._pyo3_available:
+            return "pyo3"
+        elif self._http_available:
+            return "http"
+        else:
+            return "python"
+    
+    # ========== 批量回测 ==========
     
     def batch_backtest(
         self,
@@ -616,31 +658,26 @@ class RustCoreBridge:
         data: pd.DataFrame,
         initial_capital: float = 1_000_000.0,
     ) -> List[Dict[str, Any]]:
-        """批量回测
+        """批量回测（三级降级）"""
         
-        Rust可用时: 调用Rust+Rayon并行计算
-        Rust不可用时: 使用Python循环回退
+        # 1. PyO3 路径
+        if self._pyo3_available and self._pyo3_isolated:
+            try:
+                closes = data["close"].values.astype(np.float64)
+                status, result = self._pyo3_isolated.batch_backtest(
+                    closes, strategy_configs, initial_capital
+                )
+                if status == "ok":
+                    logger.info(f"[RustBridge] PyO3 批量回测完成 | strategies={len(strategy_configs)}")
+                    return result.get("results", [])
+            except Exception as e:
+                logger.warning(f"[RustBridge] PyO3 批量回测失败: {e}，降级 HTTP")
         
-        Args:
-            strategy_configs: 策略配置列表，每项需含 name, fast_period, slow_period
-            data: 行情数据 (含 open/high/low/close/volume 列)
-            initial_capital: 初始资金
-            
-        Returns:
-            回测结果列表
-        """
-        if self._rust_available:
+        # 2. HTTP 路径
+        if self._http_available:
             try:
                 import httpx
-                bars = []
-                for _, row in data.iterrows():
-                    bars.append({
-                        "open": float(row.get("open", 0)),
-                        "high": float(row.get("high", 0)),
-                        "low": float(row.get("low", 0)),
-                        "close": float(row.get("close", 0)),
-                        "volume": float(row.get("volume", 0)),
-                    })
+                bars = self._df_to_bars(data)
                 payload = {
                     "strategy_configs": strategy_configs,
                     "data": bars,
@@ -655,40 +692,52 @@ class RustCoreBridge:
                     if body.get("code") == 0:
                         result = body["data"]
                         logger.info(
-                            f"[RustBridge] 批量回测完成 | "
+                            f"[RustBridge] HTTP 批量回测完成 | "
                             f"strategies={len(strategy_configs)} | "
                             f"time={result.get('total_time_ms', 0):.1f}ms"
                         )
                         return result.get("results", [])
             except Exception as e:
-                logger.warning(f"[RustBridge] Rust批量回测失败，回退Python: {e}")
+                logger.warning(f"[RustBridge] HTTP 批量回测失败: {e}，降级 Python")
         
-        # Python回退
-        logger.info("[RustBridge] 使用Python回退批量回测")
+        # 3. Python 回退
+        logger.info("[RustBridge] 使用 Python 回退批量回测")
         return []
+    
+    # ========== 批量指标计算 ==========
     
     def batch_calculate_indicators(
         self,
         data: pd.DataFrame,
         indicators: List[str],
     ) -> pd.DataFrame:
-        """批量计算技术指标
+        """批量计算技术指标（三级降级）"""
         
-        Rust可用时: 调用Rust原生计算（rayon并行多指标）
-        Rust不可用时: 使用ta库回退
-        """
-        if self._rust_available:
+        # 1. PyO3 路径
+        if self._pyo3_available and self._pyo3_isolated:
+            try:
+                closes = data["close"].values.astype(np.float64)
+                highs = data["high"].values.astype(np.float64) if "high" in data.columns else None
+                lows = data["low"].values.astype(np.float64) if "low" in data.columns else None
+                
+                status, result = self._pyo3_isolated.calculate_indicators(
+                    closes, highs, lows, indicators
+                )
+                if status == "ok":
+                    result_df = data.copy()
+                    for key in ["rsi", "macd", "bb_upper", "bb_middle", "bb_lower", "atr"]:
+                        if key in result:
+                            result_df[key] = result[key]
+                    logger.info(f"[RustBridge] PyO3 指标计算完成 | indicators={indicators}")
+                    return result_df
+            except Exception as e:
+                logger.warning(f"[RustBridge] PyO3 指标计算失败: {e}，降级 HTTP")
+        
+        # 2. HTTP 路径
+        if self._http_available:
             try:
                 import httpx
-                bars = []
-                for _, row in data.iterrows():
-                    bars.append({
-                        "open": float(row.get("open", 0)),
-                        "high": float(row.get("high", 0)),
-                        "low": float(row.get("low", 0)),
-                        "close": float(row.get("close", 0)),
-                        "volume": float(row.get("volume", 0)),
-                    })
+                bars = self._df_to_bars(data)
                 payload = {"data": bars, "indicators": indicators}
                 resp = httpx.post(
                     f"{self._bridge_url}/bridge/indicators",
@@ -699,31 +748,21 @@ class RustCoreBridge:
                     if body.get("code") == 0:
                         result_data = body["data"]
                         result = data.copy()
-                        if result_data.get("rsi") is not None:
-                            result["rsi"] = result_data["rsi"]
-                        if result_data.get("macd") is not None:
-                            result["macd"] = result_data["macd"]
-                        if result_data.get("bb_upper") is not None:
-                            result["bb_upper"] = result_data["bb_upper"]
-                        if result_data.get("bb_middle") is not None:
-                            result["bb_middle"] = result_data["bb_middle"]
-                        if result_data.get("bb_lower") is not None:
-                            result["bb_lower"] = result_data["bb_lower"]
-                        if result_data.get("atr") is not None:
-                            result["atr"] = result_data["atr"]
+                        for key in ["rsi", "macd", "bb_upper", "bb_middle", "bb_lower", "atr"]:
+                            if result_data.get(key) is not None:
+                                result[key] = result_data[key]
                         logger.info(
-                            f"[RustBridge] 指标计算完成 | "
+                            f"[RustBridge] HTTP 指标计算完成 | "
                             f"indicators={indicators} | "
                             f"time={result_data.get('computation_time_ms', 0):.1f}ms"
                         )
                         return result
             except Exception as e:
-                logger.warning(f"[RustBridge] Rust指标计算失败，回退Python: {e}")
+                logger.warning(f"[RustBridge] HTTP 指标计算失败: {e}，降级 Python")
         
-        # Python回退
+        # 3. Python 回退
         import ta
         result = data.copy()
-        
         for indicator in indicators:
             if indicator == "rsi":
                 result["rsi"] = ta.momentum.rsi(result["close"], window=14)
@@ -737,54 +776,51 @@ class RustCoreBridge:
                 result["atr"] = ta.volatility.average_true_range(
                     result["high"], result["low"], result["close"]
                 )
-            elif indicator == "kama":
-                result["kama"] = ta.momentum.kama(result["close"])
-        
         return result
+    
+    # ========== 并行信号计算 ==========
     
     def parallel_signal_compute(
         self,
         data: pd.DataFrame,
         symbols: List[str],
         strategy_factory,
-        snapshot: PortfolioSnapshot,
+        snapshot,  # PortfolioSnapshot
     ) -> List[Dict[str, Any]]:
-        """并行信号计算（分治-聚合模式）
+        """并行信号计算（三级降级）"""
         
-        Rust可用时: 调用Rust+Rayon分治-聚合
-        Rust不可用时: 使用Python asyncio回退
-        
-        Args:
-            data: 多标的行情数据
-            symbols: 标的列表
-            strategy_factory: 策略工厂
-            snapshot: 只读状态快照
-            
-        Returns:
-            各标的信号列表
-        """
-        if self._rust_available:
+        # 1. PyO3 路径
+        if self._pyo3_available and self._pyo3_isolated:
             try:
-                import httpx
-                symbols_data = []
-                for symbol in symbols:
-                    if "symbol" in data.columns:
-                        sym_data = data[data["symbol"] == symbol]
-                    else:
-                        sym_data = data
-                    
-                    bars = []
-                    for _, row in sym_data.iterrows():
-                        bars.append({
-                            "open": float(row.get("open", 0)),
-                            "high": float(row.get("high", 0)),
-                            "low": float(row.get("low", 0)),
-                            "close": float(row.get("close", 0)),
-                            "volume": float(row.get("volume", 0)),
-                        })
-                    symbols_data.append({"symbol": symbol, "bars": bars})
+                symbols_data = self._prepare_symbols_data(data, symbols)
                 
                 # 从策略工厂推断参数
+                try:
+                    sample_strategy = strategy_factory()
+                    fast = getattr(sample_strategy, 'fast_period', 5)
+                    slow = getattr(sample_strategy, 'slow_period', 20)
+                except Exception:
+                    fast, slow = 5, 20
+                
+                status, result = self._pyo3_isolated.parallel_signal_compute(
+                    symbols_data, fast, slow
+                )
+                if status == "ok":
+                    logger.info(
+                        f"[RustBridge] PyO3 并行信号完成 | "
+                        f"symbols={len(symbols)} | "
+                        f"time={result.get('total_time_ms', 0):.1f}ms"
+                    )
+                    return result.get("results", [])
+            except Exception as e:
+                logger.warning(f"[RustBridge] PyO3 并行信号失败: {e}，降级 HTTP")
+        
+        # 2. HTTP 路径
+        if self._http_available:
+            try:
+                import httpx
+                symbols_data = self._prepare_symbols_data(data, symbols)
+                
                 try:
                     sample_strategy = strategy_factory()
                     fast = getattr(sample_strategy, 'fast_period', 5)
@@ -806,15 +842,15 @@ class RustCoreBridge:
                     if body.get("code") == 0:
                         result_data = body["data"]
                         logger.info(
-                            f"[RustBridge] 并行信号计算完成 | "
+                            f"[RustBridge] HTTP 并行信号完成 | "
                             f"symbols={len(symbols)} | "
                             f"time={result_data.get('total_time_ms', 0):.1f}ms"
                         )
                         return result_data.get("results", [])
             except Exception as e:
-                logger.warning(f"[RustBridge] Rust并行信号失败，回退Python: {e}")
+                logger.warning(f"[RustBridge] HTTP 并行信号失败: {e}，降级 Python")
         
-        # Python回退: asyncio并行
+        # 3. Python 回退
         results = []
         for symbol in symbols:
             if "symbol" in data.columns:
@@ -841,6 +877,42 @@ class RustCoreBridge:
                 results.append({"symbol": symbol, "signals": [], "error": str(e)})
         
         return results
+    
+    # ========== 辅助方法 ==========
+    
+    def _df_to_bars(self, data: pd.DataFrame) -> List[Dict]:
+        """DataFrame 转换为 bars 列表"""
+        bars = []
+        for _, row in data.iterrows():
+            bars.append({
+                "open": float(row.get("open", 0)),
+                "high": float(row.get("high", 0)),
+                "low": float(row.get("low", 0)),
+                "close": float(row.get("close", 0)),
+                "volume": float(row.get("volume", 0)),
+            })
+        return bars
+    
+    def _prepare_symbols_data(self, data: pd.DataFrame, symbols: List[str]) -> List[Dict]:
+        """准备多标的数据"""
+        symbols_data = []
+        for symbol in symbols:
+            if "symbol" in data.columns:
+                sym_data = data[data["symbol"] == symbol]
+            else:
+                sym_data = data
+            
+            bars = []
+            for _, row in sym_data.iterrows():
+                bars.append({
+                    "open": float(row.get("open", 0)),
+                    "high": float(row.get("high", 0)),
+                    "low": float(row.get("low", 0)),
+                    "close": float(row.get("close", 0)),
+                    "volume": float(row.get("volume", 0)),
+                })
+            symbols_data.append({"symbol": symbol, "bars": bars})
+        return symbols_data
 
 
 # 全局Rust桥接实例

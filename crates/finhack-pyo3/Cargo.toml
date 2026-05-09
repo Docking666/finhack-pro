@@ -1,0 +1,24 @@
+[package]
+name = "finhack_pyo3"
+version.workspace = true
+edition.workspace = true
+description = "FinHack Pro PyO3 bindings for Python integration"
+
+[lib]
+name = "finhack_pyo3"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.24", features = ["extension-module", "abi3-py310"] }
+numpy = "0.24"
+ndarray = "0.16"
+rayon = "1.10"
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = []
+# 用于 maturin develop 开发模式
+extension-module = ["pyo3/extension-module"]

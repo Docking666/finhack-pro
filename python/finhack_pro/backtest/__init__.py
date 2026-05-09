@@ -7,7 +7,8 @@ FinHack Pro 回测模块
 - NumPy向量化加速引擎
 - 多标的并行回测
 - Numba JIT加速（可选）
-- Rust核心预留接口
+- Rust核心桥接（三级降级：PyO3子进程 → HTTP → Python回退）
+- PyO3子进程隔离包装器
 
 通过 engine_factory 统一创建和切换。
 """
@@ -39,6 +40,10 @@ from finhack_pro.backtest.accelerated import (
     RustCoreBridge,
     get_rust_bridge,
 )
+from finhack_pro.backtest.pyo3_isolated import (
+    PyO3Isolated,
+    get_pyo3_isolated,
+)
 
 __all__ = [
     # 原有接口
@@ -67,4 +72,7 @@ __all__ = [
     "numba_jit_available",
     "RustCoreBridge",
     "get_rust_bridge",
+    # PyO3 子进程隔离
+    "PyO3Isolated",
+    "get_pyo3_isolated",
 ]
