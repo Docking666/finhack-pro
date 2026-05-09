@@ -3,7 +3,7 @@ FinHack Pro 策略库
 
 提供多种量化交易策略实现，所有策略继承自BaseStrategy基类。
 支持差异化策略框架，实现"机构做广度，个人做深度"的投资理念。
-包含信号聚合器、策略验证框架和信号滤波模块，提升系统鲁棒性。
+包含信号聚合器、策略验证框架、信号滤波模块和参数优化框架，提升系统鲁棒性。
 """
 
 from finhack_pro.strategies.base import BaseStrategy, Context, Signal
@@ -41,6 +41,17 @@ from finhack_pro.strategies.strategy_validator import (
     ValidationResult,
     VALIDATION_PROFILES,
 )
+from finhack_pro.strategies.optimizer import (
+    ParamSpace,
+    TrialResult,
+    OptimizationResult,
+    WalkForwardResult,
+    GridSearchOptimizer,
+    RandomSearchOptimizer,
+    BayesianOptimizer,
+    WalkForwardValidator,
+    OptimizationReport,
+)
 
 __all__ = [
     "BaseStrategy",
@@ -76,4 +87,14 @@ __all__ = [
     "StrategyValidator",
     "ValidationResult",
     "VALIDATION_PROFILES",
+    # 参数优化
+    "ParamSpace",
+    "TrialResult",
+    "OptimizationResult",
+    "WalkForwardResult",
+    "GridSearchOptimizer",
+    "RandomSearchOptimizer",
+    "BayesianOptimizer",
+    "WalkForwardValidator",
+    "OptimizationReport",
 ]

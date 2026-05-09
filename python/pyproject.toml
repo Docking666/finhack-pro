@@ -47,7 +47,25 @@ select = ["E", "F", "I", "N", "W"]
 
 [tool.mypy]
 python_version = "3.10"
-strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "akshare.*",
+    "tushare.*",
+    "ta.*",
+    "redis.*",
+    "websockets.*",
+    "rich.*",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

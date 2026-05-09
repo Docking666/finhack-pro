@@ -9,6 +9,9 @@ FinHack Pro 回测模块
 - Numba JIT加速（可选）
 - Rust核心桥接（三级降级：PyO3子进程 → HTTP → Python回退）
 - PyO3子进程隔离包装器
+- 多标的组合回测引擎
+- 回测报告可视化
+- 风险控制闭环
 
 通过 engine_factory 统一创建和切换。
 """
@@ -44,6 +47,30 @@ from finhack_pro.backtest.pyo3_isolated import (
     PyO3Isolated,
     get_pyo3_isolated,
 )
+from finhack_pro.backtest.portfolio import (
+    PortfolioEngine,
+    PortfolioBacktestConfig,
+    PortfolioBacktestResult,
+    PortfolioMetrics,
+    PortfolioAllocation,
+    PortfolioRebalanceResult,
+    IndividualResult,
+    RebalanceFreq,
+    AllocationMethod,
+)
+from finhack_pro.backtest.report import (
+    BacktestReport,
+    ReportConfig,
+)
+from finhack_pro.backtest.risk_control import (
+    RiskController,
+    RiskConfig,
+    RiskCheckResult,
+    RiskAction,
+    RiskWarning,
+    Position,
+    PortfolioRiskState,
+)
 
 __all__ = [
     # 原有接口
@@ -75,4 +102,25 @@ __all__ = [
     # PyO3 子进程隔离
     "PyO3Isolated",
     "get_pyo3_isolated",
+    # 组合回测
+    "PortfolioEngine",
+    "PortfolioBacktestConfig",
+    "PortfolioBacktestResult",
+    "PortfolioMetrics",
+    "PortfolioAllocation",
+    "PortfolioRebalanceResult",
+    "IndividualResult",
+    "RebalanceFreq",
+    "AllocationMethod",
+    # 回测报告
+    "BacktestReport",
+    "ReportConfig",
+    # 风险控制
+    "RiskController",
+    "RiskConfig",
+    "RiskCheckResult",
+    "RiskAction",
+    "RiskWarning",
+    "Position",
+    "PortfolioRiskState",
 ]

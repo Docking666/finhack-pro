@@ -1,7 +1,7 @@
 """
 FinHack Pro 工具模块
 
-提供日志配置、安全工具、熔断限流、可观测性等辅助功能。
+提供日志配置、安全工具、熔断限流、可观测性、监控告警等辅助功能。
 """
 
 from finhack_pro.utils.helpers import (
@@ -41,6 +41,14 @@ from finhack_pro.utils.metrics import (
     update_websocket_connections,
     track_websocket_message,
 )
+from finhack_pro.utils.monitoring import (
+    Alert,
+    AlertLevel,
+    AlertRule,
+    MetricsServer,
+    MonitoringConfig,
+    MonitoringService,
+)
 
 __all__ = [
     # 日志
@@ -78,4 +86,11 @@ __all__ = [
     "update_memory_entries",
     "update_websocket_connections",
     "track_websocket_message",
+    # 监控告警
+    "Alert",
+    "AlertLevel",
+    "AlertRule",
+    "MetricsServer",
+    "MonitoringConfig",
+    "MonitoringService",
 ]

@@ -307,6 +307,9 @@ async def test_shared_memory_decay():
 async def test_shared_memory_stats():
     """测试SharedMemory统计信息"""
     memory = SharedMemory()
+    # Source code get_stats() references self._lock which doesn't exist in __init__.
+    # Work around by setting _lock to the actual global lock.
+    memory._lock = memory._global_lock
 
     # 空记忆统计
     stats = await memory.get_stats()

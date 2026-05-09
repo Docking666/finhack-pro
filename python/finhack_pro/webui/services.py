@@ -33,6 +33,7 @@ from finhack_pro.webui.models import (
     ToolCallStats,
     ToolInfo,
     ToolParameterInfo,
+    TradeRecord,
 )
 
 
