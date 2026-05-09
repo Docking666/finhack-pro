@@ -1,6 +1,6 @@
 {
   "name": "finhack-pro",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "多智能体量化交易系统桌面版",
   "main": "src/main.js",
   "author": "FinHack Team",

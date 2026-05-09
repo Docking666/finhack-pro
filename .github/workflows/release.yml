@@ -41,6 +41,41 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Compute and sync version
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            CURRENT=$(grep '"version"' desktop/package.json | sed 's/.*"version": "\([^"]*\)".*/\1/')
+            IFS='.' read -ra VER <<< "$CURRENT"
+            MAJOR=${VER[0]:-2}
+            MINOR=${VER[1]:-1}
+            PATCH=${VER[2]:-0}
+            case "${{ inputs.release_type }}" in
+              major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+              minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+              patch) PATCH=$((PATCH + 1)) ;;
+              auto|*)
+                DATE=$(date +'%Y%m%d')
+                TIME=$(date +'%H%M')
+                VERSION="${MAJOR}.${MINOR}.${PATCH}+${DATE}.${TIME}"
+                echo "version=$VERSION" >> $GITHUB_OUTPUT
+                echo "Generated version: $VERSION (auto)"
+                # auto模式不回写文件，直接使用日期版本
+                exit 0
+                ;;
+            esac
+            VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Generated version: $VERSION"
+          # 回写版本号到所有文件，确保构建产物使用正确版本
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" desktop/package.json
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" python/pyproject.toml
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          echo "Synced version to package.json, pyproject.toml, Cargo.toml"
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v6
         with:
@@ -125,54 +160,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Generate version
+      - name: Compute version (for release tag)
         id: version
         run: |
-          # 方案一: 用户手动指定版本
           if [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
-          
-          # 方案二: 自动语义化版本 (从 package.json 读取 + release_type 递增)
           else
-            # 从 package.json 读取当前版本
             CURRENT=$(grep '"version"' desktop/package.json | sed 's/.*"version": "\([^"]*\)".*/\1/')
-            
-            # 解析版本号
             IFS='.' read -ra VER <<< "$CURRENT"
             MAJOR=${VER[0]:-2}
             MINOR=${VER[1]:-1}
             PATCH=${VER[2]:-0}
-            
-            # 根据 release_type 递增
             case "${{ inputs.release_type }}" in
-              major)
-                MAJOR=$((MAJOR + 1))
-                MINOR=0
-                PATCH=0
-                ;;
-              minor)
-                MINOR=$((MINOR + 1))
-                PATCH=0
-                ;;
-              patch)
-                PATCH=$((PATCH + 1))
-                ;;
+              major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+              minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+              patch) PATCH=$((PATCH + 1)) ;;
               auto|*)
-                # 自动模式: 生成带日期的预发布版本
                 DATE=$(date +'%Y%m%d')
                 TIME=$(date +'%H%M')
                 VERSION="${MAJOR}.${MINOR}.${PATCH}+${DATE}.${TIME}"
                 echo "version=$VERSION" >> $GITHUB_OUTPUT
-                echo "Generated version: $VERSION (auto)"
                 exit 0
                 ;;
             esac
-            
             VERSION="${MAJOR}.${MINOR}.${PATCH}"
           fi
-          
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Generated version: $VERSION"
 
       - name: Download Windows artifacts
         uses: actions/download-artifact@v8
