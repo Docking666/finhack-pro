@@ -4,9 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g. 1.0.0)'
+        description: 'Release version (e.g. 2.1.0)'
         required: false
-        default: '1.0.0'
+        default: ''
+        type: string
+      release_type:
+        description: 'Release type (major/minor/patch/auto)'
+        required: false
+        default: 'minor'
         type: string
 
 permissions:
@@ -123,13 +128,49 @@ jobs:
       - name: Generate version
         id: version
         run: |
-          # 如果指定了版本号，使用指定的
-          if [ -n "${{ inputs.version }}" ] && [ "${{ inputs.version }}" != "1.0.0" ]; then
+          # 方案一: 用户手动指定版本
+          if [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
+          
+          # 方案二: 自动语义化版本 (从 package.json 读取 + release_type 递增)
           else
-            # 自动生成版本号: 日期格式 YYYYMMDD.HHMM
-            VERSION=$(date +'%Y%m%d.%H%M')
+            # 从 package.json 读取当前版本
+            CURRENT=$(grep '"version"' desktop/package.json | sed 's/.*"version": "\([^"]*\)".*/\1/')
+            
+            # 解析版本号
+            IFS='.' read -ra VER <<< "$CURRENT"
+            MAJOR=${VER[0]:-2}
+            MINOR=${VER[1]:-1}
+            PATCH=${VER[2]:-0}
+            
+            # 根据 release_type 递增
+            case "${{ inputs.release_type }}" in
+              major)
+                MAJOR=$((MAJOR + 1))
+                MINOR=0
+                PATCH=0
+                ;;
+              minor)
+                MINOR=$((MINOR + 1))
+                PATCH=0
+                ;;
+              patch)
+                PATCH=$((PATCH + 1))
+                ;;
+              auto|*)
+                # 自动模式: 生成带日期的预发布版本
+                DATE=$(date +'%Y%m%d')
+                TIME=$(date +'%H%M')
+                VERSION="${MAJOR}.${MINOR}.${PATCH}+${DATE}.${TIME}"
+                echo "version=$VERSION" >> $GITHUB_OUTPUT
+                echo "Generated version: $VERSION (auto)"
+                exit 0
+                ;;
+            esac
+            
+            VERSION="${MAJOR}.${MINOR}.${PATCH}"
           fi
+          
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Generated version: $VERSION"
 

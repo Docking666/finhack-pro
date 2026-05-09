@@ -1,6 +1,6 @@
 [project]
 name = "finhack-pro"
-version = "1.0.0"
+version = "2.1.0"
 description = "FinHack Pro 量化交易系统 - Python策略层与AI Agent系统"
 requires-python = ">=3.10"
 license = {text = "MIT"}
