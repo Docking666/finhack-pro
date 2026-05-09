@@ -8,6 +8,7 @@ members = [
     "crates/finhack-backtest",
     "crates/finhack-data",
     "crates/finhack-api",
+    "crates/finhack-bridge",
 ]
 
 [workspace.package]

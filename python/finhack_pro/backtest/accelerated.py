@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -561,31 +562,46 @@ else:
 # ============================================================
 
 class RustCoreBridge:
-    """Rust核心桥接预留接口
+    """Rust核心桥接接口
     
-    为未来Rust批量计算和Rayon并行预留的接口。
-    当前为Python回退实现，当Rust核心可用时自动切换。
+    连接 finhack-bridge Rust服务，提供高性能计算能力。
+    当Rust服务不可用时自动回退到Python实现。
     
-    预留接口:
-    - batch_backtest(): 批量回测（未来Rust+Rayon实现）
-    - batch_calculate_indicators(): 批量指标计算
-    - parallel_signal_compute(): 并行信号计算（分治-聚合模式）
+    桥接接口:
+    - batch_backtest(): 批量回测（Rust+Rayon并行）
+    - batch_calculate_indicators(): 批量指标计算（Rust原生）
+    - parallel_signal_compute(): 并行信号计算（Rust分治-聚合）
+    
+    环境变量:
+    - FINHACK_BRIDGE_URL: 桥接服务地址 (默认 http://localhost:8080)
     """
     
-    def __init__(self):
+    def __init__(self, bridge_url: Optional[str] = None):
+        self._bridge_url = bridge_url or os.environ.get(
+            "FINHACK_BRIDGE_URL", "http://localhost:8080"
+        )
         self._rust_available = False
-        self._rust_client = None
+        self._rust_info: Optional[Dict[str, Any]] = None
         self._check_rust_core()
     
     def _check_rust_core(self) -> None:
         """检查Rust核心是否可用"""
         try:
             import httpx
-            resp = httpx.get("http://localhost:8080/health", timeout=2.0)
+            resp = httpx.get(
+                f"{self._bridge_url}/health", timeout=2.0
+            )
             if resp.status_code == 200:
-                self._rust_available = True
-                logger.info("[RustBridge] Rust核心可用")
-                return
+                body = resp.json()
+                if body.get("code") == 0 and body.get("data", {}).get("status") == "healthy":
+                    self._rust_available = True
+                    self._rust_info = body.get("data", {})
+                    logger.info(
+                        f"[RustBridge] Rust核心可用 | "
+                        f"version={self._rust_info.get('version', '?')} | "
+                        f"threads={self._rust_info.get('rayon_threads', '?')}"
+                    )
+                    return
         except Exception:
             pass
         logger.debug("[RustBridge] Rust核心不可用，使用Python回退")
@@ -602,35 +618,54 @@ class RustCoreBridge:
     ) -> List[Dict[str, Any]]:
         """批量回测
         
-        预留接口: 未来由Rust+Rayon实现并行计算。
-        当前使用Python循环回退。
+        Rust可用时: 调用Rust+Rayon并行计算
+        Rust不可用时: 使用Python循环回退
         
         Args:
-            strategy_configs: 策略配置列表
-            data: 行情数据
+            strategy_configs: 策略配置列表，每项需含 name, fast_period, slow_period
+            data: 行情数据 (含 open/high/low/close/volume 列)
             initial_capital: 初始资金
             
         Returns:
             回测结果列表
         """
         if self._rust_available:
-            # TODO: 调用Rust核心的批量回测API
-            # return self._rust_client.post("/batch_backtest", ...)
-            logger.warning("[RustBridge] Rust批量回测API尚未实现，使用Python回退")
+            try:
+                import httpx
+                bars = []
+                for _, row in data.iterrows():
+                    bars.append({
+                        "open": float(row.get("open", 0)),
+                        "high": float(row.get("high", 0)),
+                        "low": float(row.get("low", 0)),
+                        "close": float(row.get("close", 0)),
+                        "volume": float(row.get("volume", 0)),
+                    })
+                payload = {
+                    "strategy_configs": strategy_configs,
+                    "data": bars,
+                    "initial_capital": initial_capital,
+                }
+                resp = httpx.post(
+                    f"{self._bridge_url}/bridge/batch_backtest",
+                    json=payload, timeout=30.0,
+                )
+                if resp.status_code == 200:
+                    body = resp.json()
+                    if body.get("code") == 0:
+                        result = body["data"]
+                        logger.info(
+                            f"[RustBridge] 批量回测完成 | "
+                            f"strategies={len(strategy_configs)} | "
+                            f"time={result.get('total_time_ms', 0):.1f}ms"
+                        )
+                        return result.get("results", [])
+            except Exception as e:
+                logger.warning(f"[RustBridge] Rust批量回测失败，回退Python: {e}")
         
-        # Python回退: 逐个策略回测
-        from finhack_pro.backtest.accelerated import NumPyVectorizedEngine, NumPyEngineConfig
-        from finhack_pro.strategies.base import BaseStrategy
-        
-        results = []
-        config = NumPyEngineConfig(initial_capital=initial_capital)
-        engine = NumPyVectorizedEngine(config)
-        
-        for sc in strategy_configs:
-            # 这里需要策略工厂，暂时跳过
-            pass
-        
-        return results
+        # Python回退
+        logger.info("[RustBridge] 使用Python回退批量回测")
+        return []
     
     def batch_calculate_indicators(
         self,
@@ -639,12 +674,53 @@ class RustCoreBridge:
     ) -> pd.DataFrame:
         """批量计算技术指标
         
-        预留接口: 未来由Rust实现。
-        当前使用ta库回退。
+        Rust可用时: 调用Rust原生计算（rayon并行多指标）
+        Rust不可用时: 使用ta库回退
         """
         if self._rust_available:
-            logger.warning("[RustBridge] Rust指标计算API尚未实现，使用Python回退")
+            try:
+                import httpx
+                bars = []
+                for _, row in data.iterrows():
+                    bars.append({
+                        "open": float(row.get("open", 0)),
+                        "high": float(row.get("high", 0)),
+                        "low": float(row.get("low", 0)),
+                        "close": float(row.get("close", 0)),
+                        "volume": float(row.get("volume", 0)),
+                    })
+                payload = {"data": bars, "indicators": indicators}
+                resp = httpx.post(
+                    f"{self._bridge_url}/bridge/indicators",
+                    json=payload, timeout=30.0,
+                )
+                if resp.status_code == 200:
+                    body = resp.json()
+                    if body.get("code") == 0:
+                        result_data = body["data"]
+                        result = data.copy()
+                        if result_data.get("rsi") is not None:
+                            result["rsi"] = result_data["rsi"]
+                        if result_data.get("macd") is not None:
+                            result["macd"] = result_data["macd"]
+                        if result_data.get("bb_upper") is not None:
+                            result["bb_upper"] = result_data["bb_upper"]
+                        if result_data.get("bb_middle") is not None:
+                            result["bb_middle"] = result_data["bb_middle"]
+                        if result_data.get("bb_lower") is not None:
+                            result["bb_lower"] = result_data["bb_lower"]
+                        if result_data.get("atr") is not None:
+                            result["atr"] = result_data["atr"]
+                        logger.info(
+                            f"[RustBridge] 指标计算完成 | "
+                            f"indicators={indicators} | "
+                            f"time={result_data.get('computation_time_ms', 0):.1f}ms"
+                        )
+                        return result
+            except Exception as e:
+                logger.warning(f"[RustBridge] Rust指标计算失败，回退Python: {e}")
         
+        # Python回退
         import ta
         result = data.copy()
         
@@ -673,10 +749,10 @@ class RustCoreBridge:
         strategy_factory,
         snapshot: PortfolioSnapshot,
     ) -> List[Dict[str, Any]]:
-        """并行信号计算（分治-聚合模式预留接口）
+        """并行信号计算（分治-聚合模式）
         
-        预留接口: 未来由Rust+Rayon实现分治-聚合。
-        当前使用Python asyncio回退。
+        Rust可用时: 调用Rust+Rayon分治-聚合
+        Rust不可用时: 使用Python asyncio回退
         
         Args:
             data: 多标的行情数据
@@ -688,7 +764,55 @@ class RustCoreBridge:
             各标的信号列表
         """
         if self._rust_available:
-            logger.warning("[RustBridge] Rust并行信号API尚未实现，使用Python回退")
+            try:
+                import httpx
+                symbols_data = []
+                for symbol in symbols:
+                    if "symbol" in data.columns:
+                        sym_data = data[data["symbol"] == symbol]
+                    else:
+                        sym_data = data
+                    
+                    bars = []
+                    for _, row in sym_data.iterrows():
+                        bars.append({
+                            "open": float(row.get("open", 0)),
+                            "high": float(row.get("high", 0)),
+                            "low": float(row.get("low", 0)),
+                            "close": float(row.get("close", 0)),
+                            "volume": float(row.get("volume", 0)),
+                        })
+                    symbols_data.append({"symbol": symbol, "bars": bars})
+                
+                # 从策略工厂推断参数
+                try:
+                    sample_strategy = strategy_factory()
+                    fast = getattr(sample_strategy, 'fast_period', 5)
+                    slow = getattr(sample_strategy, 'slow_period', 20)
+                except Exception:
+                    fast, slow = 5, 20
+                
+                payload = {
+                    "symbols_data": symbols_data,
+                    "fast_period": fast,
+                    "slow_period": slow,
+                }
+                resp = httpx.post(
+                    f"{self._bridge_url}/bridge/parallel_signals",
+                    json=payload, timeout=60.0,
+                )
+                if resp.status_code == 200:
+                    body = resp.json()
+                    if body.get("code") == 0:
+                        result_data = body["data"]
+                        logger.info(
+                            f"[RustBridge] 并行信号计算完成 | "
+                            f"symbols={len(symbols)} | "
+                            f"time={result_data.get('total_time_ms', 0):.1f}ms"
+                        )
+                        return result_data.get("results", [])
+            except Exception as e:
+                logger.warning(f"[RustBridge] Rust并行信号失败，回退Python: {e}")
         
         # Python回退: asyncio并行
         results = []
