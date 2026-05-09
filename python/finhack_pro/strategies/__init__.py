@@ -39,6 +39,7 @@ from finhack_pro.strategies.signal_filters import (
 from finhack_pro.strategies.strategy_validator import (
     StrategyValidator,
     ValidationResult,
+    VALIDATION_PROFILES,
 )
 
 __all__ = [
@@ -74,4 +75,5 @@ __all__ = [
     # 策略验证
     "StrategyValidator",
     "ValidationResult",
+    "VALIDATION_PROFILES",
 ]

@@ -12,12 +12,17 @@ Agent协调器
 
 所有Agent共享 SharedMemory(共享记忆) 和 ToolRegistry(共享工具集)。
 支持微观事件驱动和另类数据分析。
+
+优化:
+- Agent启动优雅降级：非核心Agent失败时系统继续运行
+- 系统状态追踪：记录各Agent健康状态
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
+from enum import Enum
 
 from loguru import logger
 
@@ -35,6 +40,21 @@ from finhack_pro.agents.alternative_data_tools import register_alternative_data_
 from finhack_pro.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class AgentHealthStatus(str, Enum):
+    """Agent健康状态"""
+    HEALTHY = "healthy"           # 正常运行
+    DEGRADED = "degraded"         # 降级运行（启动失败但非核心）
+    FAILED = "failed"             # 失败
+    STOPPED = "stopped"           # 已停止
+
+
+# 核心Agent集合：这些Agent失败会导致系统不可用
+CRITICAL_AGENTS: Set[str] = {"strategy_generator", "risk_manager", "trade_executor"}
+
+# 分析Agent集合：这些Agent失败时系统可降级运行
+ANALYSIS_AGENTS: Set[str] = {"market_analyzer", "news_analyst", "fundamental_analyst", "micro_event_agent"}
 
 
 class AgentCoordinator:
@@ -72,6 +92,9 @@ class AgentCoordinator:
         self._running = False
         self._analysis_tasks: List[asyncio.Task] = []
         self._logger = get_logger("coordinator")
+        
+        # Agent健康状态追踪
+        self._agent_health: Dict[str, AgentHealthStatus] = {}
 
         # ---- 创建共享基础设施 ----
 
@@ -186,21 +209,90 @@ class AgentCoordinator:
     async def start(self) -> None:
         """启动所有Agent
 
-        按顺序初始化并启动每个Agent，如果某个Agent启动失败则抛出异常。
+        实现优雅降级：
+        - 核心Agent（strategy_generator, risk_manager, trade_executor）失败时抛出异常
+        - 分析Agent失败时系统以降级模式继续运行
         """
         self._logger.info("正在启动Agent协调器...")
+
+        # 初始化健康状态
+        for name in self._agents:
+            self._agent_health[name] = AgentHealthStatus.STOPPED
+
+        failed_critical: List[str] = []
+        degraded_agents: List[str] = []
 
         # 启动所有Agent
         for name, agent in self._agents.items():
             try:
                 await agent.start()
+                self._agent_health[name] = AgentHealthStatus.HEALTHY
                 self._logger.info(f"Agent [{name}] 启动成功")
             except Exception as e:
-                self._logger.error(f"Agent [{name}] 启动失败: {e}")
-                raise
+                self._agent_health[name] = AgentHealthStatus.FAILED
+                
+                if name in CRITICAL_AGENTS:
+                    # 核心Agent失败，记录并继续检查其他Agent
+                    self._logger.error(f"核心Agent [{name}] 启动失败: {e}")
+                    failed_critical.append(name)
+                else:
+                    # 非核心Agent失败，标记为降级
+                    self._agent_health[name] = AgentHealthStatus.DEGRADED
+                    degraded_agents.append(name)
+                    self._logger.warning(
+                        f"非核心Agent [{name}] 启动失败，系统将以降级模式运行: {e}"
+                    )
+
+        # 如果有核心Agent失败，抛出异常
+        if failed_critical:
+            error_msg = f"核心Agent启动失败，系统不可用: {', '.join(failed_critical)}"
+            self._logger.error(error_msg)
+            raise RuntimeError(error_msg)
+
+        # 记录降级状态
+        if degraded_agents:
+            self._logger.warning(
+                f"系统以降级模式运行，以下Agent不可用: {', '.join(degraded_agents)}"
+            )
 
         self._running = True
-        self._logger.info("Agent协调器启动完成，所有Agent就绪")
+        self._logger.info("Agent协调器启动完成")
+
+    def get_health_status(self) -> Dict[str, Any]:
+        """获取系统健康状态
+        
+        Returns:
+            包含整体状态和各Agent状态的字典
+        """
+        healthy_count = sum(1 for s in self._agent_health.values() if s == AgentHealthStatus.HEALTHY)
+        degraded_count = sum(1 for s in self._agent_health.values() if s == AgentHealthStatus.DEGRADED)
+        failed_count = sum(1 for s in self._agent_health.values() if s == AgentHealthStatus.FAILED)
+        
+        # 确定整体状态
+        if failed_count > 0 and any(
+            self._agent_health.get(name) == AgentHealthStatus.FAILED 
+            for name in CRITICAL_AGENTS
+        ):
+            overall = "critical"
+        elif degraded_count > 0:
+            overall = "degraded"
+        else:
+            overall = "healthy"
+        
+        return {
+            "overall": overall,
+            "running": self._running,
+            "agents": {
+                name: status.value 
+                for name, status in self._agent_health.items()
+            },
+            "summary": {
+                "healthy": healthy_count,
+                "degraded": degraded_count,
+                "failed": failed_count,
+                "total": len(self._agent_health),
+            },
+        }
 
     async def stop(self) -> None:
         """停止所有Agent
@@ -219,6 +311,7 @@ class AgentCoordinator:
         for name, agent in self._agents.items():
             try:
                 await agent.stop()
+                self._agent_health[name] = AgentHealthStatus.STOPPED
                 self._logger.info(f"Agent [{name}] 已停止")
             except Exception as e:
                 self._logger.error(f"Agent [{name}] 停止失败: {e}")

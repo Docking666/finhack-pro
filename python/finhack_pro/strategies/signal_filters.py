@@ -79,7 +79,10 @@ class FilteredSignal(BaseModel):
 # ============================================================
 
 class BaseFilter(ABC):
-    """滤波器基类"""
+    """滤波器基类
+    
+    所有滤波器支持按 symbol 隔离状态，避免多标的并发时状态混淆。
+    """
     
     name: str = "base_filter"
     priority: int = 100  # 执行优先级，数字越小越先执行
@@ -89,11 +92,43 @@ class BaseFilter(ABC):
     def __init__(self, enabled: bool = None, **kwargs):
         self.enabled = enabled if enabled is not None else self.default_enabled
         self.params = kwargs
+        # 状态隔离：按 symbol 存储状态
+        self._states: Dict[str, Any] = {}
         
     @abstractmethod
-    def apply(self, signals: List[RawSignal]) -> List[RawSignal]:
-        """应用滤波器"""
+    def apply(self, signals: List[RawSignal], symbol: str = "default") -> List[RawSignal]:
+        """应用滤波器
+        
+        Args:
+            signals: 信号列表
+            symbol: 标的代码，用于状态隔离
+        """
         pass
+    
+    def _get_state(self, symbol: str, default: Any = None) -> Any:
+        """获取指定标的的状态"""
+        return self._states.get(symbol, default)
+    
+    def _set_state(self, symbol: str, state: Any) -> None:
+        """设置指定标的的状态"""
+        self._states[symbol] = state
+    
+    def _init_state(self, symbol: str, initial_state: Any) -> Any:
+        """初始化状态（如果不存在）"""
+        if symbol not in self._states:
+            self._states[symbol] = initial_state
+        return self._states[symbol]
+    
+    def reset(self, symbol: Optional[str] = None) -> None:
+        """重置滤波器状态
+        
+        Args:
+            symbol: 指定标的，None 表示重置所有
+        """
+        if symbol is None:
+            self._states.clear()
+        elif symbol in self._states:
+            del self._states[symbol]
     
     def _log(self, message: str) -> None:
         logger.debug(f"[{self.name}] {message}")
@@ -115,6 +150,7 @@ class KalmanFilterFusion(BaseFilter):
     - 输出不确定性估计
     - 自适应调整各源权重
     - 低计算开销，适合实时
+    - 支持 symbol 级别状态隔离
     """
     
     name = "kalman_fusion"
@@ -141,16 +177,22 @@ class KalmanFilterFusion(BaseFilter):
             SignalType.EVENT.value: 0.25,
         }
         
-        # 初始化状态
-        self._state = np.zeros(dim_state)
-        self._P = np.eye(dim_state) * 1.0  # 状态协方差
-        self._F = np.array([[signal_persistence, 0], [0, 0.9]])  # 状态转移
-        self._Q = np.eye(dim_state) * process_noise  # 过程噪声协方差
+    def _init_kalman_state(self, symbol: str) -> Dict[str, np.ndarray]:
+        """初始化卡尔曼滤波状态"""
+        return {
+            'state': np.zeros(self.dim_state),
+            'P': np.eye(self.dim_state) * 1.0,  # 状态协方差
+            'F': np.array([[self.signal_persistence, 0], [0, 0.9]]),  # 状态转移
+            'Q': np.eye(self.dim_state) * self.process_noise,  # 过程噪声协方差
+        }
         
-    def apply(self, signals: List[RawSignal]) -> List[RawSignal]:
+    def apply(self, signals: List[RawSignal], symbol: str = "default") -> List[RawSignal]:
         """应用卡尔曼滤波融合"""
         if not self.enabled or not signals:
             return signals
+        
+        # 获取或初始化该 symbol 的状态
+        kalman = self._init_state(symbol, self._init_kalman_state(symbol))
             
         # 按信号类型分组
         grouped = self._group_by_type(signals)
@@ -162,20 +204,23 @@ class KalmanFilterFusion(BaseFilter):
             return signals
             
         # 预测步骤
-        self._state = self._F @ self._state
-        self._P = self._F @ self._P @ self._F.T + self._Q
+        kalman['state'] = kalman['F'] @ kalman['state']
+        kalman['P'] = kalman['F'] @ kalman['P'] @ kalman['F'].T + kalman['Q']
         
         # 更新步骤
-        y = observations - H @ self._state  # 残差
-        S = H @ self._P @ H.T + R           # 残差协方差
-        K = self._P @ H.T @ np.linalg.inv(S)  # 卡尔曼增益
+        y = observations - H @ kalman['state']  # 残差
+        S = H @ kalman['P'] @ H.T + R           # 残差协方差
+        K = kalman['P'] @ H.T @ np.linalg.inv(S)  # 卡尔曼增益
         
-        self._state = self._state + K @ y
-        self._P = (np.eye(self.dim_state) - K @ H) @ self._P
+        kalman['state'] = kalman['state'] + K @ y
+        kalman['P'] = (np.eye(self.dim_state) - K @ H) @ kalman['P']
+        
+        # 保存更新后的状态
+        self._set_state(symbol, kalman)
         
         # 提取融合结果
-        fused_value = float(self._state[0])
-        uncertainty = float(np.sqrt(self._P[0, 0]))
+        fused_value = float(kalman['state'][0])
+        uncertainty = float(np.sqrt(kalman['P'][0, 0]))
         
         # 更新所有信号的值和置信度
         for sig in signals:
@@ -183,7 +228,7 @@ class KalmanFilterFusion(BaseFilter):
             sig.confidence = max(0, 1 - uncertainty)
             sig.metadata["kalman_uncertainty"] = uncertainty
             
-        self._log(f"融合信号: value={fused_value:.3f}, uncertainty={uncertainty:.3f}")
+        self._log(f"[{symbol}] 融合信号: value={fused_value:.3f}, uncertainty={uncertainty:.3f}")
         
         return signals
     
@@ -232,9 +277,12 @@ class KalmanFilterFusion(BaseFilter):
         
         return np.array(observations), R, H
     
-    def get_fused_signal(self) -> Tuple[float, float]:
-        """获取当前融合信号和不确定性"""
-        return float(self._state[0]), float(np.sqrt(self._P[0, 0]))
+    def get_fused_signal(self, symbol: str = "default") -> Tuple[float, float]:
+        """获取指定标的的融合信号和不确定性"""
+        kalman = self._get_state(symbol)
+        if kalman is None:
+            return 0.0, 1.0
+        return float(kalman['state'][0]), float(np.sqrt(kalman['P'][0, 0]))
 
 
 # ============================================================
@@ -273,7 +321,7 @@ class AdaptiveWeightedAverage(BaseFilter):
         self._source_ic: Dict[str, List[float]] = {}
         self._source_weights: Dict[str, float] = {}
         
-    def apply(self, signals: List[RawSignal]) -> List[RawSignal]:
+    def apply(self, signals: List[RawSignal], symbol: str = "default") -> List[RawSignal]:
         """应用自适应加权"""
         if not self.enabled or not signals:
             return signals
@@ -359,6 +407,7 @@ class KAMAFilter(BaseFilter):
     - 自适应波动
     - 低延迟
     - 低计算开销
+    - 支持 symbol 级别状态隔离
     """
     
     name = "kama"
@@ -378,34 +427,41 @@ class KAMAFilter(BaseFilter):
         self.fast_sc = fast_sc
         self.slow_sc = slow_sc
         
-        self._prev_value: Optional[float] = None
-        self._price_history: List[float] = []
-        
-    def apply(self, signals: List[RawSignal]) -> List[RawSignal]:
+    def apply(self, signals: List[RawSignal], symbol: str = "default") -> List[RawSignal]:
         """应用KAMA滤波"""
         if not self.enabled or not signals:
             return signals
+        
+        # 获取或初始化该 symbol 的状态
+        state = self._init_state(symbol, {
+            'prev_value': None,
+            'price_history': []
+        })
             
         # 对每个信号应用KAMA
         for sig in signals:
-            kama_value = self._compute_kama(sig.value)
+            kama_value = self._compute_kama(sig.value, state)
             sig.value = kama_value
             sig.metadata["kama_applied"] = True
+        
+        # 保存更新后的状态
+        self._set_state(symbol, state)
             
         return signals
     
-    def _compute_kama(self, price: float) -> float:
+    def _compute_kama(self, price: float, state: Dict) -> float:
         """计算KAMA值"""
-        self._price_history.append(price)
+        state['price_history'].append(price)
+        history = state['price_history']
         
-        if len(self._price_history) < self.period + 1:
-            self._prev_value = price
+        if len(history) < self.period + 1:
+            state['prev_value'] = price
             return price
             
         # 计算效率比率 (ER)
-        direction = abs(price - self._price_history[-self.period])
+        direction = abs(price - history[-self.period])
         volatility = sum(
-            abs(self._price_history[i] - self._price_history[i-1])
+            abs(history[i] - history[i-1])
             for i in range(-self.period + 1, 0)
         )
         
@@ -416,23 +472,18 @@ class KAMAFilter(BaseFilter):
         sc = sc ** 2  # 平方使响应更平滑
         
         # 计算KAMA
-        if self._prev_value is None:
+        if state['prev_value'] is None:
             kama = price
         else:
-            kama = self._prev_value + sc * (price - self._prev_value)
+            kama = state['prev_value'] + sc * (price - state['prev_value'])
             
-        self._prev_value = kama
+        state['prev_value'] = kama
         
         # 保持历史长度
-        if len(self._price_history) > self.period * 3:
-            self._price_history = self._price_history[-self.period * 2:]
+        if len(history) > self.period * 3:
+            state['price_history'] = history[-self.period * 2:]
             
         return kama
-    
-    def reset(self) -> None:
-        """重置滤波器状态"""
-        self._prev_value = None
-        self._price_history = []
 
 
 # ============================================================
@@ -448,6 +499,7 @@ class FRAMAFilter(BaseFilter):
     - 捕捉市场分形特征
     - 对非线性趋势敏感
     - 低计算开销
+    - 支持 symbol 级别状态隔离
     """
     
     name = "frama"
@@ -465,31 +517,38 @@ class FRAMAFilter(BaseFilter):
         self.period = period
         self.fc = fc
         
-        self._price_history: List[float] = []
-        self._prev_frama: Optional[float] = None
-        
-    def apply(self, signals: List[RawSignal]) -> List[RawSignal]:
+    def apply(self, signals: List[RawSignal], symbol: str = "default") -> List[RawSignal]:
         """应用FRAMA滤波"""
         if not self.enabled or not signals:
             return signals
+        
+        # 获取或初始化该 symbol 的状态
+        state = self._init_state(symbol, {
+            'price_history': [],
+            'prev_frama': None
+        })
             
         for sig in signals:
-            frama_value = self._compute_frama(sig.value)
+            frama_value = self._compute_frama(sig.value, state)
             sig.value = frama_value
             sig.metadata["frama_applied"] = True
+        
+        # 保存更新后的状态
+        self._set_state(symbol, state)
             
         return signals
     
-    def _compute_frama(self, price: float) -> float:
+    def _compute_frama(self, price: float, state: Dict) -> float:
         """计算FRAMA值"""
-        self._price_history.append(price)
+        state['price_history'].append(price)
+        history = state['price_history']
         n = self.period
         
-        if len(self._price_history) < n * 2:
-            self._prev_frama = price
+        if len(history) < n * 2:
+            state['prev_frama'] = price
             return price
             
-        prices = self._price_history[-n * 2:]
+        prices = history[-n * 2:]
         
         # 计算三段的价格范围
         n3 = (max(prices[-n:]) - min(prices[-n:])) / n
@@ -507,23 +566,18 @@ class FRAMAFilter(BaseFilter):
         alpha = max(min(alpha, 1.0), 0.01)  # 限制在[0.01, 1]
         
         # 计算FRAMA
-        if self._prev_frama is None:
+        if state['prev_frama'] is None:
             frama = price
         else:
-            frama = alpha * price + (1 - alpha) * self._prev_frama
+            frama = alpha * price + (1 - alpha) * state['prev_frama']
             
-        self._prev_frama = frama
+        state['prev_frama'] = frama
         
         # 保持历史长度
-        if len(self._price_history) > self.period * 4:
-            self._price_history = self._price_history[-self.period * 2:]
+        if len(history) > n * 4:
+            state['price_history'] = history[-n * 2:]
             
         return frama
-    
-    def reset(self) -> None:
-        """重置滤波器状态"""
-        self._price_history = []
-        self._prev_frama = None
 
 
 # ============================================================
@@ -563,7 +617,7 @@ class AnomalyDetector(BaseFilter):
         
         self._signal_history: List[float] = []
         
-    def apply(self, signals: List[RawSignal]) -> List[RawSignal]:
+    def apply(self, signals: List[RawSignal], symbol: str = "default") -> List[RawSignal]:
         """应用异常检测"""
         if not self.enabled or not signals:
             return signals
@@ -676,7 +730,7 @@ class TransformerAttentionFusion(BaseFilter):
         self._attention_weights: Optional[np.ndarray] = None
         self._is_initialized = False
         
-    def apply(self, signals: List[RawSignal]) -> List[RawSignal]:
+    def apply(self, signals: List[RawSignal], symbol: str = "default") -> List[RawSignal]:
         """应用Transformer注意力融合"""
         if not self.enabled or not signals:
             return signals
@@ -778,7 +832,7 @@ class ParticleFilter(BaseFilter):
         self._particles: Optional[np.ndarray] = None
         self._weights: Optional[np.ndarray] = None
         
-    def apply(self, signals: List[RawSignal]) -> List[RawSignal]:
+    def apply(self, signals: List[RawSignal], symbol: str = "default") -> List[RawSignal]:
         """应用粒子滤波"""
         if not self.enabled or not signals:
             return signals
@@ -940,11 +994,12 @@ class SignalFilterPipeline:
         enabled_filters = [f.name for f in self.filters if f.enabled]
         logger.info(f"滤波管道初始化: 启用 {len(enabled_filters)} 个滤波器: {enabled_filters}")
         
-    def process(self, signals: List[RawSignal]) -> List[FilteredSignal]:
+    def process(self, signals: List[RawSignal], symbol: str = "default") -> List[FilteredSignal]:
         """处理信号
         
         Args:
             signals: 原始信号列表
+            symbol: 标的代码，用于状态隔离
             
         Returns:
             滤波后信号列表
@@ -965,11 +1020,11 @@ class SignalFilterPipeline:
             for s in signals
         ]
         
-        # 依次应用滤波器
+        # 依次应用滤波器（传递 symbol 参数）
         applied_filters = []
         for f in self.filters:
             if f.enabled:
-                processed = f.apply(processed)
+                processed = f.apply(processed, symbol=symbol)
                 applied_filters.append(f.name)
                 
         # 转换为FilteredSignal

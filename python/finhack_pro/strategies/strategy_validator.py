@@ -9,13 +9,19 @@
 - 最大回撤限制 (<= 20%)
 - Calmar 比率检查
 - 与现有策略的相关性检查 (< 0.5)
+
+优化:
+- 支持配置文件驱动参数
+- 支持不同策略类型的验证配置
 """
 
 from __future__ import annotations
 
 import math
+import yaml
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, ClassVar
 
 import numpy as np
 from pydantic import BaseModel, Field
@@ -23,6 +29,60 @@ from pydantic import BaseModel, Field
 from finhack_pro.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+# 预定义验证配置
+VALIDATION_PROFILES: Dict[str, Dict[str, Any]] = {
+    "default": {
+        "min_trades": 100,
+        "min_sharpe": 0.5,
+        "max_drawdown": 0.20,
+        "min_calmar": 0.3,
+        "max_correlation": 0.5,
+        "monte_carlo_runs": 1000,
+        "walk_forward_windows": 5,
+    },
+    # 保守型：更严格的验证
+    "conservative": {
+        "min_trades": 200,
+        "min_sharpe": 1.0,
+        "max_drawdown": 0.15,
+        "min_calmar": 0.5,
+        "max_correlation": 0.3,
+        "monte_carlo_runs": 2000,
+        "walk_forward_windows": 8,
+    },
+    # 激进型：更宽松的验证
+    "aggressive": {
+        "min_trades": 50,
+        "min_sharpe": 0.3,
+        "max_drawdown": 0.30,
+        "min_calmar": 0.2,
+        "max_correlation": 0.7,
+        "monte_carlo_runs": 500,
+        "walk_forward_windows": 3,
+    },
+    # 高频策略：更多交易次数要求
+    "high_frequency": {
+        "min_trades": 500,
+        "min_sharpe": 0.3,
+        "max_drawdown": 0.10,
+        "min_calmar": 0.2,
+        "max_correlation": 0.5,
+        "monte_carlo_runs": 2000,
+        "walk_forward_windows": 10,
+    },
+    # 低频策略：更少交易次数要求
+    "low_frequency": {
+        "min_trades": 30,
+        "min_sharpe": 1.0,
+        "max_drawdown": 0.25,
+        "min_calmar": 0.5,
+        "max_correlation": 0.5,
+        "monte_carlo_runs": 500,
+        "walk_forward_windows": 3,
+    },
+}
 
 
 class ValidationResult(BaseModel):
@@ -36,6 +96,7 @@ class ValidationResult(BaseModel):
         walk_forward_score: Walk-Forward得分
         monte_carlo_metrics: Monte Carlo模拟指标
         summary: 总结
+        profile_used: 使用的验证配置名称
     """
     passed: bool = False
     overall_score: float = 0.0
@@ -44,6 +105,7 @@ class ValidationResult(BaseModel):
     walk_forward_score: float = 0.0
     monte_carlo_metrics: Dict[str, Any] = Field(default_factory=dict)
     summary: str = ""
+    profile_used: str = "default"
 
 
 @dataclass
@@ -64,8 +126,26 @@ class StrategyValidator:
     
     在策略部署前进行严格验证，防止过拟合。
     
+    支持配置方式:
+    1. 直接参数: StrategyValidator(min_trades=200, ...)
+    2. 预定义配置: StrategyValidator.from_profile("conservative")
+    3. 配置文件: StrategyValidator.from_config("config/validation.yaml")
+    4. 配置字典: StrategyValidator.from_config_dict({...})
+    
     Usage:
+        # 使用默认配置
         validator = StrategyValidator()
+        
+        # 使用预定义配置
+        validator = StrategyValidator.from_profile("conservative")
+        
+        # 自定义配置
+        validator = StrategyValidator(
+            min_trades=200,
+            min_sharpe=1.0,
+            max_drawdown=0.15,
+        )
+        
         result = validator.validate(
             strategy_performance={
                 'returns': [0.01, -0.02, 0.03, ...],
@@ -81,6 +161,9 @@ class StrategyValidator:
             print('策略验证通过!')
     """
     
+    # 可用配置名称
+    AVAILABLE_PROFILES: ClassVar[List[str]] = list(VALIDATION_PROFILES.keys())
+    
     def __init__(
         self,
         min_trades: int = 100,
@@ -90,7 +173,20 @@ class StrategyValidator:
         max_correlation: float = 0.5,
         monte_carlo_runs: int = 1000,
         walk_forward_windows: int = 5,
+        profile: str = "default",
     ) -> None:
+        """初始化策略验证器
+        
+        Args:
+            min_trades: 最低交易次数
+            min_sharpe: 最低夏普比率
+            max_drawdown: 最大回撤限制
+            min_calmar: 最低Calmar比率
+            max_correlation: 最大策略相关性
+            monte_carlo_runs: Monte Carlo模拟次数
+            walk_forward_windows: Walk-Forward窗口数
+            profile: 配置名称（用于结果记录）
+        """
         self.min_trades = min_trades
         self.min_sharpe = min_sharpe
         self.max_drawdown = max_drawdown
@@ -98,6 +194,84 @@ class StrategyValidator:
         self.max_correlation = max_correlation
         self.monte_carlo_runs = monte_carlo_runs
         self.walk_forward_windows = walk_forward_windows
+        self.profile = profile
+    
+    @classmethod
+    def from_profile(cls, profile_name: str = "default") -> "StrategyValidator":
+        """从预定义配置创建验证器
+        
+        Args:
+            profile_name: 配置名称，可选值: default, conservative, aggressive, high_frequency, low_frequency
+            
+        Returns:
+            StrategyValidator 实例
+        """
+        if profile_name not in VALIDATION_PROFILES:
+            logger.warning(f"未知配置 '{profile_name}'，使用默认配置")
+            profile_name = "default"
+        
+        config = VALIDATION_PROFILES[profile_name].copy()
+        config["profile"] = profile_name
+        return cls(**config)
+    
+    @classmethod
+    def from_config(cls, config_path: str) -> "StrategyValidator":
+        """从配置文件创建验证器
+        
+        Args:
+            config_path: 配置文件路径 (YAML格式)
+            
+        Returns:
+            StrategyValidator 实例
+        """
+        path = Path(config_path)
+        if not path.exists():
+            logger.warning(f"配置文件不存在: {config_path}，使用默认配置")
+            return cls()
+        
+        with open(path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+        
+        return cls.from_config_dict(config)
+    
+    @classmethod
+    def from_config_dict(cls, config: Dict[str, Any]) -> "StrategyValidator":
+        """从配置字典创建验证器
+        
+        Args:
+            config: 配置字典，支持字段:
+                - profile: 预定义配置名称（可选）
+                - min_trades, min_sharpe, max_drawdown, ... （覆盖预定义配置）
+            
+        Returns:
+            StrategyValidator 实例
+        """
+        # 如果指定了 profile，先加载预定义配置
+        profile_name = config.pop("profile", "default")
+        
+        if profile_name in VALIDATION_PROFILES:
+            base_config = VALIDATION_PROFILES[profile_name].copy()
+        else:
+            base_config = VALIDATION_PROFILES["default"].copy()
+        
+        # 用自定义配置覆盖
+        base_config.update(config)
+        base_config["profile"] = profile_name
+        
+        return cls(**base_config)
+    
+    def get_config(self) -> Dict[str, Any]:
+        """获取当前验证配置"""
+        return {
+            "profile": self.profile,
+            "min_trades": self.min_trades,
+            "min_sharpe": self.min_sharpe,
+            "max_drawdown": self.max_drawdown,
+            "min_calmar": self.min_calmar,
+            "max_correlation": self.max_correlation,
+            "monte_carlo_runs": self.monte_carlo_runs,
+            "walk_forward_windows": self.walk_forward_windows,
+        }
         
     def validate(
         self,
@@ -229,6 +403,7 @@ class StrategyValidator:
             walk_forward_score=wf_score,
             monte_carlo_metrics=mc_metrics,
             summary=summary,
+            profile_used=self.profile,
         )
     
     def _parse_performance(self, data: Dict[str, Any]) -> _StrategyPerformance:

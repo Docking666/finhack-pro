@@ -8,6 +8,11 @@ LLM客户端封装模块
 - Token用量追踪与成本估算
 - 异步调用(asyncio)
 - Function calling / Tool use支持
+
+优化:
+- 熔断器保护：防止级联故障
+- 令牌桶限流：平滑请求速率
+- 成本预算控制：每日/每月预算限制
 """
 
 from __future__ import annotations
@@ -78,6 +83,14 @@ class LLMClient:
         max_tokens: int = 4096,
         timeout: int = 60,
         max_retries: int = 3,
+        # 熔断限流配置
+        circuit_fail_max: int = 5,
+        circuit_reset_timeout: float = 60.0,
+        rate_limit: float = 10.0,
+        rate_capacity: float = 20.0,
+        daily_budget: float = 10.0,
+        monthly_budget: float = 200.0,
+        enable_protection: bool = True,
     ) -> None:
         """初始化LLM客户端
 
@@ -90,6 +103,13 @@ class LLMClient:
             max_tokens: 最大生成token数
             timeout: 请求超时(秒)
             max_retries: 最大重试次数
+            circuit_fail_max: 熔断器失败阈值
+            circuit_reset_timeout: 熔断器重置超时
+            rate_limit: 请求速率限制（请求/秒）
+            rate_capacity: 突发容量
+            daily_budget: 每日预算（美元）
+            monthly_budget: 每月预算（美元）
+            enable_protection: 是否启用熔断限流保护
         """
         self.provider = LLMProvider(provider)
         self.model = model
@@ -97,9 +117,28 @@ class LLMClient:
         self.max_tokens = max_tokens
         self.timeout = timeout
         self.max_retries = max_retries
+        self.enable_protection = enable_protection
 
         # Token用量累计
         self._total_usage = TokenUsage()
+
+        # 初始化熔断限流保护
+        self._protection = None
+        if enable_protection:
+            try:
+                from finhack_pro.utils.circuit_breaker import LLMProtection
+                self._protection = LLMProtection(
+                    circuit_fail_max=circuit_fail_max,
+                    circuit_reset_timeout=circuit_reset_timeout,
+                    rate_limit=rate_limit,
+                    rate_capacity=rate_capacity,
+                    daily_budget=daily_budget,
+                    monthly_budget=monthly_budget,
+                    name=f"llm_{provider}",
+                )
+            except ImportError:
+                logger.warning("circuit_breaker模块未找到，熔断限流保护已禁用")
+                self.enable_protection = False
 
         # 初始化对应客户端
         self._openai_client: Optional[Any] = None
@@ -132,6 +171,11 @@ class LLMClient:
         """获取累计Token用量"""
         return self._total_usage
 
+    @property
+    def protection(self):
+        """获取熔断限流保护器"""
+        return self._protection
+
     def reset_usage(self) -> None:
         """重置Token用量统计"""
         self._total_usage = TokenUsage()
@@ -156,6 +200,12 @@ class LLMClient:
         )
         return cost
 
+    def get_protection_stats(self) -> Dict[str, Any]:
+        """获取保护器统计信息"""
+        if self._protection:
+            return self._protection.get_stats()
+        return {"protection_enabled": False}
+
     async def chat(
         self,
         message: str,
@@ -165,6 +215,7 @@ class LLMClient:
         max_tokens: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
+        estimated_cost: float = 0.01,
     ) -> str:
         """发送聊天请求
 
@@ -176,12 +227,21 @@ class LLMClient:
             max_tokens: 最大token数(覆盖默认值)
             tools: 工具定义列表(function calling)
             tool_choice: 工具选择策略
+            estimated_cost: 预估成本（用于预算检查）
 
         Returns:
             LLM响应文本
         """
         temp = temperature if temperature is not None else self.temperature
         max_tok = max_tokens if max_tokens is not None else self.max_tokens
+
+        # 熔断限流检查
+        if self.enable_protection and self._protection:
+            try:
+                await self._protection.check_before_call(estimated_cost)
+            except Exception as e:
+                logger.error(f"LLM调用被保护器拒绝: {e}")
+                raise
 
         # 构建消息列表
         messages: List[Dict[str, str]] = []
@@ -190,12 +250,25 @@ class LLMClient:
         messages.append({"role": "user", "content": message})
 
         # 根据提供商调用不同API
-        if self.provider == LLMProvider.OPENAI:
-            return await self._chat_openai(
-                messages, system, temp, max_tok, tools, tool_choice
-            )
-        else:
-            return await self._chat_anthropic(messages, system, temp, max_tok)
+        try:
+            if self.provider == LLMProvider.OPENAI:
+                result = await self._chat_openai(
+                    messages, system, temp, max_tok, tools, tool_choice
+                )
+            else:
+                result = await self._chat_anthropic(messages, system, temp, max_tok)
+            
+            # 成功回调
+            if self.enable_protection and self._protection:
+                await self._protection.on_success(self._total_usage.estimated_cost_usd)
+            
+            return result
+            
+        except Exception as e:
+            # 失败回调
+            if self.enable_protection and self._protection:
+                await self._protection.on_failure()
+            raise
 
     async def _chat_openai(
         self,

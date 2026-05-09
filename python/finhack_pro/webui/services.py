@@ -848,27 +848,135 @@ class StreamService:
     """WebSocket消息广播管理
 
     管理WebSocket连接和消息广播，支持按频道分组。
+    
+    优化:
+    - 心跳检测：定期发送ping，检测僵尸连接
+    - 连接超时：自动清理无响应连接
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        heartbeat_interval: float = 30.0,   # 心跳间隔(秒)
+        heartbeat_timeout: float = 60.0,    # 心跳超时(秒)
+    ):
         # 按频道分组的连接管理
         self._channels: Dict[str, Set[Any]] = {
             "backtest": set(),
             "agents": set(),
             "system": set(),
         }
+        
+        # 心跳配置
+        self._heartbeat_interval = heartbeat_interval
+        self._heartbeat_timeout = heartbeat_timeout
+        
+        # 连接元数据: {websocket: {"last_pong": timestamp, "channel": str}}
+        self._connection_meta: Dict[Any, Dict[str, Any]] = {}
+        
+        # 心跳任务
+        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._running = False
+
+    async def start_heartbeat(self) -> None:
+        """启动心跳检测任务"""
+        if self._running:
+            return
+        self._running = True
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        logger.info(f"WebSocket心跳检测已启动, 间隔={self._heartbeat_interval}s")
+
+    async def stop_heartbeat(self) -> None:
+        """停止心跳检测任务"""
+        self._running = False
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        logger.info("WebSocket心跳检测已停止")
+
+    async def _heartbeat_loop(self) -> None:
+        """心跳检测循环"""
+        import time
+        while self._running:
+            try:
+                await asyncio.sleep(self._heartbeat_interval)
+                await self._check_connections()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"心跳检测异常: {e}")
+
+    async def _check_connections(self) -> None:
+        """检查所有连接，清理超时连接，发送心跳"""
+        import time
+        current_time = time.time()
+        
+        for channel in list(self._channels.keys()):
+            dead_connections = set()
+            
+            for ws in list(self._channels[channel]):
+                # 获取连接元数据
+                meta = self._connection_meta.get(ws, {})
+                last_pong = meta.get("last_pong", current_time)
+                
+                # 检查超时
+                if current_time - last_pong > self._heartbeat_timeout:
+                    dead_connections.add(ws)
+                    logger.warning(f"WebSocket连接超时，已清理: channel={channel}")
+                    continue
+                
+                # 发送心跳
+                try:
+                    await ws.send_json({"type": "ping", "timestamp": current_time})
+                except Exception:
+                    dead_connections.add(ws)
+            
+            # 清理死连接
+            for ws in dead_connections:
+                await self._disconnect_internal(channel, ws)
+
+    def on_pong(self, websocket: Any) -> None:
+        """处理pong响应，更新最后响应时间"""
+        import time
+        if websocket in self._connection_meta:
+            self._connection_meta[websocket]["last_pong"] = time.time()
 
     async def connect(self, channel: str, websocket: Any) -> None:
         """注册WebSocket连接到指定频道"""
-        if channel in self._channels:
-            self._channels[channel].add(websocket)
-            logger.info(f"WebSocket连接加入频道 [{channel}], 当前连接数: {len(self._channels[channel])}")
+        import time
+        if channel not in self._channels:
+            self._channels[channel] = set()
+        
+        self._channels[channel].add(websocket)
+        
+        # 初始化连接元数据
+        self._connection_meta[websocket] = {
+            "last_pong": time.time(),
+            "channel": channel,
+        }
+        
+        logger.info(f"WebSocket连接加入频道 [{channel}], 当前连接数: {len(self._channels[channel])}")
+        
+        # 确保心跳任务运行
+        if not self._running:
+            asyncio.create_task(self.start_heartbeat())
 
     async def disconnect(self, channel: str, websocket: Any) -> None:
         """从频道移除WebSocket连接"""
+        await self._disconnect_internal(channel, websocket)
+
+    async def _disconnect_internal(self, channel: str, websocket: Any) -> None:
+        """内部断开连接处理"""
         if channel in self._channels:
             self._channels[channel].discard(websocket)
-            logger.info(f"WebSocket连接离开频道 [{channel}], 当前连接数: {len(self._channels[channel])}")
+        
+        # 清理元数据
+        if websocket in self._connection_meta:
+            del self._connection_meta[websocket]
+        
+        logger.info(f"WebSocket连接离开频道 [{channel}], 当前连接数: {len(self._channels.get(channel, set()))}")
 
     async def broadcast(self, channel: str, message: Dict[str, Any]) -> None:
         """向指定频道的所有连接广播消息"""
