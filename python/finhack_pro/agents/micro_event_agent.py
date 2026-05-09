@@ -145,8 +145,17 @@ class MicroEventAgent(BaseAgent):
         report = await agent.scan_events("600519.SH")
     """
     
-    def __init__(self, config: Dict[str, Any]) -> None:
-        super().__init__(AgentRole("micro_event_monitor"), config)
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        shared_memory: Optional[Any] = None,
+        tool_registry: Optional[Any] = None,
+    ) -> None:
+        super().__init__(
+            AgentRole.MICRO_EVENT_MONITOR, config,
+            shared_memory=shared_memory,
+            tool_registry=tool_registry,
+        )
         self._llm: Optional[LLMClient] = None
         self._event_queue: asyncio.Queue = asyncio.Queue()
         self._subscribers: Dict[str, List[Callable]] = {}

@@ -22,6 +22,7 @@ class AgentRole(str, Enum):
     MARKET_ANALYZER = "market_analyzer"
     NEWS_ANALYST = "news_analyst"
     FUNDAMENTAL_ANALYST = "fundamental_analyst"
+    MICRO_EVENT_MONITOR = "micro_event_monitor"
     STRATEGY_GENERATOR = "strategy_generator"
     RISK_MANAGER = "risk_manager"
     TRADE_EXECUTOR = "trade_executor"

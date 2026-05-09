@@ -100,8 +100,17 @@ class RiskManagerAgent(BaseAgent):
         decision = await agent.evaluate_risk(signal, portfolio_state)
     """
 
-    def __init__(self, config: Dict[str, Any]) -> None:
-        super().__init__(AgentRole.RISK_MANAGER, config)
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        shared_memory: Optional[Any] = None,
+        tool_registry: Optional[Any] = None,
+    ) -> None:
+        super().__init__(
+            AgentRole.RISK_MANAGER, config,
+            shared_memory=shared_memory,
+            tool_registry=tool_registry,
+        )
         self._llm: Optional[LLMClient] = None
         self._portfolio: PortfolioState = PortfolioState()
         self._daily_loss_limit: float = config.get("daily_loss_limit", 0.05)

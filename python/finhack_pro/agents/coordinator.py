@@ -263,96 +263,132 @@ class AgentCoordinator:
         result: Dict[str, Any] = {"symbol": symbol}
 
         try:
-            # ---- 第1步: 市场分析(技术面) ----
-            self._logger.info("[Step 1/7] 市场分析(技术面)...")
-            analysis_report = await self.market_analyzer.analyze(
-                symbol=symbol,
-                market_data=market_data,
-                indicators=indicators,
-            )
-            result["analysis"] = analysis_report.model_dump()
-            self._logger.info(
-                f"市场分析完成: 状态={analysis_report.market_state.value}, "
-                f"趋势={analysis_report.trend_direction.value}"
-            )
+            # ---- 第1阶段: 并行执行 Step 1-4 (市场/新闻/基本面/微观事件) ----
+            self._logger.info("[Phase 1] 并行执行市场分析、新闻分析、基本面分析、微观事件分析...")
 
-            # 存储到共享记忆
-            await self.shared_memory.store(
-                agent_id=self.market_analyzer.agent_id,
-                memory_type=self.shared_memory.MemoryType.ANALYSIS_REPORT,
-                content=f"{symbol} 技术面分析: 趋势={analysis_report.trend_direction.value}, "
-                        f"状态={analysis_report.market_state.value}",
-                structured_data=analysis_report.model_dump(),
-                importance=self.shared_memory.MemoryImportance.HIGH,
-                tags=[symbol, "technical", "analysis_report"],
-            )
+            async def _run_market_analysis():
+                report = await self.market_analyzer.analyze(
+                    symbol=symbol,
+                    market_data=market_data,
+                    indicators=indicators,
+                )
+                await self.shared_memory.store(
+                    agent_id=self.market_analyzer.agent_id,
+                    memory_type=self.shared_memory.MemoryType.ANALYSIS_REPORT,
+                    content=f"{symbol} 技术面分析: 趋势={report.trend_direction.value}, "
+                            f"状态={report.market_state.value}",
+                    structured_data=report.model_dump(),
+                    importance=self.shared_memory.MemoryImportance.HIGH,
+                    tags=[symbol, "technical", "analysis_report"],
+                )
+                return report
 
-            # ---- 第2步: 新闻社媒分析 ----
-            self._logger.info("[Step 2/7] 新闻社媒分析...")
-            news_report = await self.news_analyst.analyze(
-                symbol=symbol,
-            )
-            result["news_analysis"] = news_report.model_dump()
-            self._logger.info(
-                f"新闻分析完成: 情感={news_report.overall_sentiment}, "
-                f"分数={news_report.sentiment_score:.2f}"
-            )
+            async def _run_news_analysis():
+                report = await self.news_analyst.analyze(symbol=symbol)
+                await self.shared_memory.store(
+                    agent_id=self.news_analyst.agent_id,
+                    memory_type=self.shared_memory.MemoryType.NEWS_EVENT,
+                    content=f"{symbol} 新闻分析: 情感={report.overall_sentiment}, "
+                            f"分数={report.sentiment_score:.2f}",
+                    structured_data=report.model_dump(),
+                    importance=self.shared_memory.MemoryImportance.HIGH,
+                    tags=[symbol, "news", "sentiment"],
+                )
+                return report
 
-            # 存储到共享记忆
-            await self.shared_memory.store(
-                agent_id=self.news_analyst.agent_id,
-                memory_type=self.shared_memory.MemoryType.NEWS_EVENT,
-                content=f"{symbol} 新闻分析: 情感={news_report.overall_sentiment}, "
-                        f"分数={news_report.sentiment_score:.2f}",
-                structured_data=news_report.model_dump(),
-                importance=self.shared_memory.MemoryImportance.HIGH,
-                tags=[symbol, "news", "sentiment"],
-            )
+            async def _run_fundamental_analysis():
+                report = await self.fundamental_analyst.analyze(symbol=symbol)
+                await self.shared_memory.store(
+                    agent_id=self.fundamental_analyst.agent_id,
+                    memory_type=self.shared_memory.MemoryType.ANALYSIS_REPORT,
+                    content=f"{symbol} 基本面分析: 评级={report.overall_rating}, "
+                            f"分数={report.rating_score:.2f}",
+                    structured_data=report.model_dump(),
+                    importance=self.shared_memory.MemoryImportance.HIGH,
+                    tags=[symbol, "fundamental", "analysis_report"],
+                )
+                return report
 
-            # ---- 第3步: 基本面分析 ----
-            self._logger.info("[Step 3/7] 基本面分析...")
-            fundamental_report = await self.fundamental_analyst.analyze(
-                symbol=symbol,
-            )
-            result["fundamental_analysis"] = fundamental_report.model_dump()
-            self._logger.info(
-                f"基本面分析完成: 评级={fundamental_report.overall_rating}, "
-                f"分数={fundamental_report.rating_score:.2f}"
-            )
+            async def _run_micro_event_analysis():
+                report = await self.micro_event_agent.scan_events(
+                    symbol=symbol, days=7,
+                )
+                await self.shared_memory.store(
+                    agent_id=self.micro_event_agent.agent_id,
+                    memory_type=self.shared_memory.MemoryType.MICRO_EVENT,
+                    content=f"{symbol} 微观事件分析: 发现{report.events_count}个事件, "
+                            f"情绪变化={report.sentiment_shift}",
+                    structured_data=report.model_dump(),
+                    importance=self.shared_memory.MemoryImportance.HIGH,
+                    tags=[symbol, "micro_event", "alternative_data"],
+                )
+                return report
 
-            # 存储到共享记忆
-            await self.shared_memory.store(
-                agent_id=self.fundamental_analyst.agent_id,
-                memory_type=self.shared_memory.MemoryType.ANALYSIS_REPORT,
-                content=f"{symbol} 基本面分析: 评级={fundamental_report.overall_rating}, "
-                        f"分数={fundamental_report.rating_score:.2f}",
-                structured_data=fundamental_report.model_dump(),
-                importance=self.shared_memory.MemoryImportance.HIGH,
-                tags=[symbol, "fundamental", "analysis_report"],
-            )
+            # 并行执行4个分析任务 (SharedMemory内部有asyncio.Lock保护并发写入)
+            analysis_tasks = [
+                asyncio.create_task(_run_market_analysis(), name="market"),
+                asyncio.create_task(_run_news_analysis(), name="news"),
+                asyncio.create_task(_run_fundamental_analysis(), name="fundamental"),
+                asyncio.create_task(_run_micro_event_analysis(), name="micro_event"),
+            ]
 
-            # ---- 第4步: 微观事件分析(新增) ----
-            self._logger.info("[Step 4/7] 微观事件分析...")
-            micro_event_report = await self.micro_event_agent.scan_events(
-                symbol=symbol,
-                days=7,
-            )
-            result["micro_event_analysis"] = micro_event_report.model_dump()
-            self._logger.info(
-                f"微观事件分析完成: 发现{micro_event_report.events_count}个事件, "
-                f"情绪变化={micro_event_report.sentiment_shift}"
-            )
+            # 收集结果，单个任务失败不影响其他
+            analysis_results = {}
+            for task in analysis_tasks:
+                try:
+                    report = await task
+                    analysis_results[task.get_name()] = report
+                except Exception as e:
+                    self._logger.error(f"分析任务 [{task.get_name()}] 失败: {e}")
+                    analysis_results[task.get_name()] = None
 
-            # 存储到共享记忆
-            await self.shared_memory.store(
-                agent_id=self.micro_event_agent.agent_id,
-                memory_type=self.shared_memory.MemoryType.MICRO_EVENT,
-                content=f"{symbol} 微观事件分析: 发现{micro_event_report.events_count}个事件, "
-                        f"情绪变化={micro_event_report.sentiment_shift}",
-                structured_data=micro_event_report.model_dump(),
-                importance=self.shared_memory.MemoryImportance.HIGH,
-                tags=[symbol, "micro_event", "alternative_data"],
-            )
+            analysis_report = analysis_results.get("market")
+            news_report = analysis_results.get("news")
+            fundamental_report = analysis_results.get("fundamental")
+            micro_event_report = analysis_results.get("micro_event")
+
+            # 记录结果
+            if analysis_report:
+                result["analysis"] = analysis_report.model_dump()
+                self._logger.info(
+                    f"[Step 1/7] 市场分析完成: 状态={analysis_report.market_state.value}, "
+                    f"趋势={analysis_report.trend_direction.value}"
+                )
+            else:
+                self._logger.warning("[Step 1/7] 市场分析失败，使用空报告")
+                result["analysis"] = None
+
+            if news_report:
+                result["news_analysis"] = news_report.model_dump()
+                self._logger.info(
+                    f"[Step 2/7] 新闻分析完成: 情感={news_report.overall_sentiment}, "
+                    f"分数={news_report.sentiment_score:.2f}"
+                )
+            else:
+                self._logger.warning("[Step 2/7] 新闻分析失败，使用空报告")
+                result["news_analysis"] = None
+
+            if fundamental_report:
+                result["fundamental_analysis"] = fundamental_report.model_dump()
+                self._logger.info(
+                    f"[Step 3/7] 基本面分析完成: 评级={fundamental_report.overall_rating}, "
+                    f"分数={fundamental_report.rating_score:.2f}"
+                )
+            else:
+                self._logger.warning("[Step 3/7] 基本面分析失败，使用空报告")
+                result["fundamental_analysis"] = None
+
+            if micro_event_report:
+                result["micro_event_analysis"] = micro_event_report.model_dump()
+                self._logger.info(
+                    f"[Step 4/7] 微观事件分析完成: 发现{micro_event_report.events_count}个事件, "
+                    f"情绪变化={micro_event_report.sentiment_shift}"
+                )
+            else:
+                self._logger.warning("[Step 4/7] 微观事件分析失败，使用空报告")
+                result["micro_event_analysis"] = None
+
+            self._logger.info("[Phase 1] 并行分析阶段完成")
 
             # ---- 第5步: 策略生成(多空辩论) ----
             self._logger.info("[Step 5/7] 策略生成(多空辩论)...")

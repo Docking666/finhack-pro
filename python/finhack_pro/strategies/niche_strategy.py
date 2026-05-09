@@ -110,7 +110,7 @@ class NicheStrategy(BaseStrategy):
         
     def on_init(self, context: Context) -> None:
         """策略初始化"""
-        self._logger.info(f"初始化差异化策略: {self.config.niche_type.value}")
+        logger.info(f"初始化差异化策略: {self.config.niche_type.value}")
         
     def on_bar(self, context: Context, bar: BarData) -> List[Signal]:
         """K线回调"""
@@ -479,7 +479,7 @@ class NicheStrategy(BaseStrategy):
             symbols: 股票代码列表
         """
         self._watch_list = symbols
-        self._logger.info(f"更新监控列表: {len(symbols)}只股票")
+        logger.info(f"更新监控列表: {len(symbols)}只股票")
         
     def get_watch_list(self) -> List[str]:
         """获取当前监控列表"""

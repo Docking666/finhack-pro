@@ -105,8 +105,17 @@ class StrategyGeneratorAgent(BaseAgent):
         signal = await agent.generate_strategy(analysis_report)
     """
 
-    def __init__(self, config: Dict[str, Any]) -> None:
-        super().__init__(AgentRole.STRATEGY_GENERATOR, config)
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        shared_memory: Optional[Any] = None,
+        tool_registry: Optional[Any] = None,
+    ) -> None:
+        super().__init__(
+            AgentRole.STRATEGY_GENERATOR, config,
+            shared_memory=shared_memory,
+            tool_registry=tool_registry,
+        )
         self._llm: Optional[LLMClient] = None
 
     async def on_init(self) -> None:

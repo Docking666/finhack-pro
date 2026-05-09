@@ -124,8 +124,17 @@ class TradeExecutorAgent(BaseAgent):
         report = await agent.execute(signal, risk_decision)
     """
 
-    def __init__(self, config: Dict[str, Any]) -> None:
-        super().__init__(AgentRole.TRADE_EXECUTOR, config)
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        shared_memory: Optional[Any] = None,
+        tool_registry: Optional[Any] = None,
+    ) -> None:
+        super().__init__(
+            AgentRole.TRADE_EXECUTOR, config,
+            shared_memory=shared_memory,
+            tool_registry=tool_registry,
+        )
         self._llm: Optional[LLMClient] = None
         self._commission_rate: float = config.get("commission_rate", 0.0003)
         self._stamp_tax_rate: float = config.get("stamp_tax_rate", 0.001)
