@@ -4,6 +4,10 @@
 将多个策略产生的信号聚合为单一决策，支持信号去重、
 基于历史表现的加权、L2正则化防止过度自信以及置信度校准。
 
+新增功能:
+- 集成信号滤波管道 (卡尔曼/KAMA/FRAMA/异常检测/Transformer/粒子滤波)
+- 支持可配置的滤波器组合
+
 支持的信号来源:
 - finhack_pro.strategies.base.Signal (传统策略信号)
 - finhack_pro.agents.strategy_generator.StrategySignal (AI策略信号)
@@ -19,6 +23,13 @@ import numpy as np
 from pydantic import BaseModel, Field
 
 from finhack_pro.strategies.base import Signal, SignalDirection
+from finhack_pro.strategies.signal_filters import (
+    SignalFilterPipeline,
+    RawSignal,
+    FilteredSignal,
+    SignalType,
+    create_default_pipeline,
+)
 from finhack_pro.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -115,6 +126,9 @@ class SignalAggregator:
         correlation_threshold: float = 0.7,
         calibration_temperature: float = 1.0,
         min_confidence_threshold: float = 0.3,
+        filter_pipeline: Optional[SignalFilterPipeline] = None,
+        filter_config: Optional[Dict[str, Dict[str, Any]]] = None,
+        enable_high_cost_filters: bool = False,
     ) -> None:
         """初始化信号聚合器
 
@@ -127,6 +141,9 @@ class SignalAggregator:
             calibration_temperature: 置信度校准温度参数，
                 >1 使输出更保守(拉向0.5)，<1 使输出更极端
             min_confidence_threshold: 最低置信度阈值，低于此值输出HOLD
+            filter_pipeline: 自定义滤波管道实例
+            filter_config: 滤波管道配置字典 (用于创建默认管道)
+            enable_high_cost_filters: 是否启用高开销滤波器 (Transformer/粒子滤波)
         """
         self._strategy_weights: Dict[str, float] = strategy_weights or {}
         self._strategy_sharpe: Dict[str, float] = strategy_sharpe or {}
@@ -136,13 +153,22 @@ class SignalAggregator:
         self._calibration_temperature = calibration_temperature
         self._min_confidence_threshold = min_confidence_threshold
 
+        # 初始化滤波管道
+        if filter_pipeline is not None:
+            self._filter_pipeline = filter_pipeline
+        elif filter_config is not None:
+            self._filter_pipeline = SignalFilterPipeline(filter_config)
+        else:
+            self._filter_pipeline = create_default_pipeline(enable_high_cost=enable_high_cost_filters)
+
         # 如果未手动指定权重但有历史表现数据，则自动计算权重
         if not self._strategy_weights and (self._strategy_sharpe or self._strategy_win_rate):
             self._strategy_weights = self._compute_performance_weights()
 
         logger.info(
             f"信号聚合器初始化完成: 策略数={len(self._strategy_weights)}, "
-            f"L2_lambda={self._l2_lambda}, 相关阈值={self._correlation_threshold}"
+            f"L2_lambda={self._l2_lambda}, 相关阈值={self._correlation_threshold}, "
+            f"滤波器={len(self._filter_pipeline.filters)}个"
         )
 
     # ------------------------------------------------------------------
@@ -152,11 +178,13 @@ class SignalAggregator:
     def aggregate(
         self,
         signals: List[Union[Signal, Any]],
+        apply_filters: bool = True,
     ) -> List[AggregatedSignal]:
         """聚合多个策略信号
 
         Args:
             signals: 信号列表，支持 base.Signal 和 strategy_generator.StrategySignal
+            apply_filters: 是否应用滤波管道 (默认True)
 
         Returns:
             按标的分组的聚合信号列表
@@ -168,6 +196,11 @@ class SignalAggregator:
         # 第一步: 标准化信号
         normalized = self._normalize_signals(signals)
         logger.debug(f"信号标准化完成: {len(normalized)} 个信号")
+
+        # 第二步: 应用滤波管道 (新增)
+        if apply_filters and self._filter_pipeline:
+            normalized = self._apply_filters(normalized)
+            logger.debug(f"滤波处理完成: {len(normalized)} 个信号")
 
         # 按标的分组
         grouped: Dict[str, List[_NormalizedSignal]] = {}
@@ -181,6 +214,67 @@ class SignalAggregator:
 
         logger.info(f"信号聚合完成: {len(results)} 个标的产生聚合信号")
         return results
+
+    def _apply_filters(self, normalized: List[_NormalizedSignal]) -> List[_NormalizedSignal]:
+        """应用滤波管道处理标准化信号"""
+        if not self._filter_pipeline:
+            return normalized
+            
+        # 转换为RawSignal格式
+        raw_signals = []
+        for norm in normalized:
+            raw = RawSignal(
+                source=norm.strategy_name,
+                signal_type=self._map_signal_type(norm.strategy_name),
+                value=self._direction_to_value(norm.direction),
+                confidence=norm.raw_confidence,
+                metadata={"normalized_signal": norm.model_dump()},
+            )
+            raw_signals.append(raw)
+            
+        # 应用滤波管道
+        filtered = self._filter_pipeline.process(raw_signals)
+        
+        # 转换回_NormalizedSignal
+        result = []
+        for i, fs in enumerate(filtered):
+            if i < len(normalized):
+                norm = normalized[i]
+                # 更新值和置信度
+                norm.weighted_confidence = fs.confidence
+                norm.raw_confidence = fs.confidence
+                # 存储滤波元数据
+                norm.feature_vector = [
+                    fs.value,
+                    fs.confidence,
+                    fs.uncertainty,
+                ]
+                result.append(norm)
+                
+        return result if result else normalized
+
+    def _map_signal_type(self, strategy_name: str) -> SignalType:
+        """根据策略名称映射信号类型"""
+        name_lower = strategy_name.lower()
+        if "technical" in name_lower or "momentum" in name_lower or "dual" in name_lower:
+            return SignalType.TECHNICAL
+        elif "sentiment" in name_lower or "news" in name_lower:
+            return SignalType.SENTIMENT
+        elif "fundamental" in name_lower or "value" in name_lower:
+            return SignalType.FUNDAMENTAL
+        elif "event" in name_lower or "niche" in name_lower or "dragon" in name_lower:
+            return SignalType.EVENT
+        else:
+            return SignalType.COMBINED
+
+    def _direction_to_value(self, direction: AggregatedDirection) -> float:
+        """将方向转换为数值"""
+        if direction == AggregatedDirection.BUY:
+            return 1.0
+        elif direction == AggregatedDirection.SELL:
+            return -1.0
+        else:
+            return 0.0
 
     # ------------------------------------------------------------------
     # 内部方法
