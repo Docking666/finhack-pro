@@ -173,6 +173,238 @@ function waitForBackend(maxRetries = 60, retryInterval = 1000) {
   });
 }
 
+// ============================================================================
+// 环境检测与自动排障
+// ============================================================================
+
+/**
+ * 运行 Python 环境检测脚本
+ * @param {string} action - 'check' | 'install' | 'full'
+ * @param {string} mirror - 'default' | 'cn' | 'tuna'
+ * @returns {Promise<{success: boolean, data?: object, error?: string}>}
+ */
+function runEnvCheck(action = 'check', mirror = 'default') {
+  return new Promise((resolve) => {
+    const appPath = getAppPath();
+    let scriptPath;
+
+    if (app.isPackaged) {
+      // 打包后: setup_env.py 在 resources/scripts/ 下
+      scriptPath = path.join(appPath, 'resources', 'scripts', 'setup_env.py');
+    } else {
+      // 开发环境
+      scriptPath = path.join(appPath, 'scripts', 'setup_env.py');
+    }
+
+    if (!fs.existsSync(scriptPath)) {
+      console.warn('环境检测脚本不存在:', scriptPath);
+      resolve({ success: true, data: null }); // 脚本不存在则跳过检测
+      return;
+    }
+
+    const pythonExe = getPythonExecutable();
+    const args = [scriptPath, '--json'];
+
+    if (action === 'install') {
+      args.push('--install');
+    } else if (action === 'full') {
+      args.push('--full');
+    }
+
+    if (mirror !== 'default') {
+      args.push('--mirror', mirror);
+    }
+
+    console.log(`运行环境检测: python ${args.join(' ')}`);
+
+    const proc = spawn(pythonExe, args, {
+      cwd: app.isPackaged ? path.dirname(scriptPath) : appPath,
+      env: { ...process.env, PYTHONUNBUFFERED: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 120000, // 2 分钟超时
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data) => { stdout += data.toString(); });
+    proc.stderr.on('data', (data) => { stderr += data.toString(); });
+
+    proc.on('error', (err) => {
+      console.warn('环境检测执行失败:', err.message);
+      resolve({ success: true, data: null }); // 检测失败不阻塞启动
+    });
+
+    proc.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const data = JSON.parse(stdout);
+          resolve({ success: true, data });
+        } catch (e) {
+          console.warn('环境检测结果解析失败:', e.message);
+          resolve({ success: true, data: null });
+        }
+      } else {
+        console.warn('环境检测返回非零退出码:', code, stderr);
+        resolve({ success: true, data: null });
+      }
+    });
+  });
+}
+
+/**
+ * 分析环境检测结果，返回缺失的关键依赖
+ * @param {object} data - setup_env.py 的 JSON 输出
+ * @returns {{ critical: string[], optional: string[], hasRust: boolean }}
+ */
+function analyzeEnvResult(data) {
+  if (!data) return { critical: [], optional: [], hasRust: false };
+
+  const critical = [];
+  const optional = [];
+  let hasRust = false;
+
+  // 检查核心工具
+  const coreTools = ['python', 'pip'];
+  for (const tool of coreTools) {
+    if (data[tool] && !data[tool].installed) {
+      critical.push(`${tool} (核心工具)`);
+    }
+  }
+
+  // 检查 Python 依赖
+  if (data.python_packages) {
+    const requiredPackages = ['pydantic', 'pandas', 'numpy', 'httpx', 'loguru', 'websockets'];
+    const optionalPackages = ['numba', 'reportlab', 'openpyxl'];
+
+    for (const pkg of requiredPackages) {
+      if (data.python_packages[pkg] && !data.python_packages[pkg].installed) {
+        critical.push(`${pkg} (Python 依赖)`);
+      }
+    }
+
+    for (const pkg of optionalPackages) {
+      if (data.python_packages[pkg] && !data.python_packages[pkg].installed) {
+        optional.push(pkg);
+      }
+    }
+  }
+
+  // 检查 Rust（可选）
+  if (data.rust && data.rust.installed) {
+    hasRust = true;
+  }
+
+  return { critical, optional, hasRust };
+}
+
+/**
+ * 环境检测主流程
+ * 在启动后端之前调用，检测环境并提示用户安装缺失依赖
+ * @returns {Promise<boolean>} 是否通过检测（true=可以继续启动）
+ */
+async function checkEnvironment() {
+  // 更新加载窗口
+  if (loadWindow && !loadWindow.isDestroyed()) {
+    loadWindow.webContents.send('loading-status', {
+      message: '正在检测运行环境...',
+      progress: 15
+    });
+  }
+
+  // 1. 运行环境检测
+  const { success, data } = await runEnvCheck('check');
+
+  if (!data) {
+    console.log('环境检测脚本未找到，跳过检测');
+    return true;
+  }
+
+  // 2. 分析结果
+  const { critical, optional, hasRust } = analyzeEnvResult(data);
+
+  // 3. 没有缺失，直接通过
+  if (critical.length === 0) {
+    console.log('环境检测通过');
+
+    if (optional.length > 0) {
+      console.log(`可选依赖未安装: ${optional.join(', ')}`);
+    }
+
+    if (!hasRust) {
+      console.log('Rust 未安装，高性能计算将使用 Python 回退');
+    }
+
+    return true;
+  }
+
+  // 4. 有缺失的关键依赖，弹窗提示
+  const missingList = critical.map((item, i) => `  ${i + 1}. ${item}`).join('\n');
+  const optionalList = optional.length > 0
+    ? `\n\n可选依赖（不影响基本功能）:\n${optional.map((p, i) => `  ${i + 1}. ${p}`).join('\n')}`
+    : '';
+
+  const response = dialog.showMessageBoxSync({
+    type: 'warning',
+    title: '环境依赖缺失',
+    message: '以下依赖未安装，可能影响系统正常运行：',
+    detail: `必需依赖:\n${missingList}${optionalList}`,
+    buttons: ['自动安装', '继续启动（可能不稳定）', '退出'],
+    defaultId: 0,
+    cancelId: 2,
+    noLink: true,
+  });
+
+  // 用户选择退出
+  if (response === 2) {
+    app.quit();
+    return false;
+  }
+
+  // 用户选择自动安装
+  if (response === 0) {
+    if (loadWindow && !loadWindow.isDestroyed()) {
+      loadWindow.webContents.send('loading-status', {
+        message: '正在安装缺失依赖...',
+        progress: 20
+      });
+    }
+
+    // 尝试国内镜像安装（更快）
+    const installResult = await runEnvCheck('install', 'cn');
+
+    if (installResult.data) {
+      const afterAnalysis = analyzeEnvResult(installResult.data);
+
+      if (afterAnalysis.critical.length === 0) {
+        dialog.showMessageBoxSync({
+          type: 'info',
+          title: '安装完成',
+          message: '所有必需依赖已安装成功！',
+          buttons: ['确定'],
+        });
+        return true;
+      } else {
+        dialog.showMessageBoxSync({
+          type: 'error',
+          title: '安装失败',
+          message: `以下依赖安装失败: ${afterAnalysis.critical.join(', ')}`,
+          detail: '请手动运行以下命令安装:\npython scripts/setup_env.py --install --mirror cn',
+          buttons: ['继续启动', '退出'],
+        });
+        return true; // 仍然尝试启动
+      }
+    }
+  }
+
+  // 用户选择继续启动
+  return true;
+}
+
+// ============================================================================
+// Python 后端管理
+// ============================================================================
+
 // 启动 Python 后端
 async function startPythonBackend() {
   const isPortInUse = await checkPortInUse(BACKEND_PORT);
@@ -525,7 +757,11 @@ app.whenReady().then(async () => {
   createLoadWindow();
   
   try {
-    // 启动 Python 后端
+    // 第一步：环境检测与自动排障
+    const envOk = await checkEnvironment();
+    if (!envOk) return; // 用户选择退出
+    
+    // 第二步：启动 Python 后端
     await startPythonBackend();
     
     // 创建主窗口

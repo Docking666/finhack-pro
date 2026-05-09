@@ -32,6 +32,8 @@ extraResources:
     to: "assets"
     filter:
       - "**/*"
+  - from: "../scripts/setup_env.py"
+    to: "scripts/setup_env.py"
 
 win:
   target:
