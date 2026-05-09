@@ -22,6 +22,13 @@
 - [差异化策略框架](#差异化策略框架)
 - [WebUI 管理界面](#webui-管理界面)
 - [接口文档](#接口文档)
+- [数据管道](#数据管道)
+- [组合回测与风控](#组合回测与风控)
+- [策略参数优化](#策略参数优化)
+- [实盘交易集成](#实盘交易集成)
+- [监控与告警](#监控与告警)
+- [API文档自动化](#api文档自动化)
+- [CI/CD流水线](#cicd流水线)
 - [部署教程](#部署教程)
 - [详细教程](#详细教程)
 - [配置说明](#配置说明)
@@ -918,6 +925,347 @@ FinHack Pro 内置了一个现代化的 Web 管理界面，提供可视化的系
 | POST | `/bridge/parallel_signals` | `{symbols_data: [{symbol, bars}], fast_period, slow_period}` | `{code, data: {results: [{symbol, total_return, sharpe_ratio, total_trades}], total_time_ms}}` | 并行信号计算 |
 
 > 所有响应格式：`{code: 0, message: "success", data: {...}}`，`code=0` 表示成功。
+
+---
+
+## 数据管道
+
+### 数据验证 (`data/validator.py`)
+
+自动校验 OHLCV 数据质量，检测异常并自动修复：
+
+| 组件 | 说明 |
+|------|------|
+| `DataValidator` | 验证必需列、类型、NaN、high≥low、价格>0、日期排序、重复日期 |
+| `ValidationResult` | 验证结果：`is_valid`、`errors`、`warnings`、`stats` |
+| `DataAnomaly` | 异常记录：类型、位置、值、预期范围、严重级别 |
+| `DataQualityReport` | 格式化的数据质量报告 |
+
+```python
+from finhack_pro.data import DataValidator, DataQualityReport
+
+validator = DataValidator()
+result = validator.validate_ohlcv(df)
+print(f"数据有效: {result.is_valid}, 错误: {len(result.errors)}")
+
+# 异常检测（价格缺口>20%、量突增>10x、零成交量、停滞价格）
+anomalies = validator.detect_anomalies(df)
+
+# 自动修复（填充NaN、修正high<low、去重、排序）
+cleaned = validator.clean_ohlcv(df)
+
+# 生成质量报告
+report = DataQualityReport(df, validator)
+print(report.generate())
+```
+
+### 数据缓存 (`data/cache.py`)
+
+基于文件的智能缓存，支持 TTL 过期和完整性校验：
+
+| 组件 | 说明 |
+|------|------|
+| `DataCache` | 缓存管理：get/set/invalidate/cleanup，gzip 压缩，MD5 校验 |
+| `CacheStats` | 缓存统计：总大小、条目数、最旧/最新条目 |
+
+```python
+from finhack_pro.data import DataCache
+
+cache = DataCache(cache_dir="data/cache", max_size_mb=500, ttl_seconds=86400)
+cache.set("600519.SH", df)
+cached = cache.get("600519.SH", start_date="2024-01-01", end_date="2024-12-31")
+stats = cache.get_stats()
+cache.cleanup(max_age_days=30)  # 清理30天前的缓存
+```
+
+### 数据版本管理 (`data/versioning.py`)
+
+数据集版本控制，支持回滚和差异比较：
+
+| 组件 | 说明 |
+|------|------|
+| `DataVersionManager` | 注册/加载/比较/回滚数据版本 |
+| `DataVersion` | 版本元数据：ID、标的、时间范围、行数、哈希 |
+| `VersionDiff` | 版本差异：行数变化、日期范围变化、哈希匹配 |
+
+```python
+from finhack_pro.data import DataVersionManager
+
+vm = DataVersionManager(versions_dir="data/versions")
+version = vm.register_version(df, symbol="600519.SH", source="tushare", notes="日线数据")
+
+# 回滚到指定版本
+old_data = vm.rollback("600519.SH", version.version_id)
+
+# 比较两个版本
+diff = vm.compare_versions(v1_id, v2_id)
+```
+
+---
+
+## 组合回测与风控
+
+### 多标的组合回测 (`backtest/portfolio.py`)
+
+支持多标的组合级别的回测，内置等权和风险平价两种分配方式：
+
+| 组件 | 说明 |
+|------|------|
+| `PortfolioEngine` | 组合回测引擎：等权/风险平价/自定义权重 |
+| `PortfolioBacktestConfig` | 配置：标的列表、再平衡频率（日/周/月）、分配方法 |
+| `PortfolioMetrics` | 组合指标：总收益、年化、夏普、最大回撤、Calmar、Sortino、波动率 |
+
+```python
+from finhack_pro.backtest import PortfolioEngine, PortfolioBacktestConfig
+
+config = PortfolioBacktestConfig(
+    symbols=["600519.SH", "000858.SZ", "601318.SH"],
+    initial_capital=1_000_000,
+    rebalance_freq="monthly",
+    allocation_method="risk_parity",  # 逆波动率风险平价
+)
+engine = PortfolioEngine(config)
+result = engine.run(data_dict)
+print(f"组合夏普: {result.metrics.sharpe_ratio:.2f}")
+print(f"最大回撤: {result.metrics.max_drawdown:.2%}")
+```
+
+### 回测报告可视化 (`backtest/report.py`)
+
+生成自包含 HTML 报告，内嵌图表（权益曲线、回撤、月度热力图、交易分布）：
+
+```python
+from finhack_pro.backtest import BacktestReport, ReportConfig
+
+report = BacktestReport(result, output_dir="reports")
+html_path = report.generate_html_report()  # 自包含HTML，可直接浏览器打开
+summary = report.generate_summary()         # 文本摘要
+```
+
+### 风控闭环 (`backtest/risk_control.py`)
+
+交易前/后风控检查，支持 VaR/CVaR 计算和回撤监控：
+
+| 组件 | 说明 |
+|------|------|
+| `RiskController` | 风控控制器：前检/后检、VaR/CVaR、回撤监控、集中度检查 |
+| `RiskConfig` | 风控参数：最大仓位、最大回撤、日亏损限制、止损止盈 |
+| `RiskAction` | 风控动作：减仓/清仓/暂停交易/警告 |
+
+```python
+from finhack_pro.backtest import RiskController, RiskConfig
+
+config = RiskConfig(max_position_pct=0.3, max_drawdown_pct=0.15, stop_loss_pct=0.05)
+controller = RiskController(config)
+
+# 交易前检查
+result = controller.pre_trade_check("600519.SH", "buy", 1800, 100, portfolio_state)
+if not result.passed:
+    print(f"风控拒绝: {result.violations}")
+
+# 创建回调集成到回测引擎
+callback = controller.create_risk_callback()
+```
+
+---
+
+## 策略参数优化
+
+### 参数优化框架 (`strategies/optimizer.py`)
+
+三种优化算法 + Walk-Forward 验证，零外部依赖（GP 从零实现）：
+
+| 优化器 | 说明 | 适用场景 |
+|--------|------|----------|
+| `GridSearchOptimizer` | 网格搜索（笛卡尔积），支持并行 | 参数空间小、需要全局最优 |
+| `RandomSearchOptimizer` | 随机采样，可设种子保证可复现 | 参数空间大、快速探索 |
+| `BayesianOptimizer` | 贝叶斯优化（RBF核GP + EI采集函数） | 参数空间大、评估成本高 |
+| `WalkForwardValidator` | Walk-Forward 验证（IS/OOS分割） | 检测过拟合 |
+
+```python
+from finhack_pro.strategies import (
+    ParamSpace, GridSearchOptimizer, BayesianOptimizer, WalkForwardValidator
+)
+
+# 定义参数空间
+param_space = [
+    ParamSpace("fast_period", "int", low=3, high=20),
+    ParamSpace("slow_period", "int", low=10, high=60),
+    ParamSpace("threshold", "float", low=0.1, high=1.0, step=0.1),
+]
+
+# 网格搜索
+optimizer = GridSearchOptimizer(param_space, metric="sharpe_ratio")
+result = optimizer.optimize(MyStrategy, data)
+
+# 贝叶斯优化
+bayesian = BayesianOptimizer(param_space, n_trials=50)
+result = bayesian.optimize(MyStrategy, data)
+
+# Walk-Forward 验证（检测过拟合）
+wf = WalkForwardValidator(n_splits=5, train_pct=0.7)
+wf_result = wf.validate(MyStrategy, param_space, data)
+print(f"IS/OOS相关性: {wf_result.is_oos_correlation:.2f}")  # <0.5 可能过拟合
+```
+
+---
+
+## 实盘交易集成
+
+### 模拟交易 (`execution/live_trader.py`)
+
+内置 PaperBroker 模拟券商，支持实盘接口扩展：
+
+| 组件 | 说明 |
+|------|------|
+| `LiveTrader` | 统一交易接口：下单/撤单/持仓/账户/行情订阅 |
+| `PaperBroker` | 模拟券商：订单簿、持仓跟踪、滑点模拟、部分成交 |
+| `LiveTradingConfig` | 配置：broker类型、API地址、密钥、最大仓位、dry_run |
+
+```python
+from finhack_pro.execution import LiveTrader, LiveTradingConfig, PaperBroker
+
+# 模拟交易
+config = LiveTradingConfig(broker_type="paper", dry_run=True)
+trader = LiveTrader(config)
+trader.connect()
+
+order = trader.submit_order("600519.SH", "buy", 1800.0, 100)
+print(f"成交状态: {order.status}, 成交量: {order.filled_volume}")
+
+positions = trader.get_positions()
+account = trader.get_account_info()
+print(f"总权益: {account.total_equity}, 现金: {account.available_cash}")
+```
+
+> **安全设计**：所有真实券商调用在 `dry_run=True` 保护下，默认仅模拟交易。
+
+---
+
+## 监控与告警
+
+### 监控服务 (`utils/monitoring.py`)
+
+Prometheus 格式指标服务器 + 告警规则 + Grafana Dashboard：
+
+| 组件 | 说明 |
+|------|------|
+| `MonitoringService` | 指标注册/查询、告警规则管理、Prometheus导出 |
+| `MetricsServer` | HTTP 指标服务器（`/metrics` 端点，基于 stdlib） |
+| `AlertRule` | 告警规则：条件函数、冷却期、级别 |
+| `MonitoringConfig` | 配置：主机、端口、检查间隔、保留时长 |
+
+**内置 5 个告警规则：**
+
+| 规则 | 条件 | 级别 |
+|------|------|------|
+| 高回撤 | drawdown > 15% | CRITICAL |
+| API 错误率 | error_rate > 5% | WARNING |
+| 内存使用 | memory > 80% | WARNING |
+| 持仓集中度 | position > 30% | WARNING |
+| 日亏损限制 | daily_loss > 5% | CRITICAL |
+
+```python
+from finhack_pro.utils import MonitoringService, MonitoringConfig, MetricsServer
+
+svc = MonitoringService()
+svc.register_metric("equity", "gauge", "当前权益")
+svc.set_gauge("equity", 1050000)
+
+# 检查告警
+alerts = svc.check_alerts({"drawdown": 0.18, "error_rate": 0.02})
+for alert in alerts:
+    print(f"[{alert.level}] {alert.title}: {alert.message}")
+
+# 启动 Prometheus 指标服务器
+server = MetricsServer(port=9090)
+server.start()
+
+# 导出 Grafana Dashboard JSON
+dashboard = svc.export_grafana_dashboard()
+```
+
+---
+
+## API文档自动化
+
+### OpenAPI 文档生成 (`api/openapi.py`)
+
+从 FastAPI 应用自动生成 OpenAPI 3.0 规范和文档：
+
+| 组件 | 说明 |
+|------|------|
+| `APIDocGenerator` | 生成 OpenAPI spec、Markdown/HTML 文档、客户端 SDK 代码 |
+
+```python
+from finhack_pro.api import APIDocGenerator
+from finhack_pro.webui.app import create_app
+
+app = create_app()
+gen = APIDocGenerator(app)
+
+# 生成 OpenAPI 规范
+spec = gen.generate_openapi_spec()
+gen.export_openapi_json("docs/api/openapi.json")
+gen.export_openapi_yaml("docs/api/openapi.yaml")
+
+# 生成 Markdown 文档
+md = gen.generate_markdown_docs(spec)
+
+# 生成客户端 SDK 代码
+python_code = gen.generate_client_code(spec, language="python")
+js_code = gen.generate_client_code(spec, language="javascript")
+```
+
+---
+
+## CI/CD流水线
+
+### Python CI (`.github/workflows/ci.yml`)
+
+每次推送到 main/master 或 PR 时自动运行：
+
+| Job | 说明 | 矩阵 |
+|-----|------|------|
+| **Lint (ruff)** | 代码风格检查 | Python 3.12 |
+| **Type Check (mypy)** | 静态类型检查 | Python 3.12 |
+| **Test** | 单元测试 + 覆盖率 | Python 3.10, 3.11, 3.12 |
+
+```
+push/PR → Lint → Type Check → Test (3.10/3.11/3.12) → Coverage Report
+```
+
+### Release Build (`.github/workflows/release.yml`)
+
+手动触发，支持语义化版本号和自动日期模式：
+
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| `version` | 手动指定版本号 | `2.2.0` |
+| `release_type` | 自动递增类型 | `major` / `minor` / `patch` / `auto` |
+
+**版本命名规则：**
+- 手动模式：`2.2.0`
+- 自动递增：读取当前版本，按类型递增
+- 日期模式（auto）：`2.2.0+20250509.1830`
+
+### 测试覆盖
+
+当前共 **412 个测试**，覆盖所有核心模块：
+
+| 测试文件 | 测试数 | 覆盖模块 |
+|----------|--------|----------|
+| `test_agents.py` | ~60 | Agent系统、共享记忆、工具集 |
+| `test_api.py` | 29 | Rust核心API客户端 |
+| `test_backtest.py` | ~30 | 回测引擎、时间切片、加速模块 |
+| `test_data.py` | ~20 | 技术指标、特征工程 |
+| `test_data_pipeline.py` | 48 | 数据验证、缓存、版本管理 |
+| `test_live_trading.py` | 65 | 模拟交易、监控告警 |
+| `test_optimizer.py` | 45 | 参数优化、Walk-Forward |
+| `test_portfolio.py` | 43 | 组合回测、风控、报告 |
+| `test_strategies.py` | ~20 | 策略库、信号处理 |
+| `test_utils.py` | ~20 | 安全、熔断、指标 |
+| `test_webui.py` | 87 | WebUI服务层和模型 |
 
 ---
 
