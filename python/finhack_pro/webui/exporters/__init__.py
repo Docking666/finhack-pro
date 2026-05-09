@@ -5,8 +5,12 @@
 """
 
 from finhack_pro.webui.exporters.excel_exporter import ExcelExporter
-from finhack_pro.webui.exporters.pdf_exporter import PDFExporter
 from finhack_pro.webui.exporters.strategy_share import StrategySharer
+
+try:
+    from finhack_pro.webui.exporters.pdf_exporter import PDFExporter
+except ImportError:
+    PDFExporter = None  # type: ignore[assignment,misc]
 
 __all__ = [
     "PDFExporter",

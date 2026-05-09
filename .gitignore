@@ -41,8 +41,8 @@ env/
 .DS_Store
 
 # Project specific
-data/
-logs/
+/data/
+/logs/
 *.log
 .env
 .env.local
