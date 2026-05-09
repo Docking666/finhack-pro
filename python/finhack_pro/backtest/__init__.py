@@ -4,6 +4,10 @@ FinHack Pro 回测模块
 提供回测运行器，支持两种回测模式:
 - 向量化模式（高性能，轻量级时间隔离）
 - 异步事件驱动模式（严格时间隔离，完整延迟模拟）
+- NumPy向量化加速引擎
+- 多标的并行回测
+- Numba JIT加速（可选）
+- Rust核心预留接口
 
 通过 engine_factory 统一创建和切换。
 """
@@ -25,16 +29,26 @@ from finhack_pro.backtest.time_slice import (
     LookAheadError,
     EngineResult,
 )
+from finhack_pro.backtest.accelerated import (
+    NumPyVectorizedEngine,
+    NumPyEngineConfig,
+    run_multi_symbol_backtest,
+    run_multi_symbol_async,
+    MultiSymbolResult,
+    numba_jit_available,
+    RustCoreBridge,
+    get_rust_bridge,
+)
 
 __all__ = [
     # 原有接口
     "BacktestRunner",
     "BacktestResult",
-    # 新增：引擎工厂
+    # 引擎工厂
     "create_engine",
     "run_backtest",
     "compare_modes",
-    # 新增：时间切片
+    # 时间切片
     "BacktestMode",
     "DataBarrier",
     "TimeSliceContext",
@@ -44,4 +58,13 @@ __all__ = [
     "LatencySimulator",
     "LookAheadError",
     "EngineResult",
+    # 加速模块
+    "NumPyVectorizedEngine",
+    "NumPyEngineConfig",
+    "run_multi_symbol_backtest",
+    "run_multi_symbol_async",
+    "MultiSymbolResult",
+    "numba_jit_available",
+    "RustCoreBridge",
+    "get_rust_bridge",
 ]
