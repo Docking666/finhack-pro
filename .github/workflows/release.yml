@@ -43,6 +43,7 @@ jobs:
 
       - name: Compute and sync version
         id: version
+        shell: bash
         run: |
           if [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
@@ -62,7 +63,6 @@ jobs:
                 VERSION="${MAJOR}.${MINOR}.${PATCH}+${DATE}.${TIME}"
                 echo "version=$VERSION" >> $GITHUB_OUTPUT
                 echo "Generated version: $VERSION (auto)"
-                # auto模式不回写文件，直接使用日期版本
                 exit 0
                 ;;
             esac
@@ -162,6 +162,7 @@ jobs:
 
       - name: Compute version (for release tag)
         id: version
+        shell: bash
         run: |
           if [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
