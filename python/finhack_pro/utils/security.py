@@ -5,12 +5,12 @@
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import os
 import re
-import hashlib
-import base64
-from typing import Any, Dict, Optional
 from functools import lru_cache
+from typing import Any, Dict, Optional
 
 
 class SecretManager:

@@ -264,7 +264,7 @@ class LLMClient:
             
             return result
             
-        except Exception as e:
+        except Exception:
             # 失败回调
             if self.enable_protection and self._protection:
                 await self._protection.on_failure()

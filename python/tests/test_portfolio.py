@@ -30,16 +30,15 @@ from finhack_pro.backtest.risk_control import (
     ActionType,
     PortfolioRiskState,
     Position,
+    RiskAction,
     RiskCheckResult,
     RiskConfig,
     RiskController,
-    RiskAction,
     RiskWarning,
     UrgencyLevel,
     WarningSeverity,
     WarningType,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

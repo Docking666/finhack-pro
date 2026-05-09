@@ -12,19 +12,18 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
-
 from openpyxl import Workbook
-from openpyxl.styles import (
-    Font,
-    Fill,
-    PatternFill,
-    Border,
-    Side,
-    Alignment,
-    NamedStyle,
-)
 from openpyxl.chart import LineChart, Reference
 from openpyxl.chart.label import DataLabelList
+from openpyxl.styles import (
+    Alignment,
+    Border,
+    Fill,
+    Font,
+    NamedStyle,
+    PatternFill,
+    Side,
+)
 from openpyxl.utils import get_column_letter
 
 

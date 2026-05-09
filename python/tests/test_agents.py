@@ -7,24 +7,24 @@ from typing import Any
 import pytest
 
 from finhack_pro.agents.base import AgentMessage, AgentRole, BaseAgent
+from finhack_pro.agents.fundamental_analyst import (
+    FundamentalAnalysisReport,
+    FundamentalAnalystAgent,
+)
+from finhack_pro.agents.news_analyst import NewsAnalysisReport, NewsAnalystAgent
 from finhack_pro.agents.shared_memory import (
-    SharedMemory,
-    MemoryType,
-    MemoryImportance,
     MemoryEntry,
+    MemoryImportance,
+    MemoryType,
+    SharedMemory,
 )
 from finhack_pro.agents.tool_registry import (
-    ToolRegistry,
     BaseTool,
-    ToolDefinition,
     ToolCategory,
+    ToolDefinition,
     ToolParameter,
+    ToolRegistry,
     create_default_toolkit,
-)
-from finhack_pro.agents.news_analyst import NewsAnalystAgent, NewsAnalysisReport
-from finhack_pro.agents.fundamental_analyst import (
-    FundamentalAnalystAgent,
-    FundamentalAnalysisReport,
 )
 
 

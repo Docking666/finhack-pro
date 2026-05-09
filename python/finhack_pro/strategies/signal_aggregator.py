@@ -24,9 +24,9 @@ from pydantic import BaseModel, Field
 
 from finhack_pro.strategies.base import Signal, SignalDirection
 from finhack_pro.strategies.signal_filters import (
-    SignalFilterPipeline,
-    RawSignal,
     FilteredSignal,
+    RawSignal,
+    SignalFilterPipeline,
     SignalType,
     create_default_pipeline,
 )

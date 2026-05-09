@@ -2,9 +2,9 @@
 数据模块测试
 """
 
-import pytest
 import numpy as np
 import pandas as pd
+import pytest
 
 from finhack_pro.data.features import FeatureEngineer
 from finhack_pro.data.technical import TechnicalIndicator

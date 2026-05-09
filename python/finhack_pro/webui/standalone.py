@@ -2,9 +2,9 @@
 FinHack Pro 独立运行入口
 用于 PyInstaller 打包后的可执行文件
 """
+import asyncio
 import os
 import sys
-import asyncio
 
 
 def get_base_path():
@@ -30,8 +30,9 @@ def main():
         sys.path.insert(0, base_path)
     
     # 导入并运行FastAPI应用
-    from finhack_pro.webui.app import create_app
     import uvicorn
+
+    from finhack_pro.webui.app import create_app
     
     # 创建应用实例
     app = create_app()

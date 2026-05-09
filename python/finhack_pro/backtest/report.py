@@ -28,9 +28,10 @@ logger = get_logger(__name__)
 
 # 使用非交互式后端
 import matplotlib
+
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 
 

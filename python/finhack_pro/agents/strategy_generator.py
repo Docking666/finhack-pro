@@ -201,13 +201,13 @@ class StrategyGeneratorAgent(BaseAgent):
     ) -> str:
         """构建策略生成上下文"""
         parts = [
-            f"## 市场分析报告\n",
+            "## 市场分析报告\n",
             f"**标的**: {analysis.symbol}",
             f"**市场状态**: {analysis.market_state.value}",
             f"**趋势方向**: {analysis.trend_direction.value}",
             f"**置信度**: {analysis.confidence:.2f}",
             f"**风险等级**: {analysis.risk_level.value}",
-            f"\n**关键因素**:",
+            "\n**关键因素**:",
         ]
         for factor in analysis.key_factors:
             parts.append(f"- {factor}")

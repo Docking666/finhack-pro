@@ -30,11 +30,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, Optional, Union
 
+from finhack_pro.backtest.async_engine import AsyncEngineConfig, AsyncEventEngine
 from finhack_pro.backtest.time_slice import (
-    BacktestMode, EngineResult, LatencyConfig,
+    BacktestMode,
+    EngineResult,
+    LatencyConfig,
 )
 from finhack_pro.backtest.vectorized_engine import VectorizedEngine, VectorizedEngineConfig
-from finhack_pro.backtest.async_engine import AsyncEventEngine, AsyncEngineConfig
 from finhack_pro.utils.logger import get_logger
 
 logger = get_logger(__name__)

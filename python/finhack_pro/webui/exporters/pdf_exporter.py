@@ -14,29 +14,29 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from reportlab.graphics.charts.legends import Legend
+from reportlab.graphics.charts.lineplots import LinePlot
+from reportlab.graphics.shapes import Drawing, Line
+from reportlab.graphics.widgets.markers import makeMarker
 
 # reportlab imports
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import cm, mm
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import cm, mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
-    SimpleDocTemplate,
+    Image,
+    KeepTogether,
+    PageBreak,
     Paragraph,
+    SimpleDocTemplate,
     Spacer,
     Table,
     TableStyle,
-    Image,
-    PageBreak,
-    KeepTogether,
 )
-from reportlab.graphics.shapes import Drawing, Line
-from reportlab.graphics.charts.lineplots import LinePlot
-from reportlab.graphics.charts.legends import Legend
-from reportlab.graphics.widgets.markers import makeMarker
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 
 
 class PDFExporter:

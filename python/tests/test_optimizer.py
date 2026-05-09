@@ -5,24 +5,24 @@
 """
 
 import math
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from finhack_pro.strategies.optimizer import (
-    ParamSpace,
-    TrialResult,
-    OptimizationResult,
-    WalkForwardResult,
-    GridSearchOptimizer,
-    RandomSearchOptimizer,
     BayesianOptimizer,
-    WalkForwardValidator,
+    GridSearchOptimizer,
     OptimizationReport,
+    OptimizationResult,
+    ParamSpace,
+    RandomSearchOptimizer,
+    TrialResult,
+    WalkForwardResult,
+    WalkForwardValidator,
     _evaluate_strategy,
     _math_erf,
 )
-
 
 # ============================================================================
 # 测试用策略类

@@ -7,8 +7,8 @@ FinHack Pro 交易执行模块
 from finhack_pro.execution.live_trader import (
     AccountInfo,
     Direction,
-    LiveTradingConfig,
     LiveTrader,
+    LiveTradingConfig,
     Order,
     OrderStatus,
     OrderType,

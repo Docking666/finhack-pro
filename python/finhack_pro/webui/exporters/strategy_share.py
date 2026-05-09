@@ -153,8 +153,9 @@ class StrategySharer:
             二维码图片的字节流（如果未指定output_path）
         """
         try:
-            import qrcode
             from io import BytesIO
+
+            import qrcode
             
             # 创建二维码
             qr = qrcode.QRCode(

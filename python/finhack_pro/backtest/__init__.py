@@ -16,60 +16,60 @@ FinHack Pro 回测模块
 通过 engine_factory 统一创建和切换。
 """
 
-from finhack_pro.backtest.runner import BacktestRunner, BacktestResult
-from finhack_pro.backtest.engine_factory import (
-    create_engine,
-    run_backtest,
-    compare_modes,
-)
-from finhack_pro.backtest.time_slice import (
-    BacktestMode,
-    DataBarrier,
-    TimeSliceContext,
-    PortfolioSnapshot,
-    EngineSnapshot,
-    LatencyConfig,
-    LatencySimulator,
-    LookAheadError,
-    EngineResult,
-)
 from finhack_pro.backtest.accelerated import (
-    NumPyVectorizedEngine,
-    NumPyEngineConfig,
-    run_multi_symbol_backtest,
-    run_multi_symbol_async,
     MultiSymbolResult,
-    numba_jit_available,
+    NumPyEngineConfig,
+    NumPyVectorizedEngine,
     RustCoreBridge,
     get_rust_bridge,
+    numba_jit_available,
+    run_multi_symbol_async,
+    run_multi_symbol_backtest,
+)
+from finhack_pro.backtest.engine_factory import (
+    compare_modes,
+    create_engine,
+    run_backtest,
+)
+from finhack_pro.backtest.portfolio import (
+    AllocationMethod,
+    IndividualResult,
+    PortfolioAllocation,
+    PortfolioBacktestConfig,
+    PortfolioBacktestResult,
+    PortfolioEngine,
+    PortfolioMetrics,
+    PortfolioRebalanceResult,
+    RebalanceFreq,
 )
 from finhack_pro.backtest.pyo3_isolated import (
     PyO3Isolated,
     get_pyo3_isolated,
-)
-from finhack_pro.backtest.portfolio import (
-    PortfolioEngine,
-    PortfolioBacktestConfig,
-    PortfolioBacktestResult,
-    PortfolioMetrics,
-    PortfolioAllocation,
-    PortfolioRebalanceResult,
-    IndividualResult,
-    RebalanceFreq,
-    AllocationMethod,
 )
 from finhack_pro.backtest.report import (
     BacktestReport,
     ReportConfig,
 )
 from finhack_pro.backtest.risk_control import (
-    RiskController,
-    RiskConfig,
-    RiskCheckResult,
-    RiskAction,
-    RiskWarning,
-    Position,
     PortfolioRiskState,
+    Position,
+    RiskAction,
+    RiskCheckResult,
+    RiskConfig,
+    RiskController,
+    RiskWarning,
+)
+from finhack_pro.backtest.runner import BacktestResult, BacktestRunner
+from finhack_pro.backtest.time_slice import (
+    BacktestMode,
+    DataBarrier,
+    EngineResult,
+    EngineSnapshot,
+    LatencyConfig,
+    LatencySimulator,
+    LookAheadError,
+    PortfolioSnapshot,
+    TimeSliceContext,
 )
 
 __all__ = [

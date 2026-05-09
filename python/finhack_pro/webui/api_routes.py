@@ -15,8 +15,8 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from finhack_pro.webui.models import (
-    APIResponse,
     AgentInfo,
+    APIResponse,
     BacktestRequest,
     BacktestResult,
     BacktestStatus,
@@ -388,7 +388,7 @@ async def list_tools(request):
                     ],
                     examples=defn.examples,
                 ))
-        except Exception as e:
+        except Exception:
             pass
 
     # 如果没有协调器，返回默认工具列表

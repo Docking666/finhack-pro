@@ -629,7 +629,7 @@ class APIDocGenerator:
             tag_groups.setdefault(tag, []).append(ep)
 
         for tag, eps in tag_groups.items():
-            html_parts.append(f'        <div class="tag-section">')
+            html_parts.append('        <div class="tag-section">')
             html_parts.append(f'            <h2 class="tag-title">{self._escape_html(tag)}</h2>')
             for ep in eps:
                 method_cls = f"method-{ep.method.lower()}"

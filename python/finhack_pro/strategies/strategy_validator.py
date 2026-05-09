@@ -18,12 +18,12 @@
 from __future__ import annotations
 
 import math
-import yaml
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, ClassVar
+from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 import numpy as np
+import yaml
 from pydantic import BaseModel, Field
 
 from finhack_pro.utils.logger import get_logger

@@ -341,7 +341,7 @@ class BaseAgent(ABC):
                             f"{p.name}({p.type})" for p in defn.parameters
                         )
                         tool_lines.append(f"- {tool_name}({params_desc}): {defn.description}")
-                sections.append(f"## 可用工具\n" + "\n".join(tool_lines))
+                sections.append("## 可用工具\n" + "\n".join(tool_lines))
 
         if not sections:
             return ""

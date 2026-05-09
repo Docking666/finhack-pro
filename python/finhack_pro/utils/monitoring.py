@@ -18,17 +18,16 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import math
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from typing import Any, Callable, Dict, List, Optional
 from functools import partial
-
-import logging
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 

@@ -11,46 +11,46 @@ from finhack_pro.strategies.dual_thrust import DualThrustStrategy
 from finhack_pro.strategies.mean_reversion import MeanReversionStrategy
 from finhack_pro.strategies.momentum import MomentumStrategy
 from finhack_pro.strategies.niche_strategy import (
+    NicheSignal,
     NicheStrategy,
     NicheStrategyConfig,
     NicheType,
-    NicheSignal,
     create_niche_strategy,
 )
+from finhack_pro.strategies.optimizer import (
+    BayesianOptimizer,
+    GridSearchOptimizer,
+    OptimizationReport,
+    OptimizationResult,
+    ParamSpace,
+    RandomSearchOptimizer,
+    TrialResult,
+    WalkForwardResult,
+    WalkForwardValidator,
+)
 from finhack_pro.strategies.signal_aggregator import (
-    SignalAggregator,
-    AggregatedSignal,
     AggregatedDirection,
+    AggregatedSignal,
+    SignalAggregator,
 )
 from finhack_pro.strategies.signal_filters import (
+    AdaptiveWeightedAverage,
+    AnomalyDetector,
+    FilteredSignal,
+    FRAMAFilter,
+    KalmanFilterFusion,
+    KAMAFilter,
+    ParticleFilter,
+    RawSignal,
     SignalFilterPipeline,
     SignalType,
-    RawSignal,
-    FilteredSignal,
-    KalmanFilterFusion,
-    AdaptiveWeightedAverage,
-    KAMAFilter,
-    FRAMAFilter,
-    AnomalyDetector,
     TransformerAttentionFusion,
-    ParticleFilter,
     create_default_pipeline,
 )
 from finhack_pro.strategies.strategy_validator import (
+    VALIDATION_PROFILES,
     StrategyValidator,
     ValidationResult,
-    VALIDATION_PROFILES,
-)
-from finhack_pro.strategies.optimizer import (
-    ParamSpace,
-    TrialResult,
-    OptimizationResult,
-    WalkForwardResult,
-    GridSearchOptimizer,
-    RandomSearchOptimizer,
-    BayesianOptimizer,
-    WalkForwardValidator,
-    OptimizationReport,
 )
 
 __all__ = [

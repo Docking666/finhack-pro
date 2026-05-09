@@ -19,13 +19,12 @@ from typing import Optional
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from finhack_pro.webui.api_routes import router as api_router
 from finhack_pro.webui.export_routes import router as export_router
-from finhack_pro.webui.strategy_routes import router as strategy_router
 from finhack_pro.webui.services import (
     AgentService,
     BacktestService,
@@ -33,6 +32,7 @@ from finhack_pro.webui.services import (
     MemoryService,
     StreamService,
 )
+from finhack_pro.webui.strategy_routes import router as strategy_router
 from finhack_pro.webui.ws_routes import router as ws_router
 
 

@@ -8,17 +8,21 @@
 - helpers: calculate_sharpe_ratio, calculate_max_drawdown, format_number
 """
 
-import pytest
 import asyncio
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from finhack_pro.utils.security import SecretManager, mask_secrets, LogSanitizer
+import pytest
+
 from finhack_pro.utils.circuit_breaker import (
-    CircuitBreaker, CircuitState, TokenBucket, CostController,
-    LLMProtection, CircuitBreakerOpenError,
+    CircuitBreaker,
+    CircuitBreakerOpenError,
+    CircuitState,
+    CostController,
+    LLMProtection,
+    TokenBucket,
 )
 from finhack_pro.utils.metrics import MetricsCollector
-
+from finhack_pro.utils.security import LogSanitizer, SecretManager, mask_secrets
 
 # ============================================================================
 # security 测试

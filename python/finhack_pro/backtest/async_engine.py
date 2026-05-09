@@ -27,12 +27,23 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from finhack_pro.strategies.base import (
-    BaseStrategy, BarData, Context, Portfolio, Signal, SignalDirection,
-)
 from finhack_pro.backtest.time_slice import (
-    BacktestMode, DataBarrier, EngineResult, EngineSnapshot,
-    LatencyConfig, LatencySimulator, PortfolioSnapshot, TimeSliceContext,
+    BacktestMode,
+    DataBarrier,
+    EngineResult,
+    EngineSnapshot,
+    LatencyConfig,
+    LatencySimulator,
+    PortfolioSnapshot,
+    TimeSliceContext,
+)
+from finhack_pro.strategies.base import (
+    BarData,
+    BaseStrategy,
+    Context,
+    Portfolio,
+    Signal,
+    SignalDirection,
 )
 from finhack_pro.utils.logger import get_logger
 

@@ -14,17 +14,17 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from dataclasses import dataclass, field
 
 from finhack_pro.strategies.base import (
+    BarData,
     BaseStrategy,
     Context,
     Signal,
     SignalDirection,
-    BarData,
     TickData,
 )
 from finhack_pro.utils.logger import get_logger

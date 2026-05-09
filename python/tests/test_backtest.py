@@ -9,24 +9,33 @@
 - accelerated: NumPyVectorizedEngine, Numba JIT, RustCoreBridge
 """
 
-import pytest
-import numpy as np
-import pandas as pd
 from datetime import datetime
 
+import numpy as np
+import pandas as pd
+import pytest
+
+from finhack_pro.backtest.accelerated import (
+    NumPyEngineConfig,
+    NumPyVectorizedEngine,
+    RustCoreBridge,
+    _calculate_drawdown_numpy,
+    _calculate_sharpe_numpy,
+    numba_jit_available,
+)
+from finhack_pro.backtest.engine_factory import BacktestMode, create_engine
 from finhack_pro.backtest.time_slice import (
-    DataBarrier, PortfolioSnapshot, EngineSnapshot,
-    LatencyConfig, LatencySimulator, LookAheadError,
-    BacktestMode, EngineResult, TimeSliceContext,
+    BacktestMode,
+    DataBarrier,
+    EngineResult,
+    EngineSnapshot,
+    LatencyConfig,
+    LatencySimulator,
+    LookAheadError,
+    PortfolioSnapshot,
+    TimeSliceContext,
 )
 from finhack_pro.backtest.vectorized_engine import VectorizedEngine, VectorizedEngineConfig
-from finhack_pro.backtest.engine_factory import create_engine, BacktestMode
-from finhack_pro.backtest.accelerated import (
-    NumPyVectorizedEngine, NumPyEngineConfig,
-    numba_jit_available, _calculate_drawdown_numpy, _calculate_sharpe_numpy,
-    RustCoreBridge,
-)
-
 
 # ============================================================================
 # time_slice 测试
@@ -137,7 +146,7 @@ class TestVectorizedEngine:
     """向量化引擎测试"""
 
     def _make_strategy(self):
-        from finhack_pro.strategies.base import BaseStrategy, BarData, Context, Signal, SignalDirection
+        from finhack_pro.strategies.base import BarData, BaseStrategy, Context, Signal, SignalDirection
 
         class MAStrategy(BaseStrategy):
             strategy_name = "test_ma"
@@ -194,7 +203,7 @@ class TestNumPyAccelerated:
     """NumPy 加速模块测试"""
 
     def _make_strategy(self):
-        from finhack_pro.strategies.base import BaseStrategy, BarData, Context, Signal, SignalDirection
+        from finhack_pro.strategies.base import BarData, BaseStrategy, Context, Signal, SignalDirection
 
         class MAStrategy(BaseStrategy):
             strategy_name = "test_ma"

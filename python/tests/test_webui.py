@@ -13,16 +13,16 @@ import pytest
 from pydantic import ValidationError
 
 from finhack_pro.webui.models import (
-    APIResponse,
     AgentInfo,
+    APIResponse,
     BacktestMetrics,
     BacktestRequest,
     BacktestResult,
     BacktestStatus,
     BacktestStrategy,
+    ConfigUpdate,
     ConnectionTestRequest,
     ConnectionTestResult,
-    ConfigUpdate,
     DataConfigUpdate,
     ExecutionConfigUpdate,
     HealthStatus,
@@ -48,7 +48,6 @@ from finhack_pro.webui.services import (
     MemoryService,
     StreamService,
 )
-
 
 # ============================================================================
 # Pydantic 模型测试

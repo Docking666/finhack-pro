@@ -21,11 +21,12 @@ Agent协调器
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List, Optional, Set
 from enum import Enum
+from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger
 
+from finhack_pro.agents.alternative_data_tools import register_alternative_data_tools
 from finhack_pro.agents.base import AgentMessage, BaseAgent
 from finhack_pro.agents.fundamental_analyst import FundamentalAnalystAgent
 from finhack_pro.agents.market_analyzer import MarketAnalyzerAgent
@@ -36,7 +37,6 @@ from finhack_pro.agents.shared_memory import SharedMemory
 from finhack_pro.agents.strategy_generator import StrategyGeneratorAgent
 from finhack_pro.agents.tool_registry import ToolRegistry, create_default_toolkit
 from finhack_pro.agents.trade_executor import TradeExecutorAgent
-from finhack_pro.agents.alternative_data_tools import register_alternative_data_tools
 from finhack_pro.utils.logger import get_logger
 
 logger = get_logger(__name__)

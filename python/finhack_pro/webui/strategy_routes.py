@@ -516,8 +516,8 @@ FACTOR_SYSTEM_PROMPT = """你是一位资深的量化因子研发专家。用户
 async def _call_llm(prompt: str, system: str) -> str:
     """调用LLM生成策略/因子代码"""
     try:
-        from finhack_pro.webui.services import ConfigService
         from finhack_pro.config import get_config
+        from finhack_pro.webui.services import ConfigService
 
         config = get_config()
         api_key = config.llm.openai_api_key if hasattr(config, 'llm') else ""
@@ -777,9 +777,9 @@ async def create_visual_factor(request: VisualFactorCreateRequest):
     lines = [
         f'def {request.name}(bars{", " + params_str if params_str else ""}):',
         f'    """{request.description}"""',
-        f'    if len(bars) < 2:',
-        f'        return 0.0',
-        f'',
+        '    if len(bars) < 2:',
+        '        return 0.0',
+        '',
     ]
 
     # 添加条件逻辑
@@ -790,16 +790,16 @@ async def create_visual_factor(request: VisualFactorCreateRequest):
         lines.append(f'    # 条件{i+1}: {cond.get("field", "close")} {op} {value}')
         if action == "filter":
             lines.append(f'    if bars[-1].{cond.get("field", "close")} {op} {value}:')
-            lines.append(f'        return None  # 不满足条件')
-            lines.append(f'')
+            lines.append('        return None  # 不满足条件')
+            lines.append('')
 
     # 添加计算公式
     if request.formula:
         lines.append(f'    # 计算公式: {request.formula}')
         lines.append(f'    result = {request.formula}')
-        lines.append(f'    return result')
+        lines.append('    return result')
     else:
-        lines.append(f'    return bars[-1].close')
+        lines.append('    return bars[-1].close')
 
     code = "\n".join(lines)
 
