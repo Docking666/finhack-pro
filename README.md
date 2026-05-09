@@ -13,9 +13,16 @@
 - [系统概述](#系统概述)
 - [核心特性](#核心特性)
 - [系统架构](#系统架构)
+- [安全与可靠性](#安全与可靠性)
+- [回测引擎系统](#回测引擎系统)
+- [性能加速模块](#性能加速模块)
+- [Rust 核心桥接服务](#rust-核心桥接服务)
+- [可观测性模块](#可观测性模块)
 - [信号处理流水线](#信号处理流水线)
 - [差异化策略框架](#差异化策略框架)
 - [WebUI 管理界面](#webui-管理界面)
+- [接口文档](#接口文档)
+- [部署教程](#部署教程)
 - [详细教程](#详细教程)
 - [配置说明](#配置说明)
 - [桌面版](#桌面版)
@@ -243,10 +250,10 @@ FinHack Pro 是一个面向A股市场的多智能体量化交易系统，采用 
 │  │finhack-core│ │finhack-bus │ │finhack-risk│ │finhack-execution│
 │  │ 核心类型  │ │ 消息总线  │ │ 风控引擎  │ │ 执行引擎  │           │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘           │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐                       │
-│  │finhack-backtest│ │finhack-data│ │finhack-api │               │
-│  │ 回测引擎  │ │ 数据引擎  │ │ REST API │                       │
-│  └──────────┘ └──────────┘ └──────────┘                       │
+│  ┌──────────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐   │
+│  │finhack-backtest│ │finhack-data│ │finhack-api │ │finhack-bridge│   │
+│  │ 回测引擎     │ │ 数据引擎  │ │ REST API │ │ Python桥接  │   │
+│  └──────────────┘ └──────────┘ └──────────┘ └──────────────┘   │
 │                                                                  │
 ├──────────────────────────────────────────────────────────────────┤
 │  🗄️ 基础设施（可选）                                             │
@@ -256,6 +263,347 @@ FinHack Pro 是一个面向A股市场的多智能体量化交易系统，采用 
 │  └── Grafana    (监控面板)                                       │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 安全与可靠性
+
+### 密钥安全管理 (`utils/security.py`)
+
+| 组件 | 说明 |
+|------|------|
+| `SecretManager` | XOR+Base64 混淆存储密钥，支持环境变量加载，自动识别敏感字段（api_key/secret/token/password） |
+| `mask_secrets(text)` | 正则脱敏文本中的密钥（OpenAI `sk-xxx`、Anthropic `sk-ant-xxx`、Tushare hex32、Bearer JWT） |
+| `LogSanitizer` | 日志脱敏过滤器，集成 loguru，防止密钥泄露到日志 |
+
+```python
+from finhack_pro.utils import SecretManager, mask_secrets, LogSanitizer
+
+# 密钥管理
+sm = SecretManager()
+sm.set("openai_key", "sk-abc123secret")
+key = sm.get("openai_key")  # 自动解密
+
+# 文本脱敏
+safe = mask_secrets("API key is sk-abc123secret")
+# 输出: "API key is sk-***3secret"
+
+# 日志脱敏
+sanitizer = LogSanitizer()
+clean = sanitizer.sanitize("password=12345 and sk-ant-key789")
+```
+
+### LLM 调用保护 (`utils/circuit_breaker.py`)
+
+三重防护机制，防止 LLM API 异常导致系统不可控：
+
+| 组件 | 功能 | 关键参数 |
+|------|------|----------|
+| `CircuitBreaker` | 熔断器：连续失败达阈值自动熔断，超时后半开探测 | `fail_max=5`, `reset_timeout=60s` |
+| `TokenBucket` | 令牌桶限流：平滑控制请求速率 | `rate=10/s`, `capacity=20` |
+| `CostController` | 成本控制：追踪每日/每月 LLM 调用成本，超预算自动拒绝 | `daily_budget`, `monthly_budget` |
+
+```python
+from finhack_pro.utils import LLMProtection, get_llm_protection
+
+# 使用统一保护器
+protection = LLMProtection(
+    circuit_fail_max=5,       # 连续失败5次熔断
+    rate_limit=10,            # 每秒10个请求
+    daily_budget=10.0,        # 每日预算$10
+    monthly_budget=200.0,     # 每月预算$200
+)
+
+# 调用前检查
+if protection.check_before_call():
+    try:
+        result = await llm.chat(...)
+        protection.on_success(cost=0.05)
+    except Exception:
+        protection.on_failure()
+
+# 或使用装饰器
+breaker = CircuitBreaker(fail_max=3, reset_timeout=30)
+
+@breaker.protect
+async def call_llm(prompt):
+    return await client.chat(prompt)
+```
+
+### 优雅降级 (`agents/coordinator.py`)
+
+非关键 Agent 失败不会导致系统崩溃：
+
+| 级别 | Agent | 失败处理 |
+|------|-------|----------|
+| **CRITICAL** | strategy_generator, risk_manager, trade_executor | 启动失败 → 系统报错退出 |
+| NON_CRITICAL | market_analyzer, news_analyst, fundamental_analyst, micro_event_monitor | 启动失败 → 记录警告，系统继续运行 |
+
+### 并发安全 (`agents/shared_memory.py`)
+
+| 优化 | 说明 |
+|------|------|
+| `ShardedLock` | 分片锁（16片），按 `hash(key) % 16` 分配，减少并发竞争 |
+| 原子写入 | `tempfile + os.replace` 实现崩溃安全的文件持久化 |
+
+### 信号过滤器状态隔离 (`strategies/signal_filters.py`)
+
+所有 7 种滤波器（异常检测、卡尔曼、自适应加权、KAMA、FRAMA、粒子滤波、Transformer）均实现**按标的独立状态**，通过 `BaseFilter._states[symbol]` 隔离，防止多标的回测时状态交叉污染。
+
+---
+
+## 回测引擎系统
+
+### 设计目标
+
+从物理层面消除**未来函数 (Look-ahead Bias)**，提供两种回测模式冷启动切换。
+
+### 时间切片层 (`backtest/time_slice.py`)
+
+| 组件 | 说明 |
+|------|------|
+| `DataBarrier` | 数据屏障：物理切片 DataFrame 到截止时间，拦截非法未来访问，抛出 `LookAheadError` |
+| `PortfolioSnapshot` | 不可变组合快照：深拷贝 + SHA256 哈希校验，确保状态传递不可篡改 |
+| `EngineSnapshot` | 不可变引擎完整状态快照（portfolio, bar, signals, orders, fills, data_barrier） |
+| `LatencyConfig` | 延迟配置：data/compute/order/fill 四阶段延迟，自动计算总延迟 |
+| `LatencySimulator` | 延迟模拟器：`get_fill_time()` 计算成交时间，`get_fill_price()` 使用成交时刻行情+滑点 |
+| `TimeSliceContext` | 安全数据访问上下文：替代 `Context.data_feed`，提供 `get_history()` / `get_latest_bar()` |
+| `LookAheadError` | 未来函数访问异常（含 access_time / current_time 用于调试） |
+
+### 双模式引擎
+
+| 模式 | 引擎 | 特点 | 适用场景 |
+|------|------|------|----------|
+| `VECTORIZED` | `VectorizedEngine` | 轻量级时间切片保护，性能开销 < 5% | 快速参数扫描、大规模回测 |
+| `ASYNC_EVENT` | `AsyncEventEngine` | 完整延迟模拟 + 不可变快照 + 事件溯源 | 策略验证、合规审计 |
+
+**关键设计差异**：异步引擎中 `signal_time ≠ fill_time`，信号产生后经过延迟模拟才成交，使用成交时刻的价格执行。
+
+### 引擎工厂 (`backtest/engine_factory.py`)
+
+```python
+from finhack_pro.backtest import create_engine, run_backtest, compare_modes, BacktestMode
+
+# 方式一：创建引擎
+engine = create_engine(BacktestMode.VECTORIZED, config={"strict_mode": True})
+result = engine.run(strategy, "600519.SH", data, params)
+
+# 方式二：一键回测（自动处理同步/异步差异）
+result = run_backtest(strategy, "600519.SH", data, mode="async_event")
+
+# 方式三：双模式对比（自动诊断未来函数）
+comparison = compare_modes(strategy, "600519.SH", data)
+# 如果 vectorized_return > async_return * 1.05，输出未来函数警告
+```
+
+### 策略验证配置 (`strategies/strategy_validator.py`)
+
+预定义 5 种验证配置，覆盖不同交易风格：
+
+| 配置 | 最低交易次数 | 夏普比率 | 最大回撤 | Calmar | 适用场景 |
+|------|-------------|----------|----------|--------|----------|
+| `default` | 100 | ≥ 0.5 | ≤ 20% | ≥ 0.3 | 通用 |
+| `conservative` | 200 | ≥ 1.0 | ≤ 10% | ≥ 0.5 | 稳健型 |
+| `aggressive` | 50 | ≥ 0.3 | ≤ 30% | ≥ 0.2 | 激进型 |
+| `high_frequency` | 500 | ≥ 0.8 | ≤ 15% | ≥ 0.4 | 高频 |
+| `low_frequency` | 30 | ≥ 0.4 | ≤ 25% | ≥ 0.2 | 低频 |
+
+```python
+from finhack_pro.strategies import StrategyValidator
+
+# 使用预定义配置
+validator = StrategyValidator.from_profile("conservative")
+result = validator.validate(performance_data)
+
+# 或自定义配置
+validator = StrategyValidator.from_config({
+    "min_trades": 150,
+    "min_sharpe": 0.8,
+    "max_drawdown": 0.15,
+})
+```
+
+---
+
+## 性能加速模块
+
+### NumPy 向量化引擎 (`backtest/accelerated.py`)
+
+预提取 DataFrame 列为 NumPy 数组，预计算 BarData 对象，避免逐行 iterrows 开销：
+
+```python
+from finhack_pro.backtest import NumPyVectorizedEngine, NumPyEngineConfig
+
+config = NumPyEngineConfig(
+    initial_capital=1_000_000,
+    enable_time_slice=True,
+    strict_mode=True,
+)
+engine = NumPyVectorizedEngine(config)
+result = engine.run(strategy, "600519.SH", data, {"fast": 5, "slow": 20})
+```
+
+### 多标的并行回测
+
+使用 `asyncio.gather` + `Semaphore` 控制并发，支持同步和异步两种调用方式：
+
+```python
+from finhack_pro.backtest import run_multi_symbol_backtest, run_multi_symbol_async
+
+# 同步调用
+results = run_multi_symbol_backtest(
+    strategy_factory=lambda: MyStrategy(),
+    data_dict={"600519.SH": df1, "000858.SZ": df2, "601318.SH": df3},
+    max_concurrent=3,
+)
+
+# 异步调用
+results = await run_multi_symbol_async(
+    strategy_factory=lambda: MyStrategy(),
+    data_dict=data_dict,
+    max_concurrent=5,
+)
+```
+
+### Numba JIT 加速（可选）
+
+热路径函数可选编译加速，无 Numba 时自动回退纯 NumPy：
+
+```python
+from finhack_pro.backtest import numba_jit_available, _calculate_drawdown_numpy
+
+print(f"Numba可用: {numba_jit_available()}")
+
+# 无论Numba是否安装，接口一致
+max_dd, dd_curve = _calculate_drawdown_numpy(equity_array)
+```
+
+> **安装 Numba**：`pip install numba`，安装后自动启用 JIT 编译，无需修改代码。
+
+---
+
+## Rust 核心桥接服务
+
+### 架构
+
+```
+Python (finhack_pro)                    Rust (finhack-bridge)
+┌─────────────────┐                    ┌──────────────────┐
+│ RustCoreBridge  │ ─── HTTP/JSON ──→ │ /health          │
+│                 │                    │ /bridge/indicators│
+│ 自动检测Rust    │ ←── 响应 ──────── │ /bridge/backtest  │
+│ 不可用时回退    │                    │ /bridge/signals   │
+└─────────────────┘                    └──────────────────┘
+                                              ↑
+                                        rayon 数据并行
+```
+
+### 三级降级策略
+
+```
+RustCoreBridge
+  ├── Rust 服务可用？ → HTTP 调用 Rust（毫秒级计算）
+  ├── Rust 不可用？   → Python ta 库回退（正常速度）
+  └── ta 库不可用？   → 纯 NumPy 回退（基础功能）
+```
+
+### 桥接接口
+
+| 接口 | 方法 | 说明 | Rust 内部实现 |
+|------|------|------|---------------|
+| `batch_calculate_indicators()` | POST | 批量技术指标（RSI/MACD/BB/ATR） | rayon 并行计算多指标 |
+| `batch_backtest()` | POST | 批量回测（多策略并行） | rayon par_iter 并行策略 |
+| `parallel_signal_compute()` | POST | 并行信号计算（分治-聚合） | rayon par_iter 并行标的 |
+
+### 使用方式
+
+```python
+from finhack_pro.backtest import get_rust_bridge
+
+bridge = get_rust_bridge()
+print(f"Rust可用: {bridge.is_rust_available}")
+
+# 批量指标计算（Rust可用时自动走Rust）
+result_df = bridge.batch_calculate_indicators(data, ["rsi", "macd", "bollinger", "atr"])
+
+# 批量回测
+configs = [
+    {"name": "MA_5_20", "fast_period": 5, "slow_period": 20},
+    {"name": "MA_10_30", "fast_period": 10, "slow_period": 30},
+]
+results = bridge.batch_backtest(configs, data, initial_capital=1_000_000)
+
+# 并行信号计算（分治-聚合）
+results = bridge.parallel_signal_compute(data, symbols, strategy_factory, snapshot)
+```
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `FINHACK_BRIDGE_URL` | `http://localhost:8080` | 桥接服务地址 |
+| `BRIDGE_HOST` | `0.0.0.0` | Rust 服务监听地址 |
+| `BRIDGE_PORT` | `8080` | Rust 服务监听端口 |
+
+### 性能参考（10000 bars）
+
+| 操作 | Rust 内部计算 | 端到端（含HTTP） | Python 回退 |
+|------|--------------|-----------------|-------------|
+| 4 指标并行计算 | 0.6ms | ~5ms | ~41ms |
+| 5 策略批量回测 | 0.27ms | ~5ms | N/A |
+| 10 标的并行信号 | <0.1ms/标的 | ~5ms | ~2500ms |
+
+> **注意**：端到端延迟包含 Python→JSON→HTTP 序列化开销。Rust 计算本身极快，瓶颈在数据传输层。未来可通过 PyO3 绑定消除此开销。
+
+---
+
+## 可观测性模块
+
+### Prometheus 指标 (`utils/metrics.py`)
+
+内置 9 个系统指标，支持 Prometheus 文本格式导出：
+
+| 指标 | 类型 | 标签 | 说明 |
+|------|------|------|------|
+| `finhack_agent_calls_total` | Counter | agent | Agent 调用次数 |
+| `finhack_agent_call_duration_seconds` | Histogram | agent | Agent 调用耗时 |
+| `finhack_agent_errors_total` | Counter | agent | Agent 错误次数 |
+| `finhack_llm_calls_total` | Counter | model, provider | LLM 调用次数 |
+| `finhack_llm_tokens_total` | Counter | model, type | Token 用量 |
+| `finhack_llm_cost_total` | Counter | model | LLM 调用成本 |
+| `finhack_signals_total` | Counter | strategy, direction | 信号数量 |
+| `finhack_memory_entries` | Gauge | type | 记忆条目数 |
+| `finhack_websocket_connections` | Gauge | channel | WebSocket 连接数 |
+
+```python
+from finhack_pro.utils import get_metrics, track_agent_call, track_llm_call
+
+metrics = get_metrics()
+
+# 方式一：上下文管理器（自动记录次数和耗时）
+with track_agent_call("market_analyzer"):
+    result = await agent.analyze(...)
+
+with track_llm_call("gpt-4o", "openai"):
+    response = await client.chat(...)
+
+# 方式二：手动记录
+metrics.counter("custom_events").inc()
+metrics.gauge("current_position").set(0.85)
+metrics.histogram("order_size").observe(1000)
+
+# 导出 Prometheus 格式
+text = metrics.export_prometheus()
+```
+
+### WebSocket 心跳 (`webui/services.py`)
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `heartbeat_interval` | 30s | 心跳发送间隔 |
+| `heartbeat_timeout` | 90s | 超时断开阈值（3次未响应） |
+
+自动检测僵尸连接并清理，防止 WebSocket 连接泄漏。
 
 ---
 
@@ -457,6 +805,228 @@ FinHack Pro 内置了一个现代化的 Web 管理界面，提供可视化的系
 | WS | `/ws/agents` | Agent思考流 |
 | WS | `/ws/backtest` | 回测进度 |
 | WS | `/ws/system` | 系统事件 |
+
+---
+
+## 接口文档
+
+### Python 模块导出索引
+
+#### `finhack_pro.utils` — 工具模块（22 个导出）
+
+| 接口 | 类型 | 说明 |
+|------|------|------|
+| `SecretManager` | class | 密钥管理器（XOR 混淆存储） |
+| `get_secret_manager()` | function | 全局密钥管理器单例 |
+| `mask_secrets(text)` | function | 正则脱敏密钥文本 |
+| `LogSanitizer` | class | 日志脱敏过滤器 |
+| `sanitize_log(message)` | function | 便捷日志脱敏 |
+| `CircuitBreaker` | class | 熔断器（CLOSED/OPEN/HALF_OPEN） |
+| `CircuitBreakerOpenError` | exception | 熔断开启异常 |
+| `TokenBucket` | class | 令牌桶限流器 |
+| `CostController` | class | 成本控制器（日/月预算） |
+| `LLMProtection` | class | LLM 调用保护（熔断+限流+预算） |
+| `RateLimitExceededError` | exception | 限流异常 |
+| `BudgetExceededError` | exception | 预算超限异常 |
+| `get_llm_protection()` | function | 全局 LLM 保护器单例 |
+| `MetricsCollector` | class | Prometheus 指标收集器 |
+| `get_metrics()` | function | 全局指标收集器单例 |
+| `track_agent_call(name)` | contextmanager | 追踪 Agent 调用 |
+| `track_llm_call(model, provider)` | contextmanager | 追踪 LLM 调用 |
+| `track_llm_tokens(model, prompt, completion, cost)` | function | 记录 Token 用量 |
+| `track_signal_processing(strategy, count, duration)` | function | 记录信号处理 |
+| `track_memory_operation(op, success)` | function | 记录记忆操作 |
+| `update_memory_entries(count, type)` | function | 更新记忆条目数 |
+| `update_websocket_connections(channel, count)` | function | 更新 WebSocket 连接数 |
+
+#### `finhack_pro.backtest` — 回测引擎（22 个导出）
+
+| 接口 | 类型 | 说明 |
+|------|------|------|
+| `BacktestRunner` | class | 原有回测运行器 |
+| `BacktestResult` | class | 回测结果 |
+| `BacktestMode` | enum | 回测模式（VECTORIZED / ASYNC_EVENT） |
+| `DataBarrier` | class | 数据屏障（物理切片防未来函数） |
+| `TimeSliceContext` | class | 时间切片安全上下文 |
+| `PortfolioSnapshot` | dataclass | 不可变组合快照 |
+| `EngineSnapshot` | dataclass | 不可变引擎快照 |
+| `LatencyConfig` | dataclass | 延迟配置（4 阶段） |
+| `LatencySimulator` | class | 延迟模拟器 |
+| `LookAheadError` | exception | 未来函数访问异常 |
+| `EngineResult` | dataclass | 引擎回测结果 |
+| `create_engine(mode, config)` | function | 创建回测引擎 |
+| `run_backtest(strategy, symbol, data, ...)` | function | 一键运行回测 |
+| `compare_modes(strategy, symbol, data, ...)` | function | 双模式对比（诊断未来函数） |
+| `NumPyVectorizedEngine` | class | NumPy 向量化引擎 |
+| `NumPyEngineConfig` | dataclass | NumPy 引擎配置 |
+| `run_multi_symbol_backtest(factory, data, concurrent)` | function | 多标的并行回测（同步） |
+| `run_multi_symbol_async(factory, data, concurrent)` | function | 多标的并行回测（异步） |
+| `MultiSymbolResult` | dataclass | 多标的回测结果 |
+| `numba_jit_available()` | function | 检查 Numba 可用性 |
+| `RustCoreBridge` | class | Rust 核心桥接接口 |
+| `get_rust_bridge()` | function | 获取全局桥接实例 |
+
+#### `finhack_pro.strategies` — 策略库（29 个导出）
+
+| 接口 | 类型 | 说明 |
+|------|------|------|
+| `BaseStrategy` | class | 策略基类 |
+| `Context` | class | 策略上下文 |
+| `Signal` | class | 交易信号 |
+| `SignalAggregator` | class | 信号聚合器 |
+| `SignalFilterPipeline` | class | 信号滤波管线 |
+| `create_default_pipeline()` | function | 创建默认滤波管线 |
+| `StrategyValidator` | class | 策略验证器 |
+| `StrategyValidator.from_profile(name)` | classmethod | 从预定义配置创建 |
+| `StrategyValidator.from_config(config)` | classmethod | 从自定义配置创建 |
+| `VALIDATION_PROFILES` | dict | 预定义验证配置（5 种） |
+| `KalmanFilterFusion` | class | 卡尔曼滤波融合 |
+| `AdaptiveWeightedAverage` | class | 自适应加权平均 |
+| `KAMAFilter` | class | KAMA 滤波器 |
+| `FRAMAFilter` | class | FRAMA 滤波器 |
+| `AnomalyDetector` | class | 异常检测器 |
+| `ParticleFilter` | class | 粒子滤波器 |
+| `TransformerAttentionFusion` | class | Transformer 注意力融合 |
+| `NicheType` | class | 差异化策略类型枚举 |
+| `create_niche_strategy(type, config)` | function | 差异化策略工厂 |
+| `DualThrustStrategy` | class | Dual Thrust 突破策略 |
+| `MomentumStrategy` | class | 动量策略 |
+| `MeanReversionStrategy` | class | 均值回归策略 |
+
+#### `finhack_pro.agents` — Agent 系统（20 个导出）
+
+| 接口 | 类型 | 说明 |
+|------|------|------|
+| `AgentCoordinator` | class | Agent 协调器 |
+| `BaseAgent` | class | Agent 基类 |
+| `LLMClient` | class | LLM 客户端（已集成 LLMProtection） |
+| `AgentRole` | class | Agent 角色枚举 |
+| `AgentMessage` | class | Agent 消息 |
+| `MarketAnalyzerAgent` | class | 市场分析 Agent |
+| `MicroEventAgent` | class | 微观事件 Agent |
+| `StrategyGeneratorAgent` | class | 策略生成 Agent |
+| `RiskManagerAgent` | class | 风险管理 Agent |
+| `TradeExecutorAgent` | class | 交易执行 Agent |
+
+### Rust 桥接服务 HTTP API
+
+| 方法 | 路径 | 请求体 | 响应 | 说明 |
+|------|------|--------|------|------|
+| GET | `/health` | — | `{code, data: {status, version, rust_version, rayon_threads}}` | 健康检查 |
+| POST | `/bridge/indicators` | `{data: [{open,high,low,close,volume}], indicators: ["rsi","macd","bollinger","atr"]}` | `{code, data: {rsi, macd, bb_upper, bb_middle, bb_lower, atr, computation_time_ms}}` | 批量指标计算 |
+| POST | `/bridge/batch_backtest` | `{strategy_configs: [{name, fast_period, slow_period}], data: [...], initial_capital}` | `{code, data: {results: [{strategy_name, total_return, max_drawdown, sharpe_ratio, total_trades}], total_time_ms}}` | 批量回测 |
+| POST | `/bridge/parallel_signals` | `{symbols_data: [{symbol, bars}], fast_period, slow_period}` | `{code, data: {results: [{symbol, total_return, sharpe_ratio, total_trades}], total_time_ms}}` | 并行信号计算 |
+
+> 所有响应格式：`{code: 0, message: "success", data: {...}}`，`code=0` 表示成功。
+
+---
+
+## 部署教程
+
+### 方式一：Python 纯模式（推荐）
+
+只需 Python 3.10+，无需编译 Rust，5 分钟上手。
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/Docking666/finhack-pro.git
+cd finhack-pro/python
+
+# 2. 安装依赖
+pip install -r requirements.txt
+
+# 3. 配置 API Key
+cp ../.env.example ../.env
+# 编辑 .env，填入 OPENAI_API_KEY=sk-xxx
+
+# 4. 运行
+python -m finhack_pro.agents.coordinator --symbol 600519.SH
+# 或启动 WebUI
+python -m finhack_pro.webui.app
+```
+
+### 方式二：完整模式（Rust + Python）
+
+编译 Rust 核心并启动桥接服务，获得最佳计算性能。
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/Docking666/finhack-pro.git
+cd finhack-pro
+
+# 2. 安装 Rust 工具链
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+
+# 3. 编译 Rust 核心（Release 模式）
+cargo build --release
+
+# 4. 编译桥接服务
+cargo build -p finhack-bridge --release
+
+# 5. 启动桥接服务（可选，后台运行）
+BRIDGE_PORT=8080 ./target/release/finhack-bridge &
+
+# 6. 安装 Python 依赖
+cd python
+pip install -r requirements.txt
+pip install httpx  # 桥接通信依赖
+
+# 7. 配置并运行
+cp ../.env.example ../.env
+# 编辑 .env，填入 OPENAI_API_KEY
+python -m finhack_pro.webui.app
+```
+
+### 方式三：国内镜像加速
+
+如果 Rust 下载缓慢，使用国内镜像：
+
+```bash
+# 使用清华镜像安装 Rust
+export RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static
+export RUSTUP_UPDATE_ROOT=https://mirrors.ustc.edu.cn/rust-static/rustup
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# 编译时也使用镜像
+export RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static
+cargo build --release
+```
+
+### 环境变量汇总
+
+| 变量 | 必需 | 默认值 | 说明 |
+|------|------|--------|------|
+| `OPENAI_API_KEY` | 是 | — | OpenAI API Key |
+| `OPENAI_API_BASE` | 否 | — | 自定义 API 地址（支持 Ollama） |
+| `ANTHROPIC_API_KEY` | 否 | — | Anthropic API Key |
+| `TUSHARE_TOKEN` | 否 | — | Tushare 数据源 Token |
+| `FINHACK_BRIDGE_URL` | 否 | `http://localhost:8080` | Rust 桥接服务地址 |
+| `BRIDGE_HOST` | 否 | `0.0.0.0` | 桥接服务监听地址 |
+| `BRIDGE_PORT` | 否 | `8080` | 桥接服务监听端口 |
+| `RUST_LOG` | 否 | `info` | Rust 日志级别 |
+
+### 依赖版本要求
+
+| 组件 | 最低版本 | 推荐版本 |
+|------|----------|----------|
+| Python | 3.10 | 3.11+ |
+| Rust | 1.75 | 1.95+ |
+| Node.js（桌面版） | 18 | 20 LTS |
+| pip 依赖 | 见 `requirements.txt` | 最新稳定版 |
+
+### 可选增强
+
+```bash
+# Numba JIT 加速（回测热路径编译优化）
+pip install numba
+
+# Prometheus 监控集成
+# 将 metrics.export_prometheus() 接入 Prometheus scrape 端点
+
+# PDF/Excel 导出
+pip install reportlab openpyxl xlsxwriter
+```
 
 ---
 
