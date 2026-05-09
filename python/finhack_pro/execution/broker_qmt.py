@@ -135,9 +135,9 @@ def _import_xtquant():
         from xtquant.xttrader import XtQuantTrader, XtQuantTraderCallback
         from xtquant.xttype import (
             StockAccount,
+            XtAsset,
             XtOrder,
             XtPosition,
-            XtAsset,
             XtTrade,
         )
         return {
