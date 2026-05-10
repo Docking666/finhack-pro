@@ -113,7 +113,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @param {Function} callback - 回调函数
    */
   receive: (channel, callback) => {
-    const validChannels = ['loading-status', 'update-available', 'update-downloaded'];
+    const validChannels = ['loading-status', 'update-available', 'update-downloaded', 'python-download-progress'];
     if (validChannels.includes(channel)) {
       ipcRenderer.on(channel, (event, ...args) => callback(...args));
     }
@@ -169,7 +169,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 验证指定路径的 Python 是否可用 */
     validate: (pythonPath) => ipcRenderer.invoke('python:validate', pythonPath),
     /** 打开文件选择对话框选择 Python */
-    browse: () => ipcRenderer.invoke('python:browse')
+    browse: () => ipcRenderer.invoke('python:browse'),
+    /** 下载并安装嵌入式 Python */
+    download: () => ipcRenderer.invoke('python:download'),
+    /** 检查嵌入式 Python 是否已安装 */
+    isEmbeddedInstalled: () => ipcRenderer.invoke('python:isEmbeddedInstalled')
   }
 });
 

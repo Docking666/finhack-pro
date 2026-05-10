@@ -191,6 +191,325 @@ function getPythonExecutable() {
   return 'python'; // fallback，实际搜索在 startPythonBackend 中进行
 }
 
+// ============================================================================
+// Python 自动下载与安装
+// ============================================================================
+
+const PYTHON_VERSION = '3.12.8';
+const PYTHON_DOWNLOAD_MIRRORS = {
+  win32: [
+    `https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip`,
+    `https://mirrors.huaweicloud.com/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip`,
+  ],
+  darwin: [
+    // macOS 使用 miniconda（更小，免安装）
+    'https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-x86_64.sh',
+    'https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/Miniconda3-latest-MacOSX-x86_64.sh',
+  ],
+  linux: [
+    'https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh',
+    'https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/Miniconda3-latest-Linux-x86_64.sh',
+  ]
+};
+
+/**
+ * 获取嵌入式 Python 安装目录
+ * @returns {string}
+ */
+function getEmbeddedPythonDir() {
+  const userData = app.getPath('userData');
+  return path.join(userData, 'python');
+}
+
+/**
+ * 获取嵌入式 Python 可执行文件路径
+ * @returns {string}
+ */
+function getEmbeddedPythonExe() {
+  const embeddedDir = getEmbeddedPythonDir();
+  if (process.platform === 'win32') {
+    return path.join(embeddedDir, 'python.exe');
+  } else {
+    return path.join(embeddedDir, 'bin', 'python3');
+  }
+}
+
+/**
+ * 检查嵌入式 Python 是否已安装
+ * @returns {boolean}
+ */
+function isEmbeddedPythonInstalled() {
+  const exePath = getEmbeddedPythonExe();
+  return fs.existsSync(exePath);
+}
+
+/**
+ * 下载文件（带进度回调）
+ * @param {string} url - 下载 URL
+ * @param {string} destPath - 目标路径
+ * @param {Function} onProgress - 进度回调 (percent, downloaded, total)
+ * @returns {Promise<void>}
+ */
+function downloadFile(url, destPath, onProgress) {
+  return new Promise((resolve, reject) => {
+    const https = require('https');
+    const http = require('http');
+    const client = url.startsWith('https') ? https : http;
+
+    const file = fs.createWriteStream(destPath);
+    let downloaded = 0;
+    let total = 0;
+
+    const request = client.get(url, (response) => {
+      // 处理重定向
+      if (response.statusCode === 301 || response.statusCode === 302) {
+        file.close();
+        fs.unlinkSync(destPath);
+        return downloadFile(response.headers.location, destPath, onProgress).then(resolve).catch(reject);
+      }
+
+      if (response.statusCode !== 200) {
+        file.close();
+        fs.unlinkSync(destPath);
+        return reject(new Error(`下载失败: HTTP ${response.statusCode}`));
+      }
+
+      total = parseInt(response.headers['content-length'], 10) || 0;
+      downloaded = 0;
+
+      response.on('data', (chunk) => {
+        downloaded += chunk.length;
+        if (onProgress && total > 0) {
+          onProgress(downloaded / total * 100, downloaded, total);
+        }
+      });
+
+      response.pipe(file);
+
+      file.on('finish', () => {
+        file.close();
+        resolve();
+      });
+    });
+
+    request.on('error', (err) => {
+      file.close();
+      try { fs.unlinkSync(destPath); } catch (e) { /* ignore */ }
+      reject(err);
+    });
+
+    request.setTimeout(60000, () => {
+      request.destroy();
+      reject(new Error('下载超时'));
+    });
+  });
+}
+
+/**
+ * 解压 ZIP 文件（Windows embeddable package）
+ * @param {string} zipPath - ZIP 文件路径
+ * @param {string} destDir - 目标目录
+ * @returns {Promise<void>}
+ */
+function extractZip(zipPath, destDir) {
+  return new Promise((resolve, reject) => {
+    // 使用 PowerShell 解压（Windows 自带）
+    if (process.platform === 'win32') {
+      exec(`powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${destDir}' -Force"`, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    } else {
+      // macOS/Linux 使用 unzip
+      exec(`unzip -o "${zipPath}" -d "${destDir}"`, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    }
+  });
+}
+
+/**
+ * 为嵌入式 Python 安装 pip
+ * @param {string} pythonDir - Python 目录
+ * @returns {Promise<void>}
+ */
+async function installPipForEmbeddedPython(pythonDir) {
+  const pythonExe = path.join(pythonDir, 'python.exe');
+  
+  // 1. 下载 get-pip.py
+  const getPipUrl = 'https://bootstrap.pypa.io/get-pip.py';
+  const getPipPath = path.join(pythonDir, 'get-pip.py');
+  
+  await downloadFile(getPipUrl, getPipPath, () => {});
+  
+  // 2. 运行 get-pip.py
+  return new Promise((resolve, reject) => {
+    exec(`"${pythonExe}" "${getPipPath}" --no-warn-script-location`, {
+      cwd: pythonDir,
+      timeout: 120000
+    }, (err, stdout, stderr) => {
+      if (err) {
+        console.error('安装 pip 失败:', stderr);
+        reject(err);
+      } else {
+        console.log('pip 安装成功');
+        // 清理
+        try { fs.unlinkSync(getPipPath); } catch (e) { /* ignore */ }
+        resolve();
+      }
+    });
+  });
+}
+
+/**
+ * 修改 python312._pth 文件以启用 site-packages
+ * @param {string} pythonDir - Python 目录
+ */
+function enableSitePackages(pythonDir) {
+  const pthFiles = fs.readdirSync(pythonDir).filter(f => f.endsWith('._pth'));
+  for (const pthFile of pthFiles) {
+    const pthPath = path.join(pythonDir, pthFile);
+    let content = fs.readFileSync(pthPath, 'utf8');
+    // 取消 import site 的注释
+    content = content.replace(/^#import site$/m, 'import site');
+    fs.writeFileSync(pthPath, content);
+    console.log(`已启用 site-packages: ${pthFile}`);
+  }
+}
+
+/**
+ * 下载并安装嵌入式 Python
+ * @param {Function} onProgress - 进度回调 (stage, percent, message)
+ * @returns {Promise<string>} 安装后的 Python 可执行文件路径
+ */
+async function downloadAndInstallPython(onProgress) {
+  const platform = process.platform;
+  const embeddedDir = getEmbeddedPythonDir();
+  const urls = PYTHON_DOWNLOAD_MIRRORS[platform];
+
+  if (!urls || urls.length === 0) {
+    throw new Error(`不支持的平台: ${platform}`);
+  }
+
+  // 确保目录存在
+  if (!fs.existsSync(embeddedDir)) {
+    fs.mkdirSync(embeddedDir, { recursive: true });
+  }
+
+  if (platform === 'win32') {
+    // Windows: 下载 embeddable package
+    const zipPath = path.join(embeddedDir, 'python-embed.zip');
+    
+    onProgress && onProgress('download', 0, '正在下载 Python...');
+    
+    let lastError = null;
+    for (const url of urls) {
+      try {
+        await downloadFile(url, zipPath, (percent) => {
+          onProgress && onProgress('download', percent, `正在下载 Python... ${percent.toFixed(1)}%`);
+        });
+        lastError = null;
+        break;
+      } catch (err) {
+        console.warn(`镜像下载失败: ${url}`, err.message);
+        lastError = err;
+      }
+    }
+
+    if (lastError) {
+      throw new Error(`所有镜像下载失败: ${lastError.message}`);
+    }
+
+    onProgress && onProgress('extract', 0, '正在解压 Python...');
+    
+    // 解压
+    await extractZip(zipPath, embeddedDir);
+    
+    // 清理 zip
+    try { fs.unlinkSync(zipPath); } catch (e) { /* ignore */ }
+
+    onProgress && onProgress('pip', 0, '正在安装 pip...');
+    
+    // 启用 site-packages
+    enableSitePackages(embeddedDir);
+    
+    // 安装 pip
+    await installPipForEmbeddedPython(embeddedDir);
+
+    onProgress && onProgress('done', 100, 'Python 安装完成');
+
+    return getEmbeddedPythonExe();
+  } else {
+    // macOS/Linux: 使用 Miniconda（静默安装）
+    const shPath = path.join(embeddedDir, 'miniconda.sh');
+    
+    onProgress && onProgress('download', 0, '正在下载 Miniconda...');
+    
+    let lastError = null;
+    for (const url of urls) {
+      try {
+        await downloadFile(url, shPath, (percent) => {
+          onProgress && onProgress('download', percent, `正在下载 Miniconda... ${percent.toFixed(1)}%`);
+        });
+        lastError = null;
+        break;
+      } catch (err) {
+        console.warn(`镜像下载失败: ${url}`, err.message);
+        lastError = err;
+      }
+    }
+
+    if (lastError) {
+      throw new Error(`所有镜像下载失败: ${lastError.message}`);
+    }
+
+    onProgress && onProgress('install', 0, '正在安装 Miniconda...');
+    
+    // 静默安装
+    const installDir = path.join(embeddedDir, 'miniconda3');
+    return new Promise((resolve, reject) => {
+      exec(`bash "${shPath}" -b -p "${installDir}"`, {
+        timeout: 300000
+      }, (err, stdout, stderr) => {
+        if (err) {
+          console.error('Miniconda 安装失败:', stderr);
+          reject(err);
+        } else {
+          // 清理
+          try { fs.unlinkSync(shPath); } catch (e) { /* ignore */ }
+          onProgress && onProgress('done', 100, 'Python 安装完成');
+          resolve(path.join(installDir, 'bin', 'python3'));
+        }
+      });
+    });
+  }
+}
+
+/**
+ * 安装 Python 依赖
+ * @param {string} pythonExe - Python 可执行文件路径
+ * @param {string} requirementsPath - requirements.txt 路径
+ * @param {Function} onProgress - 进度回调
+ * @returns {Promise<void>}
+ */
+async function installPythonDependencies(pythonExe, requirementsPath, onProgress) {
+  return new Promise((resolve, reject) => {
+    onProgress && onProgress('deps', 0, '正在安装依赖...');
+    
+    const cmd = `"${pythonExe}" -m pip install -r "${requirementsPath}" --no-warn-script-location`;
+    exec(cmd, { timeout: 600000 }, (err, stdout, stderr) => {
+      if (err) {
+        console.error('依赖安装失败:', stderr);
+        reject(err);
+      } else {
+        onProgress && onProgress('deps', 100, '依赖安装完成');
+        resolve();
+      }
+    });
+  });
+}
+
 // 获取图标路径
 function getIconPath() {
   const appPath = getAppPath();
@@ -555,11 +874,23 @@ async function startPythonBackend() {
     return false;
   }
   
-  // 开发环境：验证 Python 可用性，不可用则搜索或让用户选择
+  // 开发环境：验证 Python 可用性，不可用则搜索或下载
   if (!app.isPackaged) {
     let resolvedPython = pythonExe;
     
-    // 验证当前 Python 路径
+    // 1. 检查嵌入式 Python 是否已安装
+    if (isEmbeddedPythonInstalled()) {
+      const embeddedExe = getEmbeddedPythonExe();
+      const embeddedValidation = await validatePython(embeddedExe);
+      if (embeddedValidation.valid) {
+        console.log(`使用已安装的嵌入式 Python: ${embeddedExe}`);
+        resolvedPython = embeddedExe;
+        store.set('pythonPath', embeddedExe);
+        return startPythonBackendWithExe(resolvedPython, backendPath);
+      }
+    }
+    
+    // 2. 验证当前 Python 路径
     const validation = await validatePython(resolvedPython);
     if (!validation.valid) {
       console.warn(`默认 Python 不可用: ${validation.error}，开始搜索...`);
@@ -571,61 +902,112 @@ async function startPythonBackend() {
         if (foundValidation.valid) {
           console.log(`自动找到 Python: ${found} (${foundValidation.version})`);
           resolvedPython = found;
-          // 保存到配置
           store.set('pythonPath', found);
         }
       }
     }
     
-    // 如果仍然没有可用的 Python，弹出选择对话框
+    // 3. 如果仍然没有可用的 Python，提供下载或手动选择
     if (!resolvedPython || !(await validatePython(resolvedPython)).valid) {
       const choice = dialog.showMessageBoxSync({
-        type: 'error',
+        type: 'question',
         title: '未找到 Python 解释器',
-        message: '未找到可用的 Python 解释器（需要 Python >= 3.10）',
-        detail: `已尝试自动搜索常见路径，未找到符合条件的 Python。\n\n请手动选择 Python 可执行文件路径。\n\n提示：\n- Windows: 通常在 C:\\Users\\<用户>\\AppData\\Local\\Programs\\Python\\Python313\\python.exe\n- macOS/Linux: 通常在 /usr/local/bin/python3 或 ~/miniconda3/bin/python3`,
-        buttons: ['选择 Python 路径...', '退出'],
+        message: '未检测到 Python 环境',
+        detail: 'FinHack Pro 需要 Python >= 3.10。\n\n您可以选择：\n• 自动下载：下载嵌入式 Python（约 15MB），无需管理员权限\n• 手动选择：使用已安装的 Python',
+        buttons: ['自动下载', '手动选择...', '退出'],
         defaultId: 0,
-        cancelId: 1,
+        cancelId: 2,
         noLink: true
       });
       
-      if (choice === 1) {
+      if (choice === 2) {
         app.quit();
         return false;
       }
       
-      // 打开文件选择对话框
-      const result = dialog.showOpenDialogSync({
-        title: '选择 Python 可执行文件',
-        filters: [{ name: 'Python', extensions: ['exe'] }, { name: '所有文件', extensions: ['*'] }],
-        properties: ['openFile']
-      });
-      
-      if (!result || result.length === 0) {
-        app.quit();
-        return false;
+      if (choice === 0) {
+        // 自动下载 Python
+        try {
+          // 发送进度到加载窗口
+          const sendProgress = (stage, percent, message) => {
+            if (loadWindow && !loadWindow.isDestroyed()) {
+              loadWindow.webContents.send('python-download-progress', {
+                stage, percent, message
+              });
+            }
+          };
+          
+          resolvedPython = await downloadAndInstallPython(sendProgress);
+          store.set('pythonPath', resolvedPython);
+          console.log(`Python 自动安装完成: ${resolvedPython}`);
+        } catch (err) {
+          dialog.showErrorBox(
+            'Python 下载失败',
+            `无法自动下载 Python：${err.message}\n\n请手动选择 Python 路径或检查网络连接。`
+          );
+          // 回退到手动选择
+          const fallbackChoice = dialog.showMessageBoxSync({
+            type: 'question',
+            title: '下载失败',
+            message: 'Python 自动下载失败',
+            buttons: ['手动选择...', '退出'],
+            defaultId: 0,
+            cancelId: 1
+          });
+          if (fallbackChoice === 1) {
+            app.quit();
+            return false;
+          }
+          // 继续手动选择流程
+          const result = dialog.showOpenDialogSync({
+            title: '选择 Python 可执行文件',
+            filters: [{ name: 'Python', extensions: ['exe'] }, { name: '所有文件', extensions: ['*'] }],
+            properties: ['openFile']
+          });
+          if (!result || result.length === 0) {
+            app.quit();
+            return false;
+          }
+          resolvedPython = result[0];
+          const selectedValidation = await validatePython(resolvedPython);
+          if (!selectedValidation.valid) {
+            dialog.showErrorBox('Python 版本不符合要求', selectedValidation.error);
+            app.quit();
+            return false;
+          }
+          store.set('pythonPath', resolvedPython);
+        }
+      } else {
+        // 手动选择
+        const result = dialog.showOpenDialogSync({
+          title: '选择 Python 可执行文件',
+          filters: [{ name: 'Python', extensions: ['exe'] }, { name: '所有文件', extensions: ['*'] }],
+          properties: ['openFile']
+        });
+        
+        if (!result || result.length === 0) {
+          app.quit();
+          return false;
+        }
+        
+        const selectedPath = result[0];
+        const selectedValidation = await validatePython(selectedPath);
+        
+        if (!selectedValidation.valid) {
+          dialog.showErrorBox(
+            'Python 版本不符合要求',
+            `选择的 Python 不符合要求：${selectedValidation.error}\n\n请选择 Python >= 3.10 的可执行文件。`
+          );
+          app.quit();
+          return false;
+        }
+        
+        console.log(`用户选择 Python: ${selectedPath} (${selectedValidation.version})`);
+        resolvedPython = selectedPath;
+        store.set('pythonPath', selectedPath);
       }
-      
-      const selectedPath = result[0];
-      const selectedValidation = await validatePython(selectedPath);
-      
-      if (!selectedValidation.valid) {
-        dialog.showErrorBox(
-          'Python 版本不符合要求',
-          `选择的 Python 不符合要求：${selectedValidation.error}\n\n请选择 Python >= 3.10 的可执行文件。`
-        );
-        app.quit();
-        return false;
-      }
-      
-      console.log(`用户选择 Python: ${selectedPath} (${selectedValidation.version})`);
-      resolvedPython = selectedPath;
-      store.set('pythonPath', selectedPath);
     }
     
-    // 更新 pythonExe 为找到/选择的路径
-    // 注意：这里需要用 resolvedPython 替代后续的 pythonExe
     return startPythonBackendWithExe(resolvedPython, backendPath);
   }
   
@@ -1011,6 +1393,22 @@ ipcMain.handle('python:browse', async () => {
   const selectedPath = result[0];
   const validation = await validatePython(selectedPath);
   return { path: selectedPath, ...validation };
+});
+
+ipcMain.handle('python:download', async (event) => {
+  try {
+    const pythonExe = await downloadAndInstallPython((stage, percent, message) => {
+      event.sender.send('python-download-progress', { stage, percent, message });
+    });
+    store.set('pythonPath', pythonExe);
+    return { success: true, path: pythonExe };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('python:isEmbeddedInstalled', () => {
+  return isEmbeddedPythonInstalled();
 });
 
 // 应用就绪

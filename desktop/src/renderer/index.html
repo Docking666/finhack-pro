@@ -76,6 +76,16 @@
       </div>
       <p id="pythonStatus" style="color:rgba(255,255,255,0.5); margin:8px 0 0 0; font-size:11px;"></p>
     </div>
+
+    <!-- Python 下载进度（默认隐藏） -->
+    <div id="pythonDownload" style="display:none; margin-top:20px; padding:16px; background:rgba(79,70,229,0.1); border-radius:8px; border:1px solid rgba(79,70,229,0.3); text-align:left; max-width:400px;">
+      <p style="color:#818cf8; margin:0 0 8px 0; font-size:13px;">⬇️ 正在下载 Python 环境</p>
+      <p id="downloadMessage" style="color:rgba(255,255,255,0.7); margin:0 0 8px 0; font-size:12px;">准备中...</p>
+      <div style="background:rgba(255,255,255,0.1); border-radius:4px; height:8px; overflow:hidden;">
+        <div id="downloadProgress" style="background:#4F46E5; height:100%; width:0%; transition:width 0.3s;"></div>
+      </div>
+      <p id="downloadPercent" style="color:rgba(255,255,255,0.5); margin:4px 0 0 0; font-size:11px; text-align:right;">0%</p>
+    </div>
   </div>
   
   <script>
@@ -170,6 +180,30 @@
         }
         if (data.progress !== undefined) {
           progressFill.style.width = data.progress + '%';
+        }
+      });
+      
+      // 监听 Python 下载进度
+      window.electronAPI.receive('python-download-progress', (data) => {
+        const downloadDiv = document.getElementById('pythonDownload');
+        const downloadMsg = document.getElementById('downloadMessage');
+        const downloadProg = document.getElementById('downloadProgress');
+        const downloadPct = document.getElementById('downloadPercent');
+        
+        if (downloadDiv) {
+          downloadDiv.style.display = 'block';
+        }
+        if (data.message) {
+          downloadMsg.textContent = data.message;
+        }
+        if (data.percent !== undefined) {
+          downloadProg.style.width = data.percent + '%';
+          downloadPct.textContent = data.percent.toFixed(1) + '%';
+        }
+        if (data.stage === 'done') {
+          setTimeout(() => {
+            downloadDiv.style.display = 'none';
+          }, 1000);
         }
       });
     }
