@@ -1551,6 +1551,81 @@ class MyStrategy(BaseStrategy):
 
 ## 配置说明
 
+### LLM API 配置教程
+
+FinHack Pro 支持所有兼容 OpenAI 格式的 LLM API，包括 OpenAI、SiliconFlow、DeepSeek、智谱 AI 等。
+
+#### 推荐服务商（国内可用）
+
+| 服务商 | 特点 | Base URL | 免费额度 |
+|--------|------|----------|----------|
+| **SiliconFlow** | 国内直连，延迟低 | `https://api.siliconflow.cn/v1` | 注册即送 14 元 |
+| **DeepSeek** | 推理能力强 | `https://api.deepseek.com/v1` | 注册即送 10 元 |
+| **智谱 AI** | GLM 系列模型 | `https://open.bigmodel.cn/api/paas/v4` | 新用户免费 |
+| **OpenAI** | 原版 GPT | `https://api.openai.com/v1` | 需海外支付 |
+
+#### 配置步骤（以 SiliconFlow 为例）
+
+1. **注册账号**
+   - 访问 https://cloud.siliconflow.cn/
+   - 使用手机号注册并完成验证
+
+2. **获取 API Key**
+   - 登录后进入「API 密钥」页面
+   - 点击「创建 API 密钥」
+   - 复制生成的 Key（格式：`sk-xxxxxxxx`）
+
+3. **配置到 FinHack**
+
+   **桌面版/WebUI：**
+   - 打开「API配置」页面
+   - API Key: 粘贴你的 `sk-xxx`
+   - Base URL: `https://api.siliconflow.cn/v1`
+   - 模型名称: `deepseek-ai/DeepSeek-V3`（或其他可用模型）
+   - 点击「测试连接」验证
+   - 保存配置
+
+   **配置文件方式（`config/default.yaml`）：**
+   ```yaml
+   llm:
+     provider: "openai"
+     openai_api_key: "sk-your-api-key"
+     openai_base_url: "https://api.siliconflow.cn/v1"
+     model: "deepseek-ai/DeepSeek-V3"
+     temperature: 0.7
+     max_tokens: 4096
+   ```
+
+4. **验证配置**
+   ```bash
+   # 测试 LLM 连接
+   curl -X POST http://localhost:8000/api/config/test-connection \
+     -H "Content-Type: application/json" \
+     -d '{
+       "provider": "openai",
+       "api_key": "sk-your-api-key",
+       "base_url": "https://api.siliconflow.cn/v1"
+     }'
+   ```
+
+#### 常用模型推荐
+
+| 模型 | 适用场景 | 价格 |
+|------|----------|------|
+| `deepseek-ai/DeepSeek-V3` | 综合分析 | 超低价 |
+| `deepseek-ai/DeepSeek-R1` | 深度推理 | 低价 |
+| `THUDM/glm-4-9b-chat` | 快速响应 | 免费 |
+| `Pro/moonshotai/Kimi-K2.6` | 长文本分析 | 中等 |
+
+#### 故障排查
+
+| 问题 | 解决方案 |
+|------|----------|
+| 连接超时 | 检查网络，国内用户建议使用 SiliconFlow/DeepSeek |
+| 401 认证失败 | API Key 错误或已过期，重新生成 |
+| 模型不存在 | 检查模型名称拼写，参考服务商文档 |
+| 余额不足 | 充值或切换到免费模型 |
+
 ### 最小配置（只需 LLM API Key）
 
 ```yaml
