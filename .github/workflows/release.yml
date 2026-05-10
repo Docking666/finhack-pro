@@ -70,24 +70,8 @@ jobs:
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Generated version: $VERSION"
-          export VERSION
-          # 回写版本号到所有文件（使用 Python 替代 sed，兼容 Linux/macOS/Windows）
-          python3 << 'PYEOF'
-import re, os
-version = os.environ["VERSION"]
-updates = {
-    "desktop/package.json": (r'"version": "[^"]*"', f'"version": "{version}"'),
-    "python/pyproject.toml": (r'^version = ".*"', f'version = "{version}"'),
-    "Cargo.toml": (r'^version = ".*"', f'version = "{version}"'),
-}
-for fp, (pat, repl) in updates.items():
-    with open(fp, "r") as f:
-        content = f.read()
-    content = re.sub(pat, repl, content, count=1, flags=re.MULTILINE)
-    with open(fp, "w") as f:
-        f.write(content)
-    print(f"Updated {fp} -> {version}")
-PYEOF
+          # 回写版本号到所有文件（Python 跨平台，兼容 Linux/macOS/Windows）
+          python3 -c 'import re,os;V=os.environ["VERSION"];[open(f,"w").write(re.sub(p,f"\"version\": \"{V}\""if"json"in f else f"version = \"{V}\"",open(f).read(),count=1,flags=re.M))or print(f"Updated {f}") for f,p in[("desktop/package.json",r"\"version\": \"[^\"]*\""),("python/pyproject.toml",r"^version = \".*\""),("Cargo.toml",r"^version = \".*\"")]]'
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v6
