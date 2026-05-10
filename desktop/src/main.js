@@ -11,7 +11,7 @@
  * 6. 应用退出时清理后端进程
  */
 
-const { app, BrowserWindow, Tray, Menu, dialog, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, dialog, shell, nativeImage, ipcMain } = require('electron');
 const path = require('path');
 const { spawn, exec } = require('child_process');
 const http = require('http');
@@ -57,21 +57,138 @@ function getBackendPath() {
   return path.join(appPath, '..', 'python');
 }
 
+// ============================================================================
+// Python 解释器搜索与检测
+// ============================================================================
+
+/**
+ * 在常见路径中搜索 Python 解释器
+ * @returns {string|null} 找到的 Python 路径，未找到返回 null
+ */
+function searchPythonOnSystem() {
+  const platform = process.platform;
+  const candidates = [];
+
+  if (platform === 'win32') {
+    // Windows: 搜索 PATH、常见安装目录、py launcher
+    // 1. 尝试 py launcher (Python 3.3+ 自带)
+    candidates.push('py', 'python', 'python3', 'python3.13', 'python3.12', 'python3.11', 'python3.10');
+    // 2. 常见安装路径
+    const localAppData = process.env.LOCALAPPDATA || '';
+    const programFiles = process.env.ProgramFiles || '';
+    const programFilesX86 = process.env.ProgramFiles(x86) || process.env['ProgramFiles(x86)'] || '';
+    const userHome = process.env.USERPROFILE || process.env.HOME || '';
+    const winCandidates = [
+      path.join(localAppData, 'Programs', 'Python', 'Python313', 'python.exe'),
+      path.join(localAppData, 'Programs', 'Python', 'Python312', 'python.exe'),
+      path.join(localAppData, 'Programs', 'Python', 'Python311', 'python.exe'),
+      path.join(localAppData, 'Programs', 'Python', 'Python310', 'python.exe'),
+      path.join(programFiles, 'Python313', 'python.exe'),
+      path.join(programFiles, 'Python312', 'python.exe'),
+      path.join(programFiles, 'Python311', 'python.exe'),
+      path.join(programFilesX86, 'Python313', 'python.exe'),
+      path.join(programFilesX86, 'Python312', 'python.exe'),
+      path.join(userHome, 'AppData', 'Local', 'Programs', 'Python', 'Python313', 'python.exe'),
+      path.join(userHome, 'AppData', 'Local', 'Programs', 'Python', 'Python312', 'python.exe'),
+      // Anaconda / Miniconda
+      path.join(userHome, 'anaconda3', 'python.exe'),
+      path.join(userHome, 'miniconda3', 'python.exe'),
+      path.join(localAppData, 'anaconda3', 'python.exe'),
+      path.join(localAppData, 'miniconda3', 'python.exe'),
+      path.join(programFiles, 'Anaconda3', 'python.exe'),
+      path.join(programFiles, 'Miniconda3', 'python.exe'),
+    ];
+    candidates.push(...winCandidates);
+  } else {
+    // macOS / Linux
+    candidates.push('python3', 'python3.13', 'python3.12', 'python3.11', 'python3.10', 'python');
+    const userHome = process.env.HOME || '';
+    const macCandidates = [
+      path.join(userHome, '.local', 'bin', 'python3'),
+      path.join('/usr/local/bin', 'python3'),
+      path.join('/opt/homebrew/bin', 'python3'),
+      // Anaconda / Miniconda
+      path.join(userHome, 'anaconda3', 'bin', 'python3'),
+      path.join(userHome, 'miniconda3', 'bin', 'python3'),
+      path.join(userHome, 'opt', 'anaconda3', 'bin', 'python3'),
+      path.join(userHome, 'opt', 'miniconda3', 'bin', 'python3'),
+    ];
+    candidates.push(...macCandidates);
+  }
+
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        return candidate;
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  // 对于 PATH 中的命令（不带路径分隔符的），用 which/where 检测
+  const pathCommands = candidates.filter(c => !path.isAbsolute(c));
+  for (const cmd of pathCommands) {
+    try {
+      const whichCmd = platform === 'win32' ? 'where' : 'which';
+      const result = require('child_process').execSync(`${whichCmd} ${cmd} 2>nul`, {
+        encoding: 'utf8',
+        timeout: 3000
+      }).trim();
+      if (result) {
+        const firstLine = result.split('\n')[0].trim();
+        if (firstLine) return firstLine;
+      }
+    } catch (e) { /* not found, ignore */ }
+  }
+
+  return null;
+}
+
+/**
+ * 验证 Python 解释器是否可用且版本 >= 3.10
+ * @param {string} pythonPath - Python 可执行文件路径
+ * @returns {Promise<{valid: boolean, version: string, error: string|null}>}
+ */
+function validatePython(pythonPath) {
+  return new Promise((resolve) => {
+    exec(`"${pythonPath}" --version`, { encoding: 'utf8', timeout: 5000 }, (err, stdout, stderr) => {
+      const output = (stdout || stderr || '').trim();
+      const match = output.match(/Python (\d+)\.(\d+)/);
+      if (!match) {
+        resolve({ valid: false, version: '', error: `无法获取 Python 版本: ${output || '无输出'}` });
+        return;
+      }
+      const major = parseInt(match[1]);
+      const minor = parseInt(match[2]);
+      if (major < 3 || (major === 3 && minor < 10)) {
+        resolve({ valid: false, version: output, error: `Python 版本过低 (${output})，需要 >= 3.10` });
+        return;
+      }
+      resolve({ valid: true, version: output, error: null });
+    });
+  });
+}
+
 // 获取 Python 可执行文件路径
 function getPythonExecutable() {
-  const backendPath = getBackendPath();
-  const platform = process.platform;
-  
+  // 1. 优先使用用户自定义路径
+  const customPath = store.get('pythonPath');
+  if (customPath && fs.existsSync(customPath)) {
+    return customPath;
+  }
+
+  // 2. 打包环境使用内置 Python
   if (app.isPackaged) {
+    const backendPath = getBackendPath();
+    const platform = process.platform;
     if (platform === 'win32') {
       return path.join(backendPath, 'python', 'python.exe');
     } else {
       return path.join(backendPath, 'python', 'bin', 'python3');
     }
   }
-  
-  // 开发环境使用系统 Python
-  return platform === 'win32' ? 'python' : 'python3';
+
+  // 3. 开发环境：在系统中搜索
+  return 'python'; // fallback，实际搜索在 startPythonBackend 中进行
 }
 
 // 获取图标路径
@@ -428,7 +545,7 @@ async function startPythonBackend() {
   const pythonExe = getPythonExecutable();
   const backendPath = getBackendPath();
   
-  // 检查 Python 是否存在
+  // 检查 Python 是否存在（打包环境）
   if (app.isPackaged && !fs.existsSync(pythonExe)) {
     dialog.showErrorBox(
       'Python 环境缺失',
@@ -436,6 +553,80 @@ async function startPythonBackend() {
     );
     app.quit();
     return false;
+  }
+  
+  // 开发环境：验证 Python 可用性，不可用则搜索或让用户选择
+  if (!app.isPackaged) {
+    let resolvedPython = pythonExe;
+    
+    // 验证当前 Python 路径
+    const validation = await validatePython(resolvedPython);
+    if (!validation.valid) {
+      console.warn(`默认 Python 不可用: ${validation.error}，开始搜索...`);
+      
+      // 自动搜索系统中的 Python
+      const found = searchPythonOnSystem();
+      if (found) {
+        const foundValidation = await validatePython(found);
+        if (foundValidation.valid) {
+          console.log(`自动找到 Python: ${found} (${foundValidation.version})`);
+          resolvedPython = found;
+          // 保存到配置
+          store.set('pythonPath', found);
+        }
+      }
+    }
+    
+    // 如果仍然没有可用的 Python，弹出选择对话框
+    if (!resolvedPython || !(await validatePython(resolvedPython)).valid) {
+      const choice = dialog.showMessageBoxSync({
+        type: 'error',
+        title: '未找到 Python 解释器',
+        message: '未找到可用的 Python 解释器（需要 Python >= 3.10）',
+        detail: `已尝试自动搜索常见路径，未找到符合条件的 Python。\n\n请手动选择 Python 可执行文件路径。\n\n提示：\n- Windows: 通常在 C:\\Users\\<用户>\\AppData\\Local\\Programs\\Python\\Python313\\python.exe\n- macOS/Linux: 通常在 /usr/local/bin/python3 或 ~/miniconda3/bin/python3`,
+        buttons: ['选择 Python 路径...', '退出'],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true
+      });
+      
+      if (choice === 1) {
+        app.quit();
+        return false;
+      }
+      
+      // 打开文件选择对话框
+      const result = dialog.showOpenDialogSync({
+        title: '选择 Python 可执行文件',
+        filters: [{ name: 'Python', extensions: ['exe'] }, { name: '所有文件', extensions: ['*'] }],
+        properties: ['openFile']
+      });
+      
+      if (!result || result.length === 0) {
+        app.quit();
+        return false;
+      }
+      
+      const selectedPath = result[0];
+      const selectedValidation = await validatePython(selectedPath);
+      
+      if (!selectedValidation.valid) {
+        dialog.showErrorBox(
+          'Python 版本不符合要求',
+          `选择的 Python 不符合要求：${selectedValidation.error}\n\n请选择 Python >= 3.10 的可执行文件。`
+        );
+        app.quit();
+        return false;
+      }
+      
+      console.log(`用户选择 Python: ${selectedPath} (${selectedValidation.version})`);
+      resolvedPython = selectedPath;
+      store.set('pythonPath', selectedPath);
+    }
+    
+    // 更新 pythonExe 为找到/选择的路径
+    // 注意：这里需要用 resolvedPython 替代后续的 pythonExe
+    return startPythonBackendWithExe(resolvedPython, backendPath);
   }
   
   // 检查后端目录是否存在
@@ -448,6 +639,11 @@ async function startPythonBackend() {
     return false;
   }
   
+  return startPythonBackendWithExe(pythonExe, backendPath);
+}
+
+// 使用指定 Python 路径启动后端
+function startPythonBackendWithExe(pythonExe, backendPath) {
   return new Promise((resolve, reject) => {
     console.log('正在启动 Python 后端...');
     console.log('Python 路径:', pythonExe);
@@ -748,6 +944,74 @@ function createTray() {
     }
   });
 }
+
+// ============================================================================
+// IPC 处理程序（配置存储 + Python 路径管理）
+// ============================================================================
+
+// 配置存储 IPC
+ipcMain.handle('store:get', (event, key) => {
+  return store.get(key);
+});
+
+ipcMain.handle('store:set', (event, key, value) => {
+  store.set(key, value);
+  return true;
+});
+
+ipcMain.handle('store:delete', (event, key) => {
+  store.delete(key);
+  return true;
+});
+
+ipcMain.handle('store:clear', () => {
+  store.clear();
+  return true;
+});
+
+// Python 路径管理 IPC
+ipcMain.handle('python:getPath', () => {
+  return store.get('pythonPath') || '';
+});
+
+ipcMain.handle('python:setPath', (event, pythonPath) => {
+  if (pythonPath && fs.existsSync(pythonPath)) {
+    store.set('pythonPath', pythonPath);
+    return { success: true, path: pythonPath };
+  }
+  return { success: false, error: '文件不存在' };
+});
+
+ipcMain.handle('python:detect', async () => {
+  const found = searchPythonOnSystem();
+  if (found) {
+    const validation = await validatePython(found);
+    return { found: true, path: found, ...validation };
+  }
+  return { found: false };
+});
+
+ipcMain.handle('python:validate', async (event, pythonPath) => {
+  if (!pythonPath || !fs.existsSync(pythonPath)) {
+    return { valid: false, error: '文件不存在' };
+  }
+  return validatePython(pythonPath);
+});
+
+ipcMain.handle('python:browse', async () => {
+  const result = dialog.showOpenDialogSync({
+    title: '选择 Python 可执行文件',
+    filters: [
+      { name: 'Python', extensions: ['exe'] },
+      { name: '所有文件', extensions: ['*'] }
+    ],
+    properties: ['openFile']
+  });
+  if (!result || result.length === 0) return null;
+  const selectedPath = result[0];
+  const validation = await validatePython(selectedPath);
+  return { path: selectedPath, ...validation };
+});
 
 // 应用就绪
 app.whenReady().then(async () => {

@@ -154,6 +154,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     set: (key, value) => ipcRenderer.invoke('store:set', key, value),
     delete: (key) => ipcRenderer.invoke('store:delete', key),
     clear: () => ipcRenderer.invoke('store:clear')
+  },
+
+  /**
+   * Python 解释器管理
+   */
+  python: {
+    /** 获取当前配置的 Python 路径 */
+    getPath: () => ipcRenderer.invoke('python:getPath'),
+    /** 设置 Python 路径 */
+    setPath: (pythonPath) => ipcRenderer.invoke('python:setPath', pythonPath),
+    /** 自动搜索系统中的 Python */
+    detect: () => ipcRenderer.invoke('python:detect'),
+    /** 验证指定路径的 Python 是否可用 */
+    validate: (pythonPath) => ipcRenderer.invoke('python:validate', pythonPath),
+    /** 打开文件选择对话框选择 Python */
+    browse: () => ipcRenderer.invoke('python:browse')
   }
 });
 

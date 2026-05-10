@@ -57,7 +57,24 @@
     
     <!-- 版本信息 -->
     <div class="version-section">
-      <p>版本 1.0.0</p>
+      <p>版本 2.2.0</p>
+    </div>
+
+    <!-- Python 配置提示（默认隐藏） -->
+    <div id="pythonConfig" style="display:none; margin-top:20px; padding:16px; background:rgba(255,255,255,0.05); border-radius:8px; border:1px solid rgba(255,255,255,0.1); text-align:left; max-width:400px;">
+      <p style="color:#f59e0b; margin:0 0 8px 0; font-size:13px;">⚠️ 未检测到 Python 环境</p>
+      <p style="color:rgba(255,255,255,0.7); margin:0 0 12px 0; font-size:12px;">
+        需要 Python >= 3.10 才能运行后端服务。请手动指定 Python 路径。
+      </p>
+      <div style="display:flex; gap:8px;">
+        <button id="btnAutoDetect" style="flex:1; padding:6px 12px; background:#4F46E5; color:white; border:none; border-radius:4px; cursor:pointer; font-size:12px;">
+          自动搜索
+        </button>
+        <button id="btnBrowsePython" style="flex:1; padding:6px 12px; background:#374151; color:white; border:none; border-radius:4px; cursor:pointer; font-size:12px;">
+          手动选择...
+        </button>
+      </div>
+      <p id="pythonStatus" style="color:rgba(255,255,255,0.5); margin:8px 0 0 0; font-size:11px;"></p>
     </div>
   </div>
   
@@ -93,6 +110,57 @@
     
     // 开始模拟加载
     simulateLoading();
+    
+    // Python 配置交互
+    const pythonConfig = document.getElementById('pythonConfig');
+    const pythonStatus = document.getElementById('pythonStatus');
+    const btnAutoDetect = document.getElementById('btnAutoDetect');
+    const btnBrowsePython = document.getElementById('btnBrowsePython');
+
+    if (btnAutoDetect) {
+      btnAutoDetect.addEventListener('click', async () => {
+        if (!window.electronAPI || !window.electronAPI.python) return;
+        pythonStatus.textContent = '正在搜索...';
+        try {
+          const result = await window.electronAPI.python.detect();
+          if (result.found && result.valid) {
+            pythonStatus.textContent = `✅ 找到 ${result.version}：${result.path}`;
+            pythonStatus.style.color = '#10b981';
+            await window.electronAPI.python.setPath(result.path);
+          } else if (result.found) {
+            pythonStatus.textContent = `❌ ${result.error}`;
+            pythonStatus.style.color = '#ef4444';
+          } else {
+            pythonStatus.textContent = '❌ 未找到，请手动选择';
+            pythonStatus.style.color = '#ef4444';
+          }
+        } catch (e) {
+          pythonStatus.textContent = '搜索失败: ' + e.message;
+          pythonStatus.style.color = '#ef4444';
+        }
+      });
+    }
+
+    if (btnBrowsePython) {
+      btnBrowsePython.addEventListener('click', async () => {
+        if (!window.electronAPI || !window.electronAPI.python) return;
+        pythonStatus.textContent = '请选择...';
+        try {
+          const result = await window.electronAPI.python.browse();
+          if (result && result.valid) {
+            pythonStatus.textContent = `✅ ${result.version}：${result.path}`;
+            pythonStatus.style.color = '#10b981';
+            await window.electronAPI.python.setPath(result.path);
+          } else if (result) {
+            pythonStatus.textContent = `❌ ${result.error}`;
+            pythonStatus.style.color = '#ef4444';
+          }
+        } catch (e) {
+          pythonStatus.textContent = '选择失败: ' + e.message;
+          pythonStatus.style.color = '#ef4444';
+        }
+      });
+    }
     
     // 监听主进程的加载状态更新
     if (window.electronAPI && window.electronAPI.receive) {
