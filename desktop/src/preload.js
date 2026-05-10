@@ -174,6 +174,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     download: () => ipcRenderer.invoke('python:download'),
     /** 检查嵌入式 Python 是否已安装 */
     isEmbeddedInstalled: () => ipcRenderer.invoke('python:isEmbeddedInstalled')
+  },
+
+  /**
+   * Rust 加速引擎管理
+   */
+  rust: {
+    /** 获取 Rust bridge 状态 */
+    getStatus: () => ipcRenderer.invoke('rust:getStatus'),
+    /** 启用/禁用 Rust 加速 */
+    setEnabled: (enabled) => ipcRenderer.invoke('rust:setEnabled', enabled),
+    /** 检查是否启用 */
+    isEnabled: () => ipcRenderer.invoke('rust:isEnabled'),
+    /** 编译 Rust bridge（开发环境） */
+    build: () => ipcRenderer.invoke('rust:build')
   }
 });
 

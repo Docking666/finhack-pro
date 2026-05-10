@@ -25,12 +25,15 @@ const store = new Store();
 let mainWindow = null;
 let tray = null;
 let pythonProcess = null;
+let rustProcess = null;
 let isQuitting = false;
 let loadWindow = null;
 
 // 配置常量
 const BACKEND_HOST = 'localhost';
 const BACKEND_PORT = 8000;
+const RUST_BRIDGE_HOST = 'localhost';
+const RUST_BRIDGE_PORT = 8080;
 const BACKEND_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
 const WINDOW_TITLE = 'FinHack Pro - 多智能体量化交易系统';
 const WINDOW_WIDTH = 1400;
@@ -1131,6 +1134,219 @@ function stopPythonBackend() {
   });
 }
 
+// ============================================================================
+// Rust 加速后端管理
+// ============================================================================
+
+/**
+ * 获取 Rust bridge 二进制文件路径
+ * - 打包环境: resources/backend/finhack-bridge(.exe)
+ * - 开发环境: target/release/finhack-bridge(.exe)
+ * @returns {string|null}
+ */
+function getRustBridgePath() {
+  const platform = process.platform;
+  const ext = platform === 'win32' ? '.exe' : '';
+
+  if (app.isPackaged) {
+    // 打包环境：从 extraResources 中查找
+    const appPath = app.getAppPath();
+    const candidates = [
+      path.join(appPath, '..', 'resources', 'backend', `finhack-bridge${ext}`),
+      path.join(appPath, 'resources', 'backend', `finhack-bridge${ext}`),
+      path.join(process.resourcesPath, 'backend', `finhack-bridge${ext}`),
+    ];
+    for (const p of candidates) {
+      if (fs.existsSync(p)) return p;
+    }
+    return null;
+  } else {
+    // 开发环境：从 target/release 查找
+    const projectRoot = path.join(__dirname, '..', '..');
+    const candidates = [
+      path.join(projectRoot, 'target', 'release', `finhack-bridge${ext}`),
+      path.join(projectRoot, 'target', 'debug', `finhack-bridge${ext}`),
+    ];
+    for (const p of candidates) {
+      if (fs.existsSync(p)) return p;
+    }
+    return null;
+  }
+}
+
+/**
+ * 检查 Rust bridge 是否可用
+ * @returns {Promise<{available: boolean, path: string|null, version: string|null, error: string|null}>}
+ */
+function checkRustBridge() {
+  return new Promise((resolve) => {
+    const bridgePath = getRustBridgePath();
+    if (!bridgePath) {
+      resolve({ available: false, path: null, version: null, error: '未找到 Rust bridge 二进制文件' });
+      return;
+    }
+
+    // 检查二进制是否可执行
+    if (!fs.existsSync(bridgePath)) {
+      resolve({ available: false, path: bridgePath, version: null, error: 'Rust bridge 文件不存在' });
+      return;
+    }
+
+    // 尝试调用健康检查接口
+    const url = `http://${RUST_BRIDGE_HOST}:${RUST_BRIDGE_PORT}/health`;
+    const http = require('http');
+    const req = http.get(url, { timeout: 2000 }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const info = JSON.parse(data);
+          resolve({ available: true, path: bridgePath, version: info.version || 'unknown', error: null });
+        } catch (e) {
+          resolve({ available: true, path: bridgePath, version: 'unknown', error: null });
+        }
+      });
+    });
+    req.on('error', () => {
+      // bridge 没在运行，但二进制存在，可以启动
+      resolve({ available: false, path: bridgePath, version: null, error: 'Rust bridge 未运行' });
+    });
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ available: false, path: bridgePath, version: null, error: 'Rust bridge 响应超时' });
+    });
+  });
+}
+
+/**
+ * 启动 Rust bridge 进程
+ * @returns {Promise<boolean>}
+ */
+function startRustBridge() {
+  return new Promise((resolve, reject) => {
+    const bridgePath = getRustBridgePath();
+    if (!bridgePath) {
+      console.log('未找到 Rust bridge，使用纯 Python 模式');
+      resolve(false);
+      return;
+    }
+
+    // 检查用户是否禁用了 Rust 加速
+    if (store.get('disableRust') === true) {
+      console.log('用户已禁用 Rust 加速');
+      resolve(false);
+      return;
+    }
+
+    console.log('正在启动 Rust bridge...');
+    console.log('Rust bridge 路径:', bridgePath);
+
+    const env = {
+      ...process.env,
+      BRIDGE_HOST: RUST_BRIDGE_HOST,
+      BRIDGE_PORT: String(RUST_BRIDGE_PORT),
+      RUST_LOG: 'info',
+    };
+
+    rustProcess = spawn(bridgePath, [], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+
+    rustProcess.stdout.on('data', (data) => {
+      console.log(`[Rust] ${data.toString().trim()}`);
+    });
+
+    rustProcess.stderr.on('data', (data) => {
+      const msg = data.toString().trim();
+      console.warn(`[Rust:warn] ${msg}`);
+    });
+
+    rustProcess.on('error', (err) => {
+      console.warn('Rust bridge 启动失败:', err.message);
+      rustProcess = null;
+      resolve(false);
+    });
+
+    rustProcess.on('exit', (code) => {
+      console.log(`Rust bridge 退出，代码: ${code}`);
+      rustProcess = null;
+    });
+
+    // 等待 bridge 就绪
+    let retries = 15;
+    const checkInterval = setInterval(() => {
+      const http = require('http');
+      http.get(`http://${RUST_BRIDGE_HOST}:${RUST_BRIDGE_PORT}/health`, { timeout: 1000 }, (res) => {
+        clearInterval(checkInterval);
+        console.log('Rust bridge 启动成功');
+        // 通知 Python 后端 bridge 地址
+        process.env.FINHACK_BRIDGE_URL = `http://${RUST_BRIDGE_HOST}:${RUST_BRIDGE_PORT}`;
+        store.set('rustEnabled', true);
+        resolve(true);
+      }).on('error', () => {
+        retries--;
+        if (retries <= 0) {
+          clearInterval(checkInterval);
+          console.warn('Rust bridge 启动超时，使用纯 Python 模式');
+          rustProcess = null;
+          resolve(false);
+        }
+      });
+    }, 500);
+  });
+}
+
+/**
+ * 停止 Rust bridge
+ */
+function stopRustBridge() {
+  return new Promise((resolve) => {
+    if (rustProcess) {
+      console.log('正在停止 Rust bridge...');
+      if (process.platform === 'win32') {
+        exec(`taskkill /pid ${rustProcess.pid} /T /F`, () => {
+          rustProcess = null;
+          resolve();
+        });
+      } else {
+        rustProcess.kill('SIGTERM');
+        setTimeout(() => {
+          if (rustProcess) rustProcess.kill('SIGKILL');
+          rustProcess = null;
+          resolve();
+        }, 3000);
+      }
+    } else {
+      resolve();
+    }
+  });
+}
+
+/**
+ * 编译 Rust bridge（开发环境）
+ * @param {Function} onProgress - 进度回调
+ * @returns {Promise<boolean>}
+ */
+function buildRustBridge(onProgress) {
+  return new Promise((resolve) => {
+    const projectRoot = path.join(__dirname, '..', '..');
+    onProgress && onProgress('build', 0, '正在编译 Rust 核心（首次可能需要 5-10 分钟）...');
+
+    const cmd = process.platform === 'win32' ? 'cargo build --release' : 'cargo build --release';
+    exec(cmd, {
+      cwd: projectRoot,
+      timeout: 600000, // 10 分钟超时
+    }, (err, stdout, stderr) => {
+      if (err) {
+        console.error('Rust 编译失败:', stderr);
+        onProgress && onProgress('error', 0, '编译失败');
+        resolve(false);
+      } else {
+        onProgress && onProgress('done', 100, 'Rust 核心编译完成');
+        resolve(true);
+      }
+    });
+  });
+}
+
 // 创建加载窗口
 function createLoadWindow() {
   loadWindow = new BrowserWindow({
@@ -1297,6 +1513,7 @@ function createTray() {
       label: '退出',
       click: async () => {
         isQuitting = true;
+        await stopRustBridge();
         await stopPythonBackend();
         app.quit();
       }
@@ -1411,6 +1628,31 @@ ipcMain.handle('python:isEmbeddedInstalled', () => {
   return isEmbeddedPythonInstalled();
 });
 
+// Rust bridge 管理 IPC
+ipcMain.handle('rust:getStatus', async () => {
+  return checkRustBridge();
+});
+
+ipcMain.handle('rust:setEnabled', (event, enabled) => {
+  store.set('disableRust', !enabled);
+  return true;
+});
+
+ipcMain.handle('rust:isEnabled', () => {
+  return store.get('disableRust') !== true;
+});
+
+ipcMain.handle('rust:build', async (event) => {
+  try {
+    const success = await buildRustBridge((stage, percent, message) => {
+      event.sender.send('rust-build-progress', { stage, percent, message });
+    });
+    return { success };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 // 应用就绪
 app.whenReady().then(async () => {
   console.log('FinHack Pro 正在启动...');
@@ -1425,6 +1667,25 @@ app.whenReady().then(async () => {
     
     // 第二步：启动 Python 后端
     await startPythonBackend();
+    
+    // 第三步：尝试启动 Rust 加速后端（可选，失败不阻塞）
+    try {
+      const rustStarted = await startRustBridge();
+      if (rustStarted) {
+        console.log('Rust 加速后端已启动');
+        // 通知加载窗口
+        if (loadWindow && !loadWindow.isDestroyed()) {
+          loadWindow.webContents.send('loading-status', {
+            message: 'Rust 加速引擎已就绪 🚀',
+            progress: 95
+          });
+        }
+      } else {
+        console.log('Rust 加速不可用，使用纯 Python 模式');
+      }
+    } catch (rustErr) {
+      console.warn('Rust 启动异常（不影响使用）:', rustErr.message);
+    }
     
     // 创建主窗口
     createMainWindow();
@@ -1464,6 +1725,7 @@ app.on('before-quit', async (event) => {
   if (!isQuitting) {
     event.preventDefault();
     isQuitting = true;
+    await stopRustBridge();
     await stopPythonBackend();
     app.quit();
   }
