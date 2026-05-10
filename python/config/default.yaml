@@ -1,0 +1,45 @@
+agent:
+  analysis_interval: 300
+  market_analyzer_model: gpt-4o
+  max_concurrent_symbols: 10
+  risk_manager_model: gpt-4o
+  strategy_generator_model: gpt-4o
+  trade_executor_model: gpt-4o
+backtest:
+  benchmark: 000300.SH
+  commission_rate: 0.0003
+  initial_capital: 1000000.0
+  slippage: 0.001
+  stamp_tax_rate: 0.001
+data:
+  cache_dir: data/cache
+  default_end: '2024-12-31'
+  default_start: '2020-01-01'
+  source: tushare
+  tushare_token: ''
+environment: backtest
+llm:
+  anthropic_api_key: ''
+  max_retries: 3
+  max_tokens: 4096
+  model: gpt-4o
+  openai_api_key: ''
+  openai_base_url: https://api.openai.com/v1
+  provider: openai
+  temperature: 0.3
+  timeout: 60
+log_file: logs/finhack_pro.log
+log_level: INFO
+risk:
+  max_daily_loss_pct: 0.05
+  max_drawdown_pct: 0.15
+  max_position_pct: 0.3
+  max_total_position_pct: 0.8
+  stop_loss_pct: 0.05
+  take_profit_pct: 0.1
+  var_confidence: 0.95
+rust_core:
+  api_key: ''
+  api_url: http://localhost:8080
+  timeout: 30
+  ws_url: ws://localhost:8081

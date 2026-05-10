@@ -7,9 +7,9 @@
             LLM配置
         </h3>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <!-- OpenAI API Key -->
+            <!-- API Key（统一） -->
             <div>
-                <label class="block text-xs text-gray-400 mb-1">OpenAI API Key</label>
+                <label class="block text-xs text-gray-400 mb-1">API Key</label>
                 <div class="relative">
                     <input type="password" x-model="config.llm.openai_api_key" placeholder="sk-..."
                            class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none pr-10">
@@ -17,14 +17,15 @@
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
                     </button>
                 </div>
+                <p class="mt-1 text-xs text-gray-500">兼容 OpenAI 格式的所有服务商（DeepSeek、通义千问、智谱等）</p>
             </div>
 
-            <!-- OpenAI Base URL -->
+            <!-- API Base URL -->
             <div>
                 <label class="block text-xs text-gray-400 mb-1">API 基础地址 (Base URL)</label>
                 <input type="text" x-model="config.llm.openai_base_url" placeholder="https://api.openai.com/v1"
                        class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
-                <p class="mt-1 text-xs text-gray-500">国内模型请填写对应地址，如 https://api.deepseek.com/v1</p>
+                <p class="mt-1 text-xs text-gray-500">国内常用: DeepSeek → https://api.deepseek.com/v1 | 智谱 → https://open.bigmodel.cn/api/paas/v4</p>
                 <button @click="testConnection('openai')" :disabled="testing.openai"
                         class="mt-1.5 text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
                     <template x-if="!testing.openai"><span>测试连接</span></template>
@@ -33,30 +34,12 @@
                 <span x-show="testResults.openai" class="ml-2 text-xs" :class="testResults.openai?.success ? 'text-green-400' : 'text-red-400'" x-text="testResults.openai?.message"></span>
             </div>
 
-            <!-- Anthropic API Key -->
-            <div>
-                <label class="block text-xs text-gray-400 mb-1">Anthropic API Key</label>
-                <div class="relative">
-                    <input type="password" x-model="config.llm.anthropic_api_key" placeholder="sk-ant-..."
-                           class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none pr-10">
-                    <button @click="togglePassword($event)" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
-                    </button>
-                </div>
-                <button @click="testConnection('anthropic')" :disabled="testing.anthropic"
-                        class="mt-1.5 text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
-                    <template x-if="!testing.anthropic"><span>测试连接</span></template>
-                    <template x-if="testing.anthropic"><span class="spinner !w-3 !h-3 !border-2"></span></template>
-                </button>
-                <span x-show="testResults.anthropic" class="ml-2 text-xs" :class="testResults.anthropic?.success ? 'text-green-400' : 'text-red-400'" x-text="testResults.anthropic?.message"></span>
-            </div>
-
-            <!-- 模型选择 -->
+            <!-- 模型名称 -->
             <div>
                 <label class="block text-xs text-gray-400 mb-1">模型名称</label>
-                <input type="text" x-model="config.llm.model" placeholder="例如: gpt-4o、claude-3-5-sonnet-20241022 或自定义模型"
+                <input type="text" x-model="config.llm.model" placeholder="例如: gpt-4o、deepseek-chat、glm-4-flash"
                        class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
-                <p class="mt-1 text-xs text-gray-500">支持任意符合 OpenAI 格式的模型，如 gpt-4o、deepseek-chat、qwen-max 等</p>
+                <p class="mt-1 text-xs text-gray-500">支持任意符合 OpenAI 格式的模型</p>
             </div>
 
             <!-- Temperature -->
@@ -77,14 +60,8 @@
                        class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
             </div>
 
-            <!-- Provider -->
-            <div>
-                <label class="block text-xs text-gray-400 mb-1">服务商</label>
-                <select x-model="config.llm.provider" class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
-                    <option value="openai">OpenAI</option>
-                    <option value="anthropic">Anthropic</option>
-                </select>
-            </div>
+            <!-- Provider（隐藏，保持兼容） -->
+            <input type="hidden" x-model="config.llm.provider" value="openai">
         </div>
     </div>
 
@@ -95,26 +72,44 @@
             数据源配置
         </h3>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <!-- 数据源选择 -->
             <div>
-                <label class="block text-xs text-gray-400 mb-1">Tushare Token</label>
-                <div class="relative">
-                    <input type="password" x-model="config.data.tushare_token" placeholder="输入Tushare Token"
-                           class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none pr-10">
-                    <button @click="togglePassword($event)" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
-                    </button>
-                </div>
-                <button @click="testConnection('tushare')" :disabled="testing.tushare"
-                        class="mt-1.5 text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
-                    <template x-if="!testing.tushare"><span>测试连接</span></template>
-                    <template x-if="testing.tushare"><span class="spinner !w-3 !h-3 !border-2"></span></template>
-                </button>
-                <span x-show="testResults.tushare" class="ml-2 text-xs" :class="testResults.tushare?.success ? 'text-green-400' : 'text-red-400'" x-text="testResults.tushare?.message"></span>
+                <label class="block text-xs text-gray-400 mb-1">数据源</label>
+                <select x-model="config.data.source"
+                        class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                    <option value="akshare">AkShare（免费，无需 Token）</option>
+                    <option value="tushare">Tushare（需要 Token）</option>
+                </select>
+                <p class="mt-1 text-xs" :class="config.data.source === 'akshare' ? 'text-green-400' : 'text-gray-500'">
+                    <template x-if="config.data.source === 'akshare'">当前使用 AkShare，无需配置 Token</template>
+                    <template x-if="config.data.source === 'tushare'">当前使用 Tushare，请填写 Token</template>
+                </p>
             </div>
+
+            <!-- 数据目录 -->
             <div>
                 <label class="block text-xs text-gray-400 mb-1">数据目录</label>
                 <input type="text" x-model="config.data.data_dir" placeholder="./data"
                        class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+            </div>
+
+            <!-- Tushare Token（Akshare 时禁用） -->
+            <div x-show="config.data.source === 'tushare'" class="md:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">Tushare Token</label>
+                <div class="relative">
+                    <input type="password" x-model="config.data.tushare_token" placeholder="输入Tushare Token"
+                           :disabled="config.data.source === 'akshare'"
+                           :class="config.data.source === 'akshare' ? 'w-full bg-[#0a0f1a] border border-[#1e293b] rounded-lg px-3 py-2 text-sm text-gray-600 cursor-not-allowed pr-10' : 'w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none pr-10'">
+                    <button @click="togglePassword($event)" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                    </button>
+                </div>
+                <button @click="testConnection('tushare')" :disabled="testing.tushare || config.data.source === 'akshare'"
+                        :class="config.data.source === 'akshare' ? 'mt-1.5 text-xs text-gray-600 cursor-not-allowed flex items-center gap-1' : 'mt-1.5 text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1'">
+                    <template x-if="!testing.tushare"><span>测试连接</span></template>
+                    <template x-if="testing.tushare"><span class="spinner !w-3 !h-3 !border-2"></span></template>
+                </button>
+                <span x-show="testResults.tushare" class="ml-2 text-xs" :class="testResults.tushare?.success ? 'text-green-400' : 'text-red-400'" x-text="testResults.tushare?.message"></span>
             </div>
         </div>
     </div>

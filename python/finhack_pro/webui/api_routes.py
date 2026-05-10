@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from finhack_pro.webui.models import (
     AgentInfo,
@@ -69,7 +69,7 @@ def _get_stream_service(request) -> StreamService:
 # ============================================================
 
 @router.get("/api/system/info", response_model=APIResponse)
-async def get_system_info(request):
+async def get_system_info(request: Request):
     """获取系统信息"""
     config_svc = _get_config_service(request)
     agent_svc = _get_agent_service(request)
@@ -106,7 +106,7 @@ async def get_system_info(request):
 
 
 @router.get("/api/system/health", response_model=APIResponse)
-async def health_check(request):
+async def health_check(request: Request):
     """健康检查"""
     components = {
         "api": "healthy",
@@ -146,7 +146,7 @@ async def health_check(request):
 # ============================================================
 
 @router.get("/api/config", response_model=APIResponse)
-async def get_config(request):
+async def get_config(request: Request):
     """获取当前配置(隐藏敏感字段)"""
     config_svc = _get_config_service(request)
     config = config_svc.get_config()
@@ -154,7 +154,7 @@ async def get_config(request):
 
 
 @router.get("/api/config/full", response_model=APIResponse)
-async def get_full_config(request):
+async def get_full_config(request: Request):
     """获取完整配置(包含敏感字段)"""
     config_svc = _get_config_service(request)
     config = config_svc.get_full_config()
@@ -162,7 +162,7 @@ async def get_full_config(request):
 
 
 @router.put("/api/config", response_model=APIResponse)
-async def update_config(request, updates: ConfigUpdate):
+async def update_config(request: Request, updates: ConfigUpdate):
     """更新配置"""
     config_svc = _get_config_service(request)
     update_dict = updates.model_dump(exclude_none=True)
@@ -171,7 +171,7 @@ async def update_config(request, updates: ConfigUpdate):
 
 
 @router.post("/api/config/test-connection", response_model=APIResponse)
-async def test_connection(request, req: ConnectionTestRequest):
+async def test_connection(request: Request, req: ConnectionTestRequest):
     """测试API连接"""
     config_svc = _get_config_service(request)
     result = await config_svc.test_connection(
@@ -183,7 +183,7 @@ async def test_connection(request, req: ConnectionTestRequest):
 
 
 @router.post("/api/config/save", response_model=APIResponse)
-async def save_config(request):
+async def save_config(request: Request):
     """保存配置到文件"""
     config_svc = _get_config_service(request)
     path = config_svc.save_config()
@@ -195,7 +195,7 @@ async def save_config(request):
 # ============================================================
 
 @router.post("/api/backtest/run", response_model=APIResponse)
-async def run_backtest(request, req: BacktestRequest):
+async def run_backtest(request: Request, req: BacktestRequest):
     """启动回测任务"""
     backtest_svc = _get_backtest_service(request)
     stream_svc = _get_stream_service(request)
@@ -215,7 +215,7 @@ async def run_backtest(request, req: BacktestRequest):
 
 
 @router.get("/api/backtest/{task_id}/status", response_model=APIResponse)
-async def get_backtest_status(request, task_id: str):
+async def get_backtest_status(request: Request, task_id: str):
     """获取回测状态"""
     backtest_svc = _get_backtest_service(request)
     status = backtest_svc.get_task_status(task_id)
@@ -225,7 +225,7 @@ async def get_backtest_status(request, task_id: str):
 
 
 @router.get("/api/backtest/{task_id}/result", response_model=APIResponse)
-async def get_backtest_result(request, task_id: str):
+async def get_backtest_result(request: Request, task_id: str):
     """获取回测结果"""
     backtest_svc = _get_backtest_service(request)
     result = backtest_svc.get_task_result(task_id)
@@ -235,7 +235,7 @@ async def get_backtest_result(request, task_id: str):
 
 
 @router.get("/api/backtest/history", response_model=APIResponse)
-async def get_backtest_history(request, limit: int = Query(20, ge=1, le=100)):
+async def get_backtest_history(request: Request, limit: int = Query(20, ge=1, le=100)):
     """获取历史回测列表"""
     backtest_svc = _get_backtest_service(request)
     history = backtest_svc.get_history(limit=limit)
@@ -247,7 +247,7 @@ async def get_backtest_history(request, limit: int = Query(20, ge=1, le=100)):
 # ============================================================
 
 @router.get("/api/agents/list", response_model=APIResponse)
-async def list_agents(request):
+async def list_agents(request: Request):
     """获取所有Agent列表和状态"""
     agent_svc = _get_agent_service(request)
     agents = await agent_svc.get_agent_list()
@@ -255,7 +255,7 @@ async def list_agents(request):
 
 
 @router.get("/api/agents/{agent_id}/status", response_model=APIResponse)
-async def get_agent_status(request, agent_id: str):
+async def get_agent_status(request: Request, agent_id: str):
     """获取单个Agent状态"""
     agent_svc = _get_agent_service(request)
     agent = await agent_svc.get_agent_status(agent_id)
@@ -265,7 +265,7 @@ async def get_agent_status(request, agent_id: str):
 
 
 @router.post("/api/agents/run-pipeline", response_model=APIResponse)
-async def run_pipeline(request, req: PipelineRunRequest):
+async def run_pipeline(request: Request, req: PipelineRunRequest):
     """触发一次完整的分析流水线"""
     agent_svc = _get_agent_service(request)
     stream_svc = _get_stream_service(request)
@@ -295,7 +295,7 @@ async def run_pipeline(request, req: PipelineRunRequest):
 
 
 @router.get("/api/agents/pipeline/history", response_model=APIResponse)
-async def get_pipeline_history(request, limit: int = Query(20, ge=1, le=100)):
+async def get_pipeline_history(request: Request, limit: int = Query(20, ge=1, le=100)):
     """获取流水线执行历史"""
     agent_svc = _get_agent_service(request)
     history = agent_svc.get_pipeline_history(limit=limit)
@@ -307,7 +307,7 @@ async def get_pipeline_history(request, limit: int = Query(20, ge=1, le=100)):
 # ============================================================
 
 @router.get("/api/memory/stats", response_model=APIResponse)
-async def get_memory_stats(request):
+async def get_memory_stats(request: Request):
     """获取记忆统计"""
     memory_svc = _get_memory_service(request)
     stats = await memory_svc.get_stats()
@@ -315,8 +315,7 @@ async def get_memory_stats(request):
 
 
 @router.get("/api/memory/search", response_model=APIResponse)
-async def search_memory(
-    request,
+async def search_memory(request: Request,
     memory_type: Optional[str] = Query(None),
     agent_id: Optional[str] = Query(None),
     keywords: Optional[str] = Query(None, description="逗号分隔的关键词"),
@@ -341,7 +340,7 @@ async def search_memory(
 
 
 @router.get("/api/memory/recent", response_model=APIResponse)
-async def get_recent_memory(request, limit: int = Query(20, ge=1, le=100)):
+async def get_recent_memory(request: Request, limit: int = Query(20, ge=1, le=100)):
     """获取最近记忆"""
     memory_svc = _get_memory_service(request)
     results = await memory_svc.get_recent(limit=limit)
@@ -349,7 +348,7 @@ async def get_recent_memory(request, limit: int = Query(20, ge=1, le=100)):
 
 
 @router.delete("/api/memory/{memory_id}", response_model=APIResponse)
-async def delete_memory(request, memory_id: str):
+async def delete_memory(request: Request, memory_id: str):
     """删除记忆"""
     memory_svc = _get_memory_service(request)
     success = await memory_svc.delete(memory_id)
@@ -363,7 +362,7 @@ async def delete_memory(request, memory_id: str):
 # ============================================================
 
 @router.get("/api/tools/list", response_model=APIResponse)
-async def list_tools(request):
+async def list_tools(request: Request):
     """获取所有可用工具"""
     agent_svc = _get_agent_service(request)
 
@@ -408,7 +407,7 @@ async def list_tools(request):
 
 
 @router.get("/api/tools/stats", response_model=APIResponse)
-async def get_tool_stats(request):
+async def get_tool_stats(request: Request):
     """获取工具调用统计"""
     agent_svc = _get_agent_service(request)
 
