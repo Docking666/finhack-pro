@@ -70,11 +70,24 @@ jobs:
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Generated version: $VERSION"
-          # 回写版本号到所有文件，确保构建产物使用正确版本
-          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" desktop/package.json
-          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" python/pyproject.toml
-          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
-          echo "Synced version to package.json, pyproject.toml, Cargo.toml"
+          export VERSION
+          # 回写版本号到所有文件（使用 Python 替代 sed，兼容 Linux/macOS/Windows）
+          python3 << 'PYEOF'
+import re, os
+version = os.environ["VERSION"]
+updates = {
+    "desktop/package.json": (r'"version": "[^"]*"', f'"version": "{version}"'),
+    "python/pyproject.toml": (r'^version = ".*"', f'version = "{version}"'),
+    "Cargo.toml": (r'^version = ".*"', f'version = "{version}"'),
+}
+for fp, (pat, repl) in updates.items():
+    with open(fp, "r") as f:
+        content = f.read()
+    content = re.sub(pat, repl, content, count=1, flags=re.MULTILINE)
+    with open(fp, "w") as f:
+        f.write(content)
+    print(f"Updated {fp} -> {version}")
+PYEOF
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v6
