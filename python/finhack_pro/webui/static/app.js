@@ -532,13 +532,24 @@ function configPage() {
             this.testResults[provider] = null;
             try {
                 let apiKey = null;
-                if (provider === 'openai') apiKey = this.config.llm.openai_api_key;
-                else if (provider === 'anthropic') apiKey = this.config.llm.anthropic_api_key;
-                else if (provider === 'tushare') apiKey = this.config.data.tushare_token;
+                let baseUrl = null;
+                if (provider === 'openai') {
+                    apiKey = this.config.llm.openai_api_key;
+                    baseUrl = this.config.llm.openai_base_url;
+                } else if (provider === 'anthropic') {
+                    apiKey = this.config.llm.anthropic_api_key;
+                } else if (provider === 'tushare') {
+                    apiKey = this.config.data.tushare_token;
+                }
 
-                const resp = await API.testConnection(provider, apiKey);
-                if (resp.success) {
+                const resp = await API.testConnection(provider, apiKey, baseUrl);
+                if (resp.success && resp.data) {
                     this.testResults[provider] = resp.data;
+                } else {
+                    this.testResults[provider] = { 
+                        success: false, 
+                        message: resp.message || '连接测试失败' 
+                    };
                 }
             } catch (e) {
                 this.testResults[provider] = { success: false, message: e.message };
