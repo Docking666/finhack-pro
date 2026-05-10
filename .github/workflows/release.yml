@@ -70,8 +70,16 @@ jobs:
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Generated version: $VERSION"
-          # 回写版本号到所有文件（Python 跨平台，兼容 Linux/macOS/Windows）
-          python3 -c 'import re,os;V=os.environ["VERSION"];[open(f,"w").write(re.sub(p,f"\"version\": \"{V}\""if"json"in f else f"version = \"{V}\"",open(f).read(),count=1,flags=re.M))or print(f"Updated {f}") for f,p in[("desktop/package.json",r"\"version\": \"[^\"]*\""),("python/pyproject.toml",r"^version = \".*\""),("Cargo.toml",r"^version = \".*\"")]]'
+          # 回写版本号（兼容 Linux GNU sed 和 macOS BSD sed）
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            SED_INPLACE="sed -i ''"
+          else
+            SED_INPLACE="sed -i"
+          fi
+          $SED_INPLACE "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" desktop/package.json
+          $SED_INPLACE "s/^version = \".*\"/version = \"$VERSION\"/" python/pyproject.toml
+          $SED_INPLACE "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          echo "Synced version $VERSION to all files"
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v6
