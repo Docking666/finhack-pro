@@ -353,8 +353,8 @@ class BacktestService:
 
             # 导入回测引擎和策略
             from finhack_pro.backtest.runner import BacktestRunner
-            from finhack_pro.strategies.dual_thrust import DualThrustStrategy
             from finhack_pro.data.fetcher import DataFetcher
+            from finhack_pro.strategies.dual_thrust import DualThrustStrategy
 
             # 获取市场数据
             fetcher = DataFetcher()
@@ -380,8 +380,8 @@ class BacktestService:
             except Exception as e:
                 logger.error(f"[Backtest {task_id}] 数据获取失败: {e}")
                 # 使用模拟数据作为fallback
-                import pandas as pd
                 import numpy as np
+                import pandas as pd
                 dates = pd.date_range(start=request.start_date, end=request.end_date, freq='B')
                 np.random.seed(42)
                 base_price = 100.0

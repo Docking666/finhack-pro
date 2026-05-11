@@ -137,6 +137,10 @@ class BacktestRequest(BaseModel):
     end_date: str = Field(..., description="结束日期 YYYY-MM-DD")
     initial_capital: float = Field(1_000_000.0, description="初始资金")
     benchmark: str = "000300.SH"
+    commission_rate: float = Field(0.0003, description="佣金费率")
+    stamp_tax_rate: float = Field(0.001, description="印花税率")
+    slippage: float = Field(0.001, description="滑点")
+    strategy_params: Optional[Dict[str, Any]] = Field(None, description="策略参数")
 
 
 class BacktestStatus(BaseModel):
