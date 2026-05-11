@@ -57,7 +57,7 @@
     
     <!-- 版本信息 -->
     <div class="version-section">
-      <p>版本 2.2.0</p>
+      <p id="versionText">版本加载中...</p>
     </div>
 
     <!-- Python 配置提示（默认隐藏） -->
@@ -93,7 +93,15 @@
     const loadingText = document.getElementById('loadingText');
     const progressFill = document.getElementById('progressFill');
     const progressText = document.getElementById('progressText');
-    
+    const versionText = document.getElementById('versionText');
+
+    // 动态获取版本号
+    if (window.electronAPI && window.electronAPI.version) {
+      versionText.textContent = '版本 ' + window.electronAPI.version;
+    } else {
+      versionText.textContent = '版本 2.2.4';
+    }
+
     // 加载阶段
     const loadingStages = [
       { message: '正在初始化应用...', progress: 5 },
