@@ -173,21 +173,19 @@ function validatePython(pythonPath) {
 
 // 获取 Python 可执行文件路径
 function getPythonExecutable() {
-  // 1. 优先使用用户自定义路径
+  // 1. 优先使用用户自定义路径（开发环境）
   const customPath = store.get('pythonPath');
   if (customPath && fs.existsSync(customPath)) {
     return customPath;
   }
 
-  // 2. 打包环境使用内置 Python
+  // 2. 打包环境使用 PyInstaller 打包的后端可执行文件
   if (app.isPackaged) {
     const backendPath = getBackendPath();
     const platform = process.platform;
-    if (platform === 'win32') {
-      return path.join(backendPath, 'python', 'python.exe');
-    } else {
-      return path.join(backendPath, 'python', 'bin', 'python3');
-    }
+    const ext = platform === 'win32' ? '.exe' : '';
+    // PyInstaller 打包的单文件可执行文件
+    return path.join(backendPath, `finhack-backend${ext}`);
   }
 
   // 3. 开发环境：在系统中搜索
@@ -867,14 +865,18 @@ async function startPythonBackend() {
   const pythonExe = getPythonExecutable();
   const backendPath = getBackendPath();
   
-  // 检查 Python 是否存在（打包环境）
-  if (app.isPackaged && !fs.existsSync(pythonExe)) {
-    dialog.showErrorBox(
-      'Python 环境缺失',
-      '未找到 Python 运行时环境。\n请重新安装应用程序。'
-    );
-    app.quit();
-    return false;
+  // 打包环境：直接检查 finhack-backend 可执行文件
+  if (app.isPackaged) {
+    if (!fs.existsSync(pythonExe)) {
+      dialog.showErrorBox(
+        '后端程序缺失',
+        `未找到后端可执行文件: ${pythonExe}\n请重新安装应用程序。`
+      );
+      app.quit();
+      return false;
+    }
+    // 打包环境直接启动 PyInstaller 可执行文件
+    return startPythonBackendWithExe(pythonExe, backendPath);
   }
   
   // 开发环境：验证 Python 可用性，不可用则搜索或下载
@@ -1034,25 +1036,41 @@ function startPythonBackendWithExe(pythonExe, backendPath) {
     console.log('Python 路径:', pythonExe);
     console.log('后端路径:', backendPath);
     
-    // 启动后端
-    const mainPyPath = path.join(backendPath, 'main.py');
+    // 判断是否是 PyInstaller 打包的可执行文件
+    const isPyInstallerExe = pythonExe.includes('finhack-backend') || !pythonExe.endsWith('.exe') || fs.existsSync(pythonExe.replace('.exe', ''));
     
-    // 检查 main.py 是否存在，如果不存在尝试其他入口文件
-    let entryFile = mainPyPath;
-    if (!fs.existsSync(mainPyPath)) {
-      // 尝试查找其他入口文件
-      const possibleEntries = ['app.py', 'run.py', 'server.py'];
-      for (const entry of possibleEntries) {
-        const entryPath = path.join(backendPath, entry);
-        if (fs.existsSync(entryPath)) {
-          entryFile = entryPath;
-          break;
+    let spawnArgs;
+    let spawnCwd;
+    
+    if (isPyInstallerExe && app.isPackaged) {
+      // PyInstaller 打包的可执行文件：直接运行，不需要参数
+      console.log('检测到 PyInstaller 可执行文件，直接启动...');
+      spawnArgs = [];
+      spawnCwd = path.dirname(pythonExe);
+    } else {
+      // 普通 Python 解释器：需要指定入口文件
+      const mainPyPath = path.join(backendPath, 'main.py');
+      
+      // 检查 main.py 是否存在，如果不存在尝试其他入口文件
+      let entryFile = mainPyPath;
+      if (!fs.existsSync(mainPyPath)) {
+        // 尝试查找其他入口文件
+        const possibleEntries = ['app.py', 'run.py', 'server.py'];
+        for (const entry of possibleEntries) {
+          const entryPath = path.join(backendPath, entry);
+          if (fs.existsSync(entryPath)) {
+            entryFile = entryPath;
+            break;
+          }
         }
       }
+      
+      spawnArgs = ['-u', entryFile];
+      spawnCwd = backendPath;
     }
     
-    pythonProcess = spawn(pythonExe, ['-u', entryFile], {
-      cwd: backendPath,
+    pythonProcess = spawn(pythonExe, spawnArgs, {
+      cwd: spawnCwd,
       env: {
         ...process.env,
         PYTHONUNBUFFERED: '1',
