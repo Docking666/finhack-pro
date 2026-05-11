@@ -7,7 +7,7 @@ module.exports = defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
-  reporter: 'html',
+  reporter: 'list',
   use: {
     baseURL: 'http://localhost:8000',
     trace: 'on-first-retry',
@@ -19,7 +19,7 @@ module.exports = defineConfig({
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
-          executablePath: '/usr/bin/chromium-browser',
+          executablePath: '/tmp/chrome-linux/chrome',
           args: ['--no-sandbox', '--disable-setuid-sandbox'],
         },
       },
