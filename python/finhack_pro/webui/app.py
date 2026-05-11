@@ -12,6 +12,8 @@ FinHack Pro WebUI - FastAPI主应用
 
 from __future__ import annotations
 
+import os
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -34,6 +36,24 @@ from finhack_pro.webui.services import (
 )
 from finhack_pro.webui.strategy_routes import router as strategy_router
 from finhack_pro.webui.ws_routes import router as ws_router
+
+
+def get_base_path():
+    """获取应用基础路径（兼容PyInstaller打包）"""
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包后的路径
+        return Path(sys._MEIPASS)
+    # 开发环境路径
+    return Path(__file__).parent.parent.parent  # 返回项目根目录
+
+
+def get_static_dir():
+    """获取静态文件目录（兼容PyInstaller打包）"""
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包后的路径：sys._MEIPASS/finhack_pro/webui/static
+        return Path(sys._MEIPASS) / "finhack_pro" / "webui" / "static"
+    # 开发环境路径
+    return Path(__file__).parent / "static"
 
 
 def create_app(config_path: Optional[str] = None) -> FastAPI:
@@ -78,9 +98,11 @@ def create_app(config_path: Optional[str] = None) -> FastAPI:
     app.include_router(ws_router)
 
     # ---- 静态文件目录 ----
-    static_dir = Path(__file__).parent / "static"
+    static_dir = get_static_dir()
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    else:
+        logger.warning(f"静态文件目录不存在: {static_dir}")
 
     # ---- 页面路由 ----
     @app.get("/", response_class=FileResponse)
