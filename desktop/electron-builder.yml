@@ -3,6 +3,10 @@ appId: com.finhack.pro
 productName: FinHack Pro
 copyright: Copyright (c) 2024 FinHack Team
 
+# 使用镜像加速 Electron 下载，避免 DNS 临时故障
+electronDownload:
+  mirror: https://npmmirror.com/mirrors/electron/
+
 directories:
   output: dist
   buildResources: assets

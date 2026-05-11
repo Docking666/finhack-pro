@@ -159,6 +159,10 @@ jobs:
         run: npm run ${{ matrix.build_cmd }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 使用镜像加速下载，避免 DNS 临时故障
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+          # 增加网络超时
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: List dist files
         run: |
