@@ -164,8 +164,9 @@ class FundamentalAnalystAgent(BaseAgent):
         report = await agent.analyze(symbol="600519.SH", financial_data=data)
     """
 
-    def __init__(self, config: Dict[str, Any]) -> None:
-        super().__init__(AgentRole("fundamental_analyst"), config)
+    def __init__(self, config: Dict[str, Any], shared_memory=None, tool_registry=None) -> None:
+        super().__init__(AgentRole("fundamental_analyst"), config,
+                         shared_memory=shared_memory, tool_registry=tool_registry)
         self._llm: Optional[LLMClient] = None
 
     async def on_init(self) -> None:

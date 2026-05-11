@@ -51,7 +51,7 @@ class ConfigService:
 
     def __init__(self, config_path: Optional[str] = None):
         self._config_path = config_path
-        self._config = get_config(config_path)
+        self._config = get_config(config_path, force_reload=True)
 
     def get_config(self) -> Dict[str, Any]:
         """获取当前配置(隐藏敏感字段)"""
@@ -578,6 +578,8 @@ class AgentService:
         Returns:
             流水线执行结果
         """
+        import json as _json
+
         run_id = uuid.uuid4().hex[:12]
         result = PipelineRunResult(
             run_id=run_id,
@@ -597,17 +599,27 @@ class AgentService:
 
         if self._coordinator:
             try:
-                # 定义流水线步骤
-                steps = [
-                    (1, "市场分析(技术面)", "market_analyzer"),
-                    (2, "新闻社媒分析", "news_analyst"),
-                    (3, "基本面分析", "fundamental_analyst"),
-                    (4, "策略生成(多空辩论)", "strategy_generator"),
-                    (5, "风控审批", "risk_manager"),
-                    (6, "交易执行", "trade_executor"),
+                logger.info(f"[Pipeline {run_id}] 开始执行真实分析流水线: {request.symbol}")
+
+                # 真正调用coordinator的分析流水线
+                pipeline_result = await self._coordinator.run_analysis_pipeline(
+                    symbol=request.symbol,
+                )
+
+                logger.info(f"[Pipeline {run_id}] Coordinator流水线完成")
+
+                # 将coordinator的7步结果映射为PipelineStepResult并推送
+                step_mappings = [
+                    (1, "市场分析(技术面)", "market_analyzer", "analysis"),
+                    (2, "新闻社媒分析", "news_analyst", "news_analysis"),
+                    (3, "基本面分析", "fundamental_analyst", "fundamental_analysis"),
+                    (4, "微观事件分析", "micro_event_agent", "micro_event_analysis"),
+                    (5, "策略生成(多空辩论)", "strategy_generator", "signal"),
+                    (6, "风控审批", "risk_manager", "risk_decision"),
+                    (7, "交易执行", "trade_executor", "execution"),
                 ]
 
-                for step_num, step_name, agent_id in steps:
+                for step_num, step_name, agent_id, result_key in step_mappings:
                     step_start = time.time()
                     step_result = PipelineStepResult(
                         step=step_num,
@@ -616,6 +628,7 @@ class AgentService:
                     )
                     result.steps.append(step_result)
 
+                    # 推送"正在思考"状态
                     if stream_callback:
                         await stream_callback({
                             "type": "agent_thinking",
@@ -623,95 +636,86 @@ class AgentService:
                             "step": step_num,
                             "agent_id": agent_id,
                             "agent_name": step_name,
-                            "content": f"正在执行 {step_name}...",
+                            "content": f"## {step_name}\n\n正在分析 {request.symbol} ...",
                         })
 
-                    # 模拟步骤执行(实际应调用coordinator)
-                    await asyncio.sleep(0.5)
+                    # 获取coordinator该步骤的真实结果
+                    step_data = pipeline_result.get(result_key)
 
-                    step_result.status = "completed"
-                    step_result.duration_ms = round((time.time() - step_start) * 1000, 2)
-                    step_result.summary = f"{step_name} 完成"
+                    if step_data is not None:
+                        step_result.status = "completed"
+                        step_result.duration_ms = round((time.time() - step_start) * 1000, 2)
 
-                    if stream_callback:
-                        await stream_callback({
-                            "type": "agent_thought",
-                            "run_id": run_id,
-                            "step": step_num,
-                            "agent_id": agent_id,
-                            "agent_name": step_name,
-                            "content": f"## {step_name}\n\n分析完成，耗时 {step_result.duration_ms}ms",
-                            "duration_ms": step_result.duration_ms,
-                        })
+                        # 生成人类可读的摘要
+                        summary = self._summarize_step(step_name, step_data)
+                        step_result.summary = summary
+
+                        # 推送真实的分析内容
+                        if stream_callback:
+                            content = self._format_step_content(step_name, step_data, step_result.duration_ms)
+                            await stream_callback({
+                                "type": "agent_thought",
+                                "run_id": run_id,
+                                "step": step_num,
+                                "agent_id": agent_id,
+                                "agent_name": step_name,
+                                "content": content,
+                                "duration_ms": step_result.duration_ms,
+                            })
+                        logger.info(f"[Pipeline {run_id}] Step {step_num}/7 {step_name} 完成")
+                    else:
+                        step_result.status = "skipped"
+                        step_result.duration_ms = 0
+                        step_result.summary = f"{step_name} 跳过(信号为HOLD或前置步骤无结果)"
+                        logger.info(f"[Pipeline {run_id}] Step {step_num}/7 {step_name} 跳过")
+
+                # 设置最终信号
+                signal_data = pipeline_result.get("signal")
+                if signal_data:
+                    result.final_signal = {
+                        "direction": signal_data.get("direction", "hold"),
+                        "confidence": signal_data.get("confidence", 0.0),
+                        "reason": signal_data.get("reasoning", ""),
+                    }
+                else:
+                    result.final_signal = {
+                        "direction": "hold",
+                        "confidence": 0.5,
+                        "reason": "无明确信号",
+                    }
 
                 result.status = "completed"
                 result.end_time = datetime.now().isoformat()
-                result.final_signal = {
-                    "direction": "hold",
-                    "confidence": 0.5,
-                    "reason": "综合分析后建议观望",
-                }
+                logger.info(f"[Pipeline {run_id}] 流水线完成: {result.final_signal}")
 
             except Exception as e:
                 result.status = "failed"
                 result.error = str(e)
                 result.end_time = datetime.now().isoformat()
-                logger.error(f"流水线执行失败: {e}")
+                logger.error(f"[Pipeline {run_id}] 流水线执行失败: {e}", exc_info=True)
+
+                if stream_callback:
+                    await stream_callback({
+                        "type": "pipeline_error",
+                        "run_id": run_id,
+                        "error": str(e),
+                    })
         else:
-            # 无协调器时模拟执行
-            steps = [
-                (1, "市场分析(技术面)", "market_analyzer"),
-                (2, "新闻社媒分析", "news_analyst"),
-                (3, "基本面分析", "fundamental_analyst"),
-                (4, "策略生成(多空辩论)", "strategy_generator"),
-                (5, "风控审批", "risk_manager"),
-                (6, "交易执行", "trade_executor"),
-            ]
+            # 无coordinator: 明确告知用户需要配置API
+            logger.warning(f"[Pipeline {run_id}] 无coordinator，无法执行真实分析")
+            if stream_callback:
+                await stream_callback({
+                    "type": "agent_thinking",
+                    "run_id": run_id,
+                    "step": 0,
+                    "agent_id": "system",
+                    "agent_name": "系统提示",
+                    "content": "## ⚠️ 未配置LLM API\n\n请在「API配置」页面填写 API Key 和 Base URL，\n然后点击「测试连接」确认可用。\n\n配置完成后重新运行分析流水线。",
+                })
 
-            for step_num, step_name, agent_id in steps:
-                step_start = time.time()
-                step_result = PipelineStepResult(
-                    step=step_num,
-                    agent_name=step_name,
-                    status="running",
-                )
-                result.steps.append(step_result)
-
-                if stream_callback:
-                    await stream_callback({
-                        "type": "agent_thinking",
-                        "run_id": run_id,
-                        "step": step_num,
-                        "agent_id": agent_id,
-                        "agent_name": step_name,
-                        "content": f"正在执行 {step_name}...",
-                    })
-
-                await asyncio.sleep(0.3)
-
-                step_result.status = "completed"
-                step_result.duration_ms = round((time.time() - step_start) * 1000, 2)
-                step_result.summary = f"{step_name} 完成"
-
-                if stream_callback:
-                    await stream_callback({
-                        "type": "agent_thought",
-                        "run_id": run_id,
-                        "step": step_num,
-                        "agent_id": agent_id,
-                        "agent_name": step_name,
-                        "content": f"## {step_name}\n\n模拟分析完成，耗时 {step_result.duration_ms}ms。\n\n"
-                                   f"当前市场状态: 震荡\n趋势方向: 横盘\n建议操作: 观望",
-                        "duration_ms": step_result.duration_ms,
-                    })
-
-            result.status = "completed"
+            result.status = "failed"
+            result.error = "未配置LLM API，无法执行分析。请在API配置页面填写API Key。"
             result.end_time = datetime.now().isoformat()
-            result.final_signal = {
-                "direction": "hold",
-                "confidence": 0.5,
-                "reason": "综合分析后建议观望",
-            }
 
         if stream_callback:
             await stream_callback({
@@ -736,6 +740,54 @@ class AgentService:
         self._running_pipelines.pop(run_id, None)
 
         return result
+
+    def _summarize_step(self, step_name: str, data: Any) -> str:
+        """从步骤数据中提取摘要"""
+        try:
+            if step_name == "市场分析(技术面)":
+                return f"趋势: {data.get('trend_direction', 'N/A')}, 状态: {data.get('market_state', 'N/A')}"
+            elif step_name == "新闻社媒分析":
+                return f"情感: {data.get('overall_sentiment', 'N/A')}, 分数: {data.get('sentiment_score', 0):.2f}"
+            elif step_name == "基本面分析":
+                return f"评级: {data.get('overall_rating', 'N/A')}, 分数: {data.get('rating_score', 0):.2f}"
+            elif step_name == "微观事件分析":
+                return f"事件数: {data.get('events_count', 0)}, 情绪变化: {data.get('sentiment_shift', 'N/A')}"
+            elif step_name == "策略生成(多空辩论)":
+                return f"方向: {data.get('direction', 'N/A')}, 置信度: {data.get('confidence', 0):.2f}"
+            elif step_name == "风控审批":
+                return "通过" if data.get("approved") else f"拒绝: {data.get('reasoning', '')[:50]}"
+            elif step_name == "交易执行":
+                return f"动作: {data.get('action', 'N/A')}, 价格: {data.get('price', 'N/A')}"
+            return f"{step_name} 完成"
+        except Exception:
+            return f"{step_name} 完成"
+
+    def _format_step_content(self, step_name: str, data: Any, duration_ms: float) -> str:
+        """将步骤数据格式化为可读的思考内容"""
+        try:
+            import json as _json
+            content = f"## {step_name}\n\n"
+            content += f"**耗时**: {duration_ms:.0f}ms\n\n"
+
+            if step_name == "策略生成(多空辩论)":
+                content += f"**方向**: {data.get('direction', 'N/A')}\n"
+                content += f"**置信度**: {data.get('confidence', 0):.2f}\n"
+                content += f"**理由**: {data.get('reasoning', 'N/A')}\n"
+            elif step_name == "风控审批":
+                content += f"**结果**: {'✅ 通过' if data.get('approved') else '❌ 拒绝'}\n"
+                content += f"**理由**: {data.get('reasoning', 'N/A')}\n"
+            elif step_name == "交易执行":
+                content += f"**动作**: {data.get('action', 'N/A')}\n"
+                content += f"**价格**: {data.get('price', 'N/A')}\n"
+                content += f"**数量**: {data.get('quantity', 'N/A')}\n"
+            else:
+                # 其他步骤：输出结构化数据的可读版本
+                for key, value in data.items():
+                    if key not in ("raw_data", "metadata"):
+                        content += f"**{key}**: {value}\n"
+            return content
+        except Exception:
+            return f"## {step_name}\n\n分析完成，耗时 {duration_ms:.0f}ms"
 
     def get_pipeline_history(self, limit: int = 20) -> List[Dict[str, Any]]:
         """获取流水线执行历史"""

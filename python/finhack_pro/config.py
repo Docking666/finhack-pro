@@ -86,6 +86,7 @@ class FinhackProConfig(BaseSettings):
         env_prefix="FINHACK_",
         env_nested_delimiter="__",
         case_sensitive=False,
+        extra="ignore",  # 忽略未知字段，避免YAML解析错误
     )
 
     # 运行环境: backtest / paper / live
@@ -133,17 +134,18 @@ class FinhackProConfig(BaseSettings):
 _global_config: Optional[FinhackProConfig] = None
 
 
-def get_config(config_path: Optional[str] = None) -> FinhackProConfig:
+def get_config(config_path: Optional[str] = None, force_reload: bool = False) -> FinhackProConfig:
     """获取全局配置实例
 
     Args:
         config_path: 配置文件路径，为None时使用默认配置
+        force_reload: 是否强制重新加载配置
 
     Returns:
         FinhackProConfig实例
     """
     global _global_config
-    if _global_config is None:
+    if _global_config is None or force_reload:
         if config_path:
             _global_config = FinhackProConfig.from_yaml(config_path)
         else:

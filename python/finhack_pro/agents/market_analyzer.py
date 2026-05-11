@@ -113,8 +113,9 @@ class MarketAnalyzerAgent(BaseAgent):
         report = await agent.analyze(symbol="600519.SH", market_data=df)
     """
 
-    def __init__(self, config: Dict[str, Any]) -> None:
-        super().__init__(AgentRole.MARKET_ANALYZER, config)
+    def __init__(self, config: Dict[str, Any], shared_memory=None, tool_registry=None) -> None:
+        super().__init__(AgentRole.MARKET_ANALYZER, config,
+                         shared_memory=shared_memory, tool_registry=tool_registry)
         self._llm: Optional[LLMClient] = None
 
     async def on_init(self) -> None:

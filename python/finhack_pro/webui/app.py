@@ -158,8 +158,10 @@ def create_app(config_path: Optional[str] = None) -> FastAPI:
             app.state.memory_service.set_shared_memory(coordinator.shared_memory)
             logger.info("Agent系统初始化成功")
         except Exception as e:
-            logger.warning(f"Agent系统初始化失败(不影响WebUI使用): {e}")
-            logger.info("WebUI将以演示模式运行")
+            import traceback
+            logger.error(f"Agent系统初始化失败: {e}")
+            logger.error(f"详细错误信息:\n{traceback.format_exc()}")
+            logger.info("WebUI将以受限模式运行(流水线功能不可用，请检查API配置)")
 
         logger.info("FinHack Pro WebUI 启动完成")
         logger.info("访问 http://localhost:8000 打开管理界面")

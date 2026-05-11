@@ -115,10 +115,21 @@ class AgentCoordinator:
         # ---- 创建所有Agent实例 ----
         agent_config = self.config.get("agents", {})
         llm_config = self.config.get("llm", {})
+        
+        # 调试日志：检查LLM配置是否正确传递
+        self._logger.info(f"LLM配置: provider={llm_config.get('provider')}, "
+                         f"api_key={'***' + llm_config.get('openai_api_key', '')[-4:] if llm_config.get('openai_api_key') else 'None'}, "
+                         f"base_url={llm_config.get('openai_base_url')}, "
+                         f"model={llm_config.get('model')}")
 
         def _merge_config(agent_specific: Dict[str, Any]) -> Dict[str, Any]:
             """合并LLM全局配置和Agent专属配置"""
             merged = {**llm_config, **agent_specific}
+            # 将 openai_api_key 映射为 api_key（Agent统一使用 api_key）
+            if "openai_api_key" in merged and "api_key" not in merged:
+                merged["api_key"] = merged["openai_api_key"]
+            if "openai_base_url" in merged and "base_url" not in merged:
+                merged["base_url"] = merged["openai_base_url"]
             return merged
 
         self._agents["market_analyzer"] = MarketAnalyzerAgent(

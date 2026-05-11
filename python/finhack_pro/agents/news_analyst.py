@@ -121,8 +121,9 @@ class NewsAnalystAgent(BaseAgent):
         report = await agent.analyze(symbol="600519.SH", news_data=news_list)
     """
 
-    def __init__(self, config: Dict[str, Any]) -> None:
-        super().__init__(AgentRole("news_analyst"), config)
+    def __init__(self, config: Dict[str, Any], shared_memory=None, tool_registry=None) -> None:
+        super().__init__(AgentRole("news_analyst"), config,
+                         shared_memory=shared_memory, tool_registry=tool_registry)
         self._llm: Optional[LLMClient] = None
 
     async def on_init(self) -> None:
