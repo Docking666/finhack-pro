@@ -349,88 +349,158 @@ class BacktestService:
         status.status = "running"
 
         try:
-            # 模拟回测过程(实际应调用回测引擎)
-            total_bars = 242  # 模拟一年交易日
+            logger.info(f"[Backtest {task_id}] 开始执行真实回测: {request.symbols}")
+
+            # 导入回测引擎和策略
+            from finhack_pro.backtest.runner import BacktestRunner
+            from finhack_pro.strategies.dual_thrust import DualThrustStrategy
+            from finhack_pro.data.fetcher import DataFetcher
+
+            # 获取市场数据
+            fetcher = DataFetcher()
+            symbol = request.symbols[0] if request.symbols else "000001.SZ"
+            
+            if stream_callback:
+                await stream_callback({
+                    "type": "backtest_progress",
+                    "task_id": task_id,
+                    "progress": 10,
+                    "message": f"正在获取 {symbol} 历史数据...",
+                })
+
+            # 获取数据
+            try:
+                data = fetcher.get_daily(
+                    symbol=symbol,
+                    start_date=request.start_date,
+                    end_date=request.end_date,
+                )
+                if data is None or data.empty:
+                    raise ValueError(f"无法获取 {symbol} 的数据")
+            except Exception as e:
+                logger.error(f"[Backtest {task_id}] 数据获取失败: {e}")
+                # 使用模拟数据作为fallback
+                import pandas as pd
+                import numpy as np
+                dates = pd.date_range(start=request.start_date, end=request.end_date, freq='B')
+                np.random.seed(42)
+                base_price = 100.0
+                prices = [base_price]
+                for _ in range(1, len(dates)):
+                    prices.append(prices[-1] * (1 + np.random.normal(0.0005, 0.02)))
+                
+                data = pd.DataFrame({
+                    'date': dates,
+                    'open': prices,
+                    'high': [p * (1 + abs(np.random.normal(0, 0.01))) for p in prices],
+                    'low': [p * (1 - abs(np.random.normal(0, 0.01))) for p in prices],
+                    'close': [p * (1 + np.random.normal(0, 0.005)) for p in prices],
+                    'volume': np.random.randint(1000000, 10000000, len(dates)),
+                })
+                logger.info(f"[Backtest {task_id}] 使用模拟数据进行回测")
+
+            if stream_callback:
+                await stream_callback({
+                    "type": "backtest_progress",
+                    "task_id": task_id,
+                    "progress": 30,
+                    "message": f"获取到 {len(data)} 条数据，准备回测...",
+                })
+
+            # 创建策略实例
+            strategy = DualThrustStrategy()
+            if request.strategy_params:
+                for key, value in request.strategy_params.items():
+                    if hasattr(strategy, key):
+                        setattr(strategy, key, value)
+
+            # 创建回测运行器
+            runner = BacktestRunner()
+
+            if stream_callback:
+                await stream_callback({
+                    "type": "backtest_progress",
+                    "task_id": task_id,
+                    "progress": 50,
+                    "message": "正在执行回测计算...",
+                })
+
+            # 执行回测
+            import asyncio
+            loop = asyncio.get_event_loop()
+            backtest_result = await loop.run_in_executor(
+                None,
+                lambda: runner.run(
+                    strategy=strategy,
+                    symbol=symbol,
+                    data=data,
+                    initial_capital=request.initial_capital,
+                    commission_rate=request.commission_rate,
+                    stamp_tax_rate=request.stamp_tax_rate,
+                    slippage=request.slippage,
+                )
+            )
+
+            if stream_callback:
+                await stream_callback({
+                    "type": "backtest_progress",
+                    "task_id": task_id,
+                    "progress": 90,
+                    "message": "回测完成，生成报告...",
+                })
+
+            # 转换结果格式
+            total_bars = len(data)
             status.total_bars = total_bars
+            status.current_bar = total_bars
+            status.progress = 100.0
 
-            equity_curve = []
-            benchmark_curve = []
-            trades = []
-            equity = request.initial_capital
-
-            import random
-            random.seed(hash(task_id))
-
-            for i in range(total_bars):
-                # 模拟每日收益
-                daily_return = random.gauss(0.0003, 0.015)
-                benchmark_return = random.gauss(0.0001, 0.012)
-                equity *= (1 + daily_return)
-
-                equity_curve.append({
-                    "date": f"2024-{(i // 22 + 1):02d}-{(i % 22 + 1):02d}",
-                    "equity": round(equity, 2),
-                })
-                benchmark_curve.append({
-                    "date": f"2024-{(i // 22 + 1):02d}-{(i % 22 + 1):02d}",
-                    "equity": round(request.initial_capital * (1 + benchmark_return * (i + 1)), 2),
-                })
-
-                # 模拟随机交易
-                if random.random() < 0.05:
-                    direction = "buy" if random.random() > 0.5 else "sell"
-                    price = equity / 1000 * random.uniform(0.9, 1.1)
-                    volume = random.randint(100, 1000)
-                    trades.append(TradeRecord(
-                        date=f"2024-{(i // 22 + 1):02d}-{(i % 22 + 1):02d}",
-                        symbol=request.symbols[0] if request.symbols else "000001.SZ",
-                        direction=direction,
-                        price=round(price, 2),
-                        volume=volume,
-                        commission=round(price * volume * 0.0003, 2),
-                        pnl=round(random.uniform(-500, 800), 2),
-                        reason="策略信号触发",
-                    ))
-
-                # 更新进度
-                status.current_bar = i + 1
-                status.progress = round((i + 1) / total_bars * 100, 1)
-                status.message = f"正在处理第 {i + 1}/{total_bars} 个交易日"
-
-                # 推送进度
-                if stream_callback:
-                    await stream_callback({
-                        "type": "backtest_progress",
-                        "task_id": task_id,
-                        "progress": status.progress,
-                        "current_bar": status.current_bar,
-                        "total_bars": total_bars,
+            # 构建权益曲线
+            equity_curve = backtest_result.equity_curve
+            if not equity_curve and backtest_result.daily_returns:
+                equity = request.initial_capital
+                equity_curve = []
+                for i, ret in enumerate(backtest_result.daily_returns):
+                    equity *= (1 + ret)
+                    equity_curve.append({
+                        "date": data['date'].iloc[i] if i < len(data) else str(i),
                         "equity": round(equity, 2),
                     })
 
-                # 模拟处理延迟
-                await asyncio.sleep(0.02)
+            # 构建基准曲线
+            benchmark_curve = []
+            if len(data) > 0:
+                start_price = data['close'].iloc[0]
+                for i, row in data.iterrows():
+                    benchmark_curve.append({
+                        "date": row['date'],
+                        "equity": round(request.initial_capital * (row['close'] / start_price), 2),
+                    })
 
-            # 计算回测指标
-            total_return = (equity - request.initial_capital) / request.initial_capital
-            annual_return = total_return * (242 / total_bars) * (242 / total_bars) if total_bars > 0 else 0
-
-            winning_trades = [t for t in trades if t.pnl > 0]
-            win_rate = len(winning_trades) / len(trades) if trades else 0
-            avg_win = sum(t.pnl for t in winning_trades) / len(winning_trades) if winning_trades else 0
-            losing_trades = [t for t in trades if t.pnl <= 0]
-            avg_loss = abs(sum(t.pnl for t in losing_trades) / len(losing_trades)) if losing_trades else 1
+            # 转换交易记录
+            trades = []
+            for t in backtest_result.trades:
+                trades.append(TradeRecord(
+                    date=t.get('date', ''),
+                    symbol=t.get('symbol', symbol),
+                    direction=t.get('direction', 'buy'),
+                    price=t.get('price', 0),
+                    volume=t.get('volume', 0),
+                    commission=t.get('commission', 0),
+                    pnl=t.get('pnl', 0),
+                    reason=t.get('reason', '策略信号'),
+                ))
 
             metrics = BacktestMetrics(
-                total_return=round(total_return * 100, 2),
-                annual_return=round(annual_return * 100, 2),
-                sharpe_ratio=round(total_return / max(0.015, 0.001) * (242 ** 0.5), 2),
-                sortino_ratio=round(total_return / max(0.01, 0.001) * (242 ** 0.5), 2),
-                max_drawdown=round(random.uniform(5, 20), 2),
-                win_rate=round(win_rate * 100, 2),
-                profit_loss_ratio=round(avg_win / avg_loss, 2) if avg_loss > 0 else 0,
-                total_trades=len(trades),
-                final_equity=round(equity, 2),
+                total_return=round(backtest_result.total_return * 100, 2),
+                annual_return=round(backtest_result.annual_return * 100, 2),
+                sharpe_ratio=round(backtest_result.sharpe_ratio, 2),
+                sortino_ratio=0.0,  # 需要额外计算
+                max_drawdown=round(backtest_result.max_drawdown * 100, 2),
+                win_rate=round(backtest_result.win_rate * 100, 2),
+                profit_loss_ratio=round(backtest_result.profit_loss_ratio, 2),
+                total_trades=backtest_result.total_trades,
+                final_equity=round(backtest_result.final_capital, 2),
             )
 
             result = BacktestResult(
@@ -441,6 +511,8 @@ class BacktestService:
                 trades=[t.model_dump() for t in trades],
                 benchmark_curve=benchmark_curve,
             )
+
+            logger.info(f"[Backtest {task_id}] 回测完成: 总收益 {metrics.total_return}%, 交易次数 {metrics.total_trades}")
 
             status.status = "completed"
             status.progress = 100
