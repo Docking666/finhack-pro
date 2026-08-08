@@ -245,8 +245,8 @@ class TestNicheStrategy:
 
     def _make_niche(self, niche_type: str = "event_driven"):
         from finhack_pro.strategies.niche_strategy import (
-            NicheStrategyConfig,
             NicheStrategy,
+            NicheStrategyConfig,
             NicheType,
         )
         config = NicheStrategyConfig(

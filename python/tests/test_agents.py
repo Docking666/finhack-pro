@@ -369,7 +369,7 @@ async def test_shared_memory_persistence_append(tmp_path):
     jsonl_files = list(persist_dir.glob("*.jsonl"))
     assert len(jsonl_files) == 1
     with open(jsonl_files[0], encoding="utf-8") as f:
-        lines = [l for l in f if l.strip()]
+        lines = [line for line in f if line.strip()]
     assert len(lines) == 3, f"持久化文件应包含 3 条记录，实际 {len(lines)} 条"
 
     # 第二次实例：模拟进程重启后重新加载

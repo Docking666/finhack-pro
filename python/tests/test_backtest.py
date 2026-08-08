@@ -121,10 +121,10 @@ class TestLookAheadProtection:
         lazy_b, phys_b = self._barrier_pair(df, cutoff)
 
         for lookback in [0, 1, 5, 30]:
-            l = lazy_b.get(lookback=lookback)
-            p = phys_b.get(lookback=lookback)
-            assert len(l) == len(p), f"lookback={lookback} 行数不一致"
-            assert (l["close"].to_numpy() == p["close"].to_numpy()).all()
+            lazy_result = lazy_b.get(lookback=lookback)
+            phys_result = phys_b.get(lookback=lookback)
+            assert len(lazy_result) == len(phys_result), f"lookback={lookback} 行数不一致"
+            assert (lazy_result["close"].to_numpy() == phys_result["close"].to_numpy()).all()
 
         # 最新一条一致
         assert lazy_b.get_latest()["close"] == phys_b.get_latest()["close"]

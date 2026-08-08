@@ -51,6 +51,8 @@ dev = [
     "pytest-cov>=4.0",
     "mypy>=1.5",
     "ruff>=0.1",
+    # 测试依赖：回测指标计算的 Python 回退路径需要 ta 库
+    "ta>=0.11",
 ]
 # Rust 加速（finhack-pyo3），仅开发构建需要
 rust = [
@@ -86,6 +88,11 @@ disable_error_code = ["arg-type", "index", "union-attr", "attr-defined", "var-an
 
 [[tool.mypy.overrides]]
 module = "tests.*"
+ignore_errors = true
+
+# numpy 2.x 的 .pyi 使用 Python 3.12+ 语法，mypy 以 3.10 target 解析会报错
+[[tool.mypy.overrides]]
+module = ["numpy.*", "numpy"]
 ignore_errors = true
 
 [tool.pytest.ini_options]

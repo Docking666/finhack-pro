@@ -770,8 +770,13 @@ class RustCoreBridge:
             except Exception as e:
                 logger.warning(f"[RustBridge] HTTP 指标计算失败: {e}，降级 Python")
         
-        # 3. Python 回退
-        import ta
+        # 3. Python 回退（ta 库；未安装时抛出清晰错误提示）
+        try:
+            import ta
+        except ImportError:
+            raise ImportError(
+                "计算技术指标需要 ta 库，请执行: pip install 'finhack-pro[accelerate]' 或 pip install ta"
+            )
         result = data.copy()
         for indicator in indicators:
             if indicator == "rsi":
