@@ -38,4 +38,5 @@ strip = true
 macos-deployment-target = "10.13"
 
 [tool.maturin.target.aarch64-apple-darwin]
-macos-deployment-target = "10.13"
+# arm64 架构最低要求 macOS 11.0，10.13 会生成非法 wheel tag
+macos-deployment-target = "11.0"
