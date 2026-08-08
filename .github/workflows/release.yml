@@ -110,18 +110,28 @@ jobs:
         working-directory: scripts
         run: python generate_preset_data.py
 
-      - name: Build Python backend (PyInstaller)
-        working-directory: python
-        run: pyinstaller pyinstaller.spec --clean --noconfirm
-        env:
-          PYTHONIOENCODING: utf-8
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build Rust bridge
         run: cargo build --release --package finhack-bridge
         shell: bash
+
+      - name: Build PyO3 accelerator (finhack-pyo3)
+        run: |
+          pip install maturin
+          cd crates/finhack-pyo3
+          maturin build --release --out ../../python/dist_wheels
+          pip install ../../python/dist_wheels/finhack_pyo3-*.whl
+        shell: bash
+
+      # PyInstaller 必须在 finhack-pyo3 编译之后执行，
+      # 以便 pyinstaller.spec 能收集到 .pyd/.so 动态库
+      - name: Build Python backend (PyInstaller)
+        working-directory: python
+        run: pyinstaller pyinstaller.spec --clean --noconfirm
+        env:
+          PYTHONIOENCODING: utf-8
 
       - name: Copy Rust bridge artifact (Windows)
         if: matrix.platform == 'win'
