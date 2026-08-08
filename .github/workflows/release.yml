@@ -121,7 +121,14 @@ jobs:
         run: |
           pip install maturin
           cd crates/finhack-pyo3
-          maturin build --release --out ../../python/dist_wheels
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            # macos-latest runner 为 arm64，但 setup-python 可能提供 x86_64 解释器，
+            # 构建 universal2 双架构 wheel 保证 pip 可安装
+            rustup target add x86_64-apple-darwin aarch64-apple-darwin
+            maturin build --release --universal2 --out ../../python/dist_wheels
+          else
+            maturin build --release --out ../../python/dist_wheels
+          fi
           pip install ../../python/dist_wheels/finhack_pyo3-*.whl
         shell: bash
 
