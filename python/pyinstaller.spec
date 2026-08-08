@@ -3,12 +3,20 @@
 FinHack Pro PyInstaller 打包配置
 """
 import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
 
 block_cipher = None
 
 # 自动收集所有依赖模块的子模块
 hiddenimports = []
+
+# 收集 finhack_pyo3 动态库（PyO3 扩展，.pyd/.so）
+# 该模块由 maturin 构建安装，release.yml 中会先编译再打包
+try:
+    hiddenimports.append('finhack_pyo3')
+    binaries = collect_dynamic_libs('finhack_pyo3')
+except Exception:
+    binaries = []
 
 # 收集 uvicorn 所有子模块
 hiddenimports.extend(collect_submodules('uvicorn'))
@@ -67,7 +75,7 @@ datas = [
 a = Analysis(
     ['finhack_pro/webui/standalone.py'],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
