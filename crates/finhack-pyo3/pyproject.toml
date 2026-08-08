@@ -31,7 +31,6 @@ dev = [
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
-python-source = "python"
 module-name = "finhack_pyo3"
 strip = true
 

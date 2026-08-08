@@ -2,11 +2,13 @@
 //!
 //! 零拷贝 Python-Rust 桥接，提供高性能计算能力。
 //! 所有函数都使用 catch_unwind 保护，防止 Rust panic 导致 Python 进程崩溃。
+//!
+//! 兼容 pyo3 0.24 / numpy 0.24 API（Bound API）。
 
 use pyo3::prelude::*;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::types::{PyDict, PyList};
-use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{PyReadonlyArray1};
 use rayon::prelude::*;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::time::Instant;
@@ -15,7 +17,8 @@ use std::time::Instant;
 // Panic 保护包装器
 // ============================================================================
 
-/// 将 Rust panic 转换为 Python 异常
+/// 将 Rust panic 转换为 Python 异常。
+/// 注意：调用方需先 `?` 解开内层 Result（PyErr 传播），再交给本函数处理 panic。
 fn unwrap_panic<T>(result: Result<T, Box<dyn std::any::Any + Send>>) -> PyResult<T> {
     match result {
         Ok(value) => Ok(value),
@@ -32,8 +35,17 @@ fn unwrap_panic<T>(result: Result<T, Box<dyn std::any::Any + Send>>) -> PyResult
     }
 }
 
+/// 包装一个可能 panic 的闭包，把 Result<T, PyErr> 双层解包为 PyResult<T>
+/// 闭包返回 Result<U, PyErr>：catch_unwind → Result<Result<U, PyErr>, Box<dyn Any+Send>>
+/// unwrap_panic 处理 panic 层（转 PyRuntimeError），外层 `?` 再解开 PyResult 层
+macro_rules! safe_call {
+    ($closure:expr) => {
+        unwrap_panic(catch_unwind(AssertUnwindSafe($closure)))?
+    };
+}
+
 // ============================================================================
-// 技术指标计算（纯 Rust 实现，复用 finhack-bridge 逻辑）
+// 技术指标计算（纯 Rust 实现）
 // ============================================================================
 
 /// RSI 计算
@@ -149,8 +161,8 @@ fn calculate_macd_impl(closes: &[f64]) -> Vec<Option<f64>> {
 }
 
 /// 布林带计算
-fn calculate_bollinger_impl(closes: &[f64], period: usize, std_dev: f64) 
-    -> (Vec<Option<f64>>, Vec<Option<f64>>, Vec<Option<f64>>) 
+fn calculate_bollinger_impl(closes: &[f64], period: usize, std_dev: f64)
+    -> (Vec<Option<f64>>, Vec<Option<f64>>, Vec<Option<f64>>)
 {
     let n = closes.len();
     let mut upper = vec![None; n];
@@ -253,7 +265,14 @@ fn run_single_backtest_impl(
     let commission_rate = 0.0003_f64;
     let slippage = 0.001_f64;
 
-    for i in slow_period..n {
+    // 循环起点取 slow/fast 的最大值，避免 fast > slow 时
+    // prev 窗口索引下溢（usize 减法为负 → panic）
+    let loop_start = slow_period.max(fast_period);
+    if loop_start >= n {
+        return default_result;
+    }
+
+    for i in loop_start..n {
         let fast_ma: f64 = closes[i + 1 - fast_period..=i].iter().sum::<f64>() / fast_period as f64;
         let slow_ma: f64 = closes[i + 1 - slow_period..=i].iter().sum::<f64>() / slow_period as f64;
 
@@ -356,13 +375,13 @@ fn get_rayon_threads() -> PyResult<usize> {
 }
 
 /// 批量计算技术指标
-/// 
+///
 /// Args:
 ///     closes: 收盘价数组
 ///     highs: 最高价数组（ATR 需要）
 ///     lows: 最低价数组（ATR 需要）
 ///     indicators: 需要计算的指标列表 ["rsi", "macd", "bollinger", "atr"]
-/// 
+///
 /// Returns:
 ///     dict: 各指标计算结果
 #[pyfunction]
@@ -374,110 +393,75 @@ fn calculate_indicators(
     lows: Option<PyReadonlyArray1<f64>>,
     indicators: Option<Vec<String>>,
 ) -> PyResult<PyObject> {
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let closes_slice = closes.as_slice()?;
+    safe_call!(|| -> PyResult<PyObject> {
+        let closes_slice = closes.as_slice().map_err(|e| PyValueError::new_err(e.to_string()))?;
         let indicators = indicators.unwrap_or_else(|| vec!["rsi".into(), "macd".into()]);
         let start = Instant::now();
 
-        let dict = pyo3::types::PyDict::new(py);
+        let dict = PyDict::new(py);
 
-        // 使用 rayon 并行计算多个指标
         let has_rsi = indicators.contains(&"rsi".to_string());
         let has_macd = indicators.contains(&"macd".to_string());
         let has_bb = indicators.contains(&"bollinger".to_string());
         let has_atr = indicators.contains(&"atr".to_string());
 
-        let (rsi_result, macd_result, bb_result, atr_result) = rayon::join(
+        // rayon 并行：两两分组。
+        // 注意：PyReadonlyArray 非 Sync，必须先提取 &[f64] 切片
+        // 再进入 rayon 闭包（&[f64] 是 Sync 的）。
+        let (rsi_result, macd_result) = rayon::join(
+            || if has_rsi { Some(calculate_rsi_impl(closes_slice, 14)) } else { None },
+            || if has_macd { Some(calculate_macd_impl(closes_slice)) } else { None },
+        );
+
+        let h_slice_opt: Option<&[f64]> = highs.as_ref().and_then(|h| h.as_slice().ok());
+        let l_slice_opt: Option<&[f64]> = lows.as_ref().and_then(|l| l.as_slice().ok());
+
+        let (bb_result, atr_result) = rayon::join(
+            || if has_bb { Some(calculate_bollinger_impl(closes_slice, 20, 2.0)) } else { None },
             || {
-                if has_rsi {
-                    Some(calculate_rsi_impl(closes_slice, 14))
+                if has_atr {
+                    if let (Some(hs), Some(ls)) = (h_slice_opt, l_slice_opt) {
+                        if hs.len() == closes_slice.len() && ls.len() == closes_slice.len() {
+                            return Some(calculate_atr_impl(hs, ls, closes_slice, 14));
+                        }
+                    }
+                    None
                 } else {
                     None
                 }
             },
-            || {
-                rayon::join(
-                    || {
-                        if has_macd {
-                            Some(calculate_macd_impl(closes_slice))
-                        } else {
-                            None
-                        }
-                    },
-                    || {
-                        rayon::join(
-                            || {
-                                if has_bb {
-                                    Some(calculate_bollinger_impl(closes_slice, 20, 2.0))
-                                } else {
-                                    None
-                                }
-                            },
-                            || {
-                                if has_atr {
-                                    if let (Some(h), Some(l)) = (&highs, &lows) {
-                                        let h_slice = h.as_slice()?;
-                                        let l_slice = l.as_slice()?;
-                                        if h_slice.len() == closes_slice.len() 
-                                            && l_slice.len() == closes_slice.len() 
-                                        {
-                                            Some(calculate_atr_impl(h_slice, l_slice, closes_slice, 14))
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            }
-                        )
-                    }
-                )
-            }
         );
 
-        // RSI
         if let Some(rsi) = rsi_result {
-            let rsi_py: Vec<Option<f64>> = rsi;
-            dict.set_item("rsi", rsi_py)?;
+            dict.set_item("rsi", rsi)?;
         }
-
-        // MACD
         if let Some(macd) = macd_result {
             dict.set_item("macd", macd)?;
         }
-
-        // Bollinger
         if let Some((upper, middle, lower)) = bb_result {
             dict.set_item("bb_upper", upper)?;
             dict.set_item("bb_middle", middle)?;
             dict.set_item("bb_lower", lower)?;
         }
-
-        // ATR
         if let Some(atr) = atr_result {
             dict.set_item("atr", atr)?;
         }
 
         dict.set_item("computation_time_ms", start.elapsed().as_secs_f64() * 1000.0)?;
 
-        Ok::<_, PyErr>(dict.into())
-    }));
-
-    unwrap_panic(result)
+        Ok(dict.into_any().unbind())
+    })
 }
 
 /// 批量回测
-/// 
+///
 /// Args:
 ///     closes: 收盘价数组
 ///     strategy_configs: 策略配置列表 [{"fast_period": 5, "slow_period": 20}, ...]
 ///     initial_capital: 初始资金
-/// 
+///
 /// Returns:
-///     list: 各策略回测结果
+///     dict: {"results": [...], "total_time_ms": ...}
 #[pyfunction]
 #[pyo3(signature = (closes, strategy_configs, initial_capital=1000000.0))]
 fn batch_backtest(
@@ -486,26 +470,32 @@ fn batch_backtest(
     strategy_configs: Vec<Py<PyDict>>,
     initial_capital: f64,
 ) -> PyResult<PyObject> {
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let closes_slice = closes.as_slice()?;
+    safe_call!(|| -> PyResult<PyObject> {
+        let closes_slice = closes.as_slice().map_err(|e| PyValueError::new_err(e.to_string()))?;
         let start = Instant::now();
 
-        // 解析策略配置
+        // 解析策略配置（宽松解析：缺失字段用默认值）
         let configs: Vec<(usize, usize)> = strategy_configs
             .iter()
             .map(|cfg| {
-                let dict = cfg.borrow(py);
-                let fast = dict.get_item("fast_period")
-                    .and_then(|v| v.extract::<usize>())
+                let dict = cfg.bind(py);
+                let fast = dict
+                    .get_item("fast_period")
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.extract::<usize>().ok())
                     .unwrap_or(5);
-                let slow = dict.get_item("slow_period")
-                    .and_then(|v| v.extract::<usize>())
+                let slow = dict
+                    .get_item("slow_period")
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.extract::<usize>().ok())
                     .unwrap_or(20);
                 (fast, slow)
             })
             .collect();
 
-        // 使用 rayon 并行回测
+        // rayon 并行回测
         let results: Vec<BacktestResult> = configs
             .par_iter()
             .map(|&(fast, slow)| {
@@ -515,7 +505,7 @@ fn batch_backtest(
 
         // 转换为 Python 对象
         let py_results = PyList::new(py, results.iter().map(|r| {
-            let dict = pyo3::types::PyDict::new(py);
+            let dict = PyDict::new(py);
             dict.set_item("total_return", r.total_return).unwrap();
             dict.set_item("max_drawdown", r.max_drawdown).unwrap();
             dict.set_item("sharpe_ratio", r.sharpe_ratio).unwrap();
@@ -523,27 +513,25 @@ fn batch_backtest(
             dict.set_item("winning_trades", r.winning_trades).unwrap();
             dict.set_item("losing_trades", r.losing_trades).unwrap();
             dict
-        }));
+        }))?;
 
-        let output = pyo3::types::PyDict::new(py);
+        let output = PyDict::new(py);
         output.set_item("results", py_results)?;
         output.set_item("total_time_ms", start.elapsed().as_secs_f64() * 1000.0)?;
 
-        Ok::<_, PyErr>(output.into())
-    }));
-
-    unwrap_panic(result)
+        Ok(output.into_any().unbind())
+    })
 }
 
 /// 并行信号计算（分治-聚合模式）
-/// 
+///
 /// Args:
 ///     symbols_data: 多标的数据 [{"symbol": "XXX", "closes": [...]}, ...]
 ///     fast_period: 快线周期
 ///     slow_period: 慢线周期
-/// 
+///
 /// Returns:
-///     list: 各标的信号计算结果
+///     dict: {"results": [...], "total_time_ms": ...}
 #[pyfunction]
 #[pyo3(signature = (symbols_data, fast_period=5, slow_period=20))]
 fn parallel_signal_compute(
@@ -552,27 +540,33 @@ fn parallel_signal_compute(
     fast_period: usize,
     slow_period: usize,
 ) -> PyResult<PyObject> {
-    let result = catch_unwind(AssertUnwindSafe(|| {
+    safe_call!(|| -> PyResult<PyObject> {
         let start = Instant::now();
 
         // 解析输入数据
         let parsed: Vec<(String, Vec<f64>)> = symbols_data
             .iter()
-            .filter_map(|data| {
-                let dict = data.borrow(py);
-                let symbol = dict.get_item("symbol")
-                    .and_then(|v| v.extract::<String>())
-                    .unwrap_or_else(|_| "UNKNOWN".to_string());
-                
-                let closes = dict.get_item("closes")
-                    .and_then(|v| v.extract::<Vec<f64>>())
+            .map(|data| {
+                let dict = data.bind(py);
+                let symbol = dict
+                    .get_item("symbol")
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.extract::<String>().ok())
+                    .unwrap_or_else(|| "UNKNOWN".to_string());
+
+                let closes = dict
+                    .get_item("closes")
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.extract::<Vec<f64>>().ok())
                     .unwrap_or_default();
-                
-                Some((symbol, closes))
+
+                (symbol, closes)
             })
             .collect();
 
-        // 使用 rayon 并行计算
+        // rayon 并行计算
         let results: Vec<(String, BacktestResult)> = parsed
             .par_iter()
             .map(|(symbol, closes)| {
@@ -583,30 +577,28 @@ fn parallel_signal_compute(
 
         // 转换为 Python 对象
         let py_results = PyList::new(py, results.iter().map(|(symbol, r)| {
-            let dict = pyo3::types::PyDict::new(py);
+            let dict = PyDict::new(py);
             dict.set_item("symbol", symbol).unwrap();
             dict.set_item("total_return", r.total_return).unwrap();
             dict.set_item("max_drawdown", r.max_drawdown).unwrap();
             dict.set_item("sharpe_ratio", r.sharpe_ratio).unwrap();
             dict.set_item("total_trades", r.total_trades).unwrap();
             dict
-        }));
+        }))?;
 
-        let output = pyo3::types::PyDict::new(py);
+        let output = PyDict::new(py);
         output.set_item("results", py_results)?;
         output.set_item("total_time_ms", start.elapsed().as_secs_f64() * 1000.0)?;
 
-        Ok::<_, PyErr>(output.into())
-    }));
-
-    unwrap_panic(result)
+        Ok(output.into_any().unbind())
+    })
 }
 
 /// 计算最大回撤
 #[pyfunction]
 fn calculate_max_drawdown(equity: PyReadonlyArray1<f64>) -> PyResult<f64> {
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let slice = equity.as_slice()?;
+    safe_call!(|| -> PyResult<f64> {
+        let slice = equity.as_slice().map_err(|e| PyValueError::new_err(e.to_string()))?;
         if slice.is_empty() {
             return Ok(0.0);
         }
@@ -618,30 +610,30 @@ fn calculate_max_drawdown(equity: PyReadonlyArray1<f64>) -> PyResult<f64> {
             if value > peak {
                 peak = value;
             }
-            let dd = (peak - value) / peak;
-            if dd > max_dd {
-                max_dd = dd;
+            if peak > 0.0 {
+                let dd = (peak - value) / peak;
+                if dd > max_dd {
+                    max_dd = dd;
+                }
             }
         }
 
-        Ok::<f64, PyErr>(max_dd)
-    }));
-
-    unwrap_panic(result)
+        Ok(max_dd)
+    })
 }
 
 /// 计算夏普比率
 #[pyfunction]
 fn calculate_sharpe_ratio(returns: PyReadonlyArray1<f64>, risk_free_rate: Option<f64>) -> PyResult<f64> {
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let slice = returns.as_slice()?;
+    safe_call!(|| -> PyResult<f64> {
+        let slice = returns.as_slice().map_err(|e| PyValueError::new_err(e.to_string()))?;
         if slice.len() < 2 {
             return Ok(0.0);
         }
 
         let rf = risk_free_rate.unwrap_or(0.0);
         let excess_returns: Vec<f64> = slice.iter().map(|r| r - rf).collect();
-        
+
         let mean: f64 = excess_returns.iter().sum::<f64>() / excess_returns.len() as f64;
         let variance: f64 = excess_returns
             .iter()
@@ -655,9 +647,7 @@ fn calculate_sharpe_ratio(returns: PyReadonlyArray1<f64>, risk_free_rate: Option
         } else {
             Ok(mean / std * 252.0_f64.sqrt())
         }
-    }));
-
-    unwrap_panic(result)
+    })
 }
 
 // ============================================================================
@@ -673,8 +663,8 @@ fn finhack_pyo3(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parallel_signal_compute, m)?)?;
     m.add_function(wrap_pyfunction!(calculate_max_drawdown, m)?)?;
     m.add_function(wrap_pyfunction!(calculate_sharpe_ratio, m)?)?;
-    
+
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    
+
     Ok(())
 }

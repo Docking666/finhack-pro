@@ -85,14 +85,21 @@ python -m finhack_pro.webui.app
 
 ### 方式三：完整模式（Rust + Python）
 
-> 需要编译 Rust 核心，适合需要极致性能的场景。
+> 需要编译 Rust 核心，适合需要极致性能的场景（指标计算/批量回测加速）。
 
 ```bash
 # 1. 安装 Rust (https://rustup.rs)
-# 2. 编译 Rust 核心
+# 2. 编译 Rust 核心 + PyO3 加速模块
 cargo build --release
 
-# 3. 其余步骤同方式二
+# 3. 编译 PyO3 绑定（指标/回测/回撤/夏普走 Rust，零拷贝共享内存）
+pip install maturin
+cd crates/finhack-pyo3
+maturin develop --release   # 安装进当前 Python 环境
+
+# 4. 其余步骤同方式二
+# 5. 验证 Rust 加速生效
+python -c "from finhack_pro.backtest import get_pyo3_isolated; print('Rust加速:', get_pyo3_isolated().is_available)"
 ```
 
 **环境要求汇总：**
@@ -252,15 +259,19 @@ FinHack Pro 是一个面向A股市场的多智能体量化交易系统，采用 
 │  共享记忆(SharedMemory, 17种类型) + 工具集(ToolRegistry, 14个)   │
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  🦀 Rust 核心层 (高性能引擎，可选)                                │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐           │
+│  🦀 Rust 核心层 (可选，PyO3 直连加速)                             │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐        │
 │  │finhack-core│ │finhack-bus │ │finhack-risk│ │finhack-execution│
-│  │ 核心类型  │ │ 消息总线  │ │ 风控引擎  │ │ 执行引擎  │           │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────┘           │
+│  │ 核心类型  │ │ 消息总线  │ │ 风控引擎  │ │ 执行引擎      │       │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────────┘        │
 │  ┌──────────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐   │
 │  │finhack-backtest│ │finhack-data│ │finhack-api │ │finhack-bridge│   │
 │  │ 回测引擎     │ │ 数据引擎  │ │ REST API │ │ Python桥接  │   │
 │  └──────────────┘ └──────────┘ └──────────┘ └──────────────┘   │
+│  ┌──────────────────┐                                          │
+│  │ finhack-pyo3     │  ← PyO3 零拷贝绑定（指标/批量回测/回撤/夏普）│
+│  │ 子进程隔离+共享内存 │                                        │
+│  └──────────────────┘                                          │
 │                                                                  │
 ├──────────────────────────────────────────────────────────────────┤
 │  🗄️ 基础设施（可选）                                             │
@@ -369,7 +380,7 @@ async def call_llm(prompt):
 
 | 组件 | 说明 |
 |------|------|
-| `DataBarrier` | 数据屏障：物理切片 DataFrame 到截止时间，拦截非法未来访问，抛出 `LookAheadError` |
+| `DataBarrier` | 数据屏障：按截止时间隔离数据访问，拦截非法未来访问，抛出 `LookAheadError` |
 | `PortfolioSnapshot` | 不可变组合快照：深拷贝 + SHA256 哈希校验，确保状态传递不可篡改 |
 | `EngineSnapshot` | 不可变引擎完整状态快照（portfolio, bar, signals, orders, fills, data_barrier） |
 | `LatencyConfig` | 延迟配置：data/compute/order/fill 四阶段延迟，自动计算总延迟 |
@@ -377,14 +388,29 @@ async def call_llm(prompt):
 | `TimeSliceContext` | 安全数据访问上下文：替代 `Context.data_feed`，提供 `get_history()` / `get_latest_bar()` |
 | `LookAheadError` | 未来函数访问异常（含 access_time / current_time 用于调试） |
 
+**隔离模式说明**：`DataBarrier` 支持两种隔离模式——
+
+- **逻辑隔离（lazy，默认）**：构造 O(1)，访问时通过二分定位（`np.searchsorted`）按截止时间截取，
+  单标的回测总复杂度 O(N log N)。时间序列未排序时自动降级为物理隔离。
+- **物理隔离（lazy=False）**：构造时立即切片并复制，返回的数据在物理上不包含未来行，内存开销 O(N²)。
+
+> ⚠️ 无论哪种模式，策略只能通过 `TimeSliceContext` 访问历史数据，时间上不可能拿到未来 bar。
+> 注意：Python 无法阻止策略在 `on_bar` 之外自行持有完整数据引用（语言限制），
+> 请勿在策略中缓存外部 DataFrame 后再用 `iloc`/`loc` 索引未来行。
+
 ### 双模式引擎
 
 | 模式 | 引擎 | 特点 | 适用场景 |
 |------|------|------|----------|
-| `VECTORIZED` | `VectorizedEngine` | 轻量级时间切片保护，性能开销 < 5% | 快速参数扫描、大规模回测 |
+| `VECTORIZED` | `VectorizedEngine` | 逻辑隔离时间切片（O(N log N)），性能开销低 | 快速参数扫描、大规模回测 |
 | `ASYNC_EVENT` | `AsyncEventEngine` | 完整延迟模拟 + 不可变快照 + 事件溯源 | 策略验证、合规审计 |
 
 **关键设计差异**：异步引擎中 `signal_time ≠ fill_time`，信号产生后经过延迟模拟才成交，使用成交时刻的价格执行。
+
+**性能实测**（DualThrust 策略，5 分钟线，本机基准）：
+时间切片保护开启相比关闭的额外开销约 40%~70%（3,000 bars 耗时 0.35s），
+相比旧的逐 bar 物理切片实现（O(N²)，3,000 bars 耗时 6.2s）加速约 18 倍。
+保护成本换来的是物理上不可能产生未来函数的结果可信度。
 
 ### 引擎工厂 (`backtest/engine_factory.py`)
 
@@ -489,9 +515,29 @@ max_dd, dd_curve = _calculate_drawdown_numpy(equity_array)
 
 ---
 
-## Rust 核心桥接服务
+## Rust 加速层
 
-### 架构
+Rust 加速有两条路径，按性能优先顺序自动选择：
+
+### 路径一：PyO3 零拷贝绑定（`finhack-pyo3`，推荐）
+
+```
+Python (finhack_pro)                 Rust (finhack-pyo3)
+┌──────────────────────┐            ┌──────────────────────────┐
+│ PyO3Isolated (子进程) │──共享内存──→│ RSI/MACD/BB/ATR 指标计算   │
+│ 自动检测/自动降级     │←──结果──────│ 批量回测 (rayon 并行策略)   │
+│                      │            │ 并行信号 (rayon 并行标的)   │
+└──────────────────────┘            │ 最大回撤 / 夏普比率        │
+                                    └──────────────────────────┘
+```
+
+- 通过 `maturin` 编译为原生扩展模块（`pip install maturin && maturin develop --release`）
+- `PyO3Isolated` 将模块加载到**独立子进程**，Rust panic 只杀子进程不崩主进程，
+  数据经共享内存传输，避免 Python↔Rust 序列化开销
+- 子进程崩溃自动重启，最多 3 次
+- 模块不可用时自动降级（见下方三级降级）
+
+### 路径二：HTTP 桥接服务（`finhack-bridge`）
 
 ```
 Python (finhack_pro)                    Rust (finhack-bridge)
@@ -505,43 +551,48 @@ Python (finhack_pro)                    Rust (finhack-bridge)
                                         rayon 数据并行
 ```
 
+HTTP 路径端到端包含 Python→JSON→HTTP 序列化开销，适合 bridge 独立部署（如桌面端打包场景）；
+Python 进程内计算优先走 PyO3。
+
 ### 三级降级策略
 
 ```
-RustCoreBridge
-  ├── Rust 服务可用？ → HTTP 调用 Rust（毫秒级计算）
-  ├── Rust 不可用？   → Python ta 库回退（正常速度）
-  └── ta 库不可用？   → 纯 NumPy 回退（基础功能）
+Rust 加速
+  ├── finhack_pyo3 可用？ → 共享内存直连（零拷贝，最快）
+  ├── finhack-bridge 可用？ → HTTP 调用（毫秒级计算）
+  └── 都不可用？       → Python 回退（ta 库 → 纯 NumPy）
 ```
 
 ### 桥接接口
 
 | 接口 | 方法 | 说明 | Rust 内部实现 |
 |------|------|------|---------------|
-| `batch_calculate_indicators()` | POST | 批量技术指标（RSI/MACD/BB/ATR） | rayon 并行计算多指标 |
-| `batch_backtest()` | POST | 批量回测（多策略并行） | rayon par_iter 并行策略 |
-| `parallel_signal_compute()` | POST | 并行信号计算（分治-聚合） | rayon par_iter 并行标的 |
+| `calculate_indicators()` | 共享内存 | 批量技术指标（RSI/MACD/BB/ATR） | rayon 并行计算多指标 |
+| `batch_backtest()` | 共享内存 | 批量回测（多策略并行） | rayon par_iter 并行策略 |
+| `parallel_signal_compute()` | 共享内存 | 并行信号计算（分治-聚合） | rayon par_iter 并行标的 |
+| `calculate_max_drawdown()` | 共享内存 | 最大回撤 | 单遍扫描 O(N) |
+| `calculate_sharpe_ratio()` | 共享内存 | 夏普比率 | 单遍统计 O(N) |
 
 ### 使用方式
 
 ```python
-from finhack_pro.backtest import get_rust_bridge
+from finhack_pro.backtest import get_pyo3_isolated, get_rust_bridge
 
+# PyO3（优先）：指标计算走 Rust，返回 (status, result)
+rust = get_pyo3_isolated()
+if rust.is_available:
+    status, result = rust.calculate_indicators(
+        df["close"].to_numpy(),
+        df["high"].to_numpy(),
+        df["low"].to_numpy(),
+        ["rsi", "macd", "bollinger", "atr"],
+    )
+    print(f"Rust指标计算: {status}, rsi={len(result.get('rsi', []))} 个值")
+
+# HTTP bridge（降级路径）
 bridge = get_rust_bridge()
-print(f"Rust可用: {bridge.is_rust_available}")
-
-# 批量指标计算（Rust可用时自动走Rust）
-result_df = bridge.batch_calculate_indicators(data, ["rsi", "macd", "bollinger", "atr"])
-
-# 批量回测
-configs = [
-    {"name": "MA_5_20", "fast_period": 5, "slow_period": 20},
-    {"name": "MA_10_30", "fast_period": 10, "slow_period": 30},
-]
-results = bridge.batch_backtest(configs, data, initial_capital=1_000_000)
-
-# 并行信号计算（分治-聚合）
-results = bridge.parallel_signal_compute(data, symbols, strategy_factory, snapshot)
+if bridge.is_rust_available:
+    result_df = bridge.batch_calculate_indicators(data, ["rsi", "macd"])
 ```
 
 ### 环境变量
@@ -552,15 +603,19 @@ results = bridge.parallel_signal_compute(data, symbols, strategy_factory, snapsh
 | `BRIDGE_HOST` | `0.0.0.0` | Rust 服务监听地址 |
 | `BRIDGE_PORT` | `8080` | Rust 服务监听端口 |
 
-### 性能参考（10000 bars）
+### 性能实测（10000 bars，本机 12 核）
 
-| 操作 | Rust 内部计算 | 端到端（含HTTP） | Python 回退 |
-|------|--------------|-----------------|-------------|
-| 4 指标并行计算 | 0.6ms | ~5ms | ~41ms |
-| 5 策略批量回测 | 0.27ms | ~5ms | N/A |
-| 10 标的并行信号 | <0.1ms/标的 | ~5ms | ~2500ms |
+| 操作 | Rust 计算 | Python 回退 | 加速比 |
+|------|-----------|-------------|--------|
+| RSI/MACD/BB/ATR 并行计算 | 2.4ms | 159ms | **~67x** |
+| 50 策略批量回测（rayon） | 2.7ms | 5611ms | **~2000x** |
+| 10 标的并行信号 | <1ms/标的 | ~250ms/标的 | ~250x |
+| 最大回撤 / 夏普比率 | 0.06ms | 0.17ms | ~2.7x（数值一致 ✓） |
 
-> **注意**：端到端延迟包含 Python→JSON→HTTP 序列化开销。Rust 计算本身极快，瓶颈在数据传输层。未来可通过 PyO3 绑定消除此开销。
+运行方式：`python scripts/benchmark_rust.py --bars 10000 --strategies 50`
+
+> **注意**：PyO3 通过共享内存+子进程隔离传输数据，无 HTTP 序列化开销。
+> 若 Rust 层不可用，系统自动降级到 Python 实现，功能不受影响。
 
 ---
 
