@@ -17,7 +17,7 @@ version = "2.2.0"
 edition = "2021"
 authors = ["FinHack Team"]
 license = "MIT"
-repository = "https://github.com/finhack-pro/finhack-pro"
+repository = "https://github.com/Docking666/finhack-pro"
 description = "高性能多智能体量化交易系统核心引擎"
 
 [workspace.dependencies]

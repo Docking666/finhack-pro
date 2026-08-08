@@ -82,6 +82,90 @@ class TestDataBarrier:
         assert len(barrier.data) == 0
 
 
+class TestLookAheadProtection:
+    """防未来函数专项测试
+
+    验证 DataBarrier（lazy 逻辑隔离 / 物理隔离两种模式）在
+    任意截止时间都不可能返回未来数据，且两种模式结果一致。
+    """
+
+    def _barrier_pair(self, df, cutoff):
+        """构造 lazy 与 physical 两种模式的屏障对"""
+        lazy_b = DataBarrier(df, cutoff_time=cutoff, time_column="date", lazy=True)
+        phys_b = DataBarrier(df, cutoff_time=cutoff, time_column="date", lazy=False)
+        return lazy_b, phys_b
+
+    def test_lazy_never_exposes_future(self, sample_bars_100):
+        """lazy 模式：任意 cutoff 下 get() 返回的行时间都不超过 cutoff"""
+        df = sample_bars_100
+        for i in [0, 10, 50, 99]:
+            cutoff = df["date"].iloc[i]
+            barrier = DataBarrier(df, cutoff_time=cutoff, time_column="date", lazy=True)
+            data = barrier.get()
+            assert len(data) == i + 1
+            assert data["date"].max() <= cutoff
+
+    def test_physical_never_exposes_future(self, sample_bars_100):
+        """物理隔离模式：返回的数据物理上不包含未来行"""
+        df = sample_bars_100
+        cutoff = df["date"].iloc[60]
+        barrier = DataBarrier(df, cutoff_time=cutoff, time_column="date", lazy=False)
+        data = barrier.data
+        assert (data["date"] <= cutoff).all()
+        assert len(data) == 61
+
+    def test_lazy_physical_consistent(self, sample_bars_100):
+        """lazy 与物理隔离模式在所有 lookback 下结果一致"""
+        df = sample_bars_100
+        cutoff = df["date"].iloc[75]
+        lazy_b, phys_b = self._barrier_pair(df, cutoff)
+
+        for lookback in [0, 1, 5, 30]:
+            l = lazy_b.get(lookback=lookback)
+            p = phys_b.get(lookback=lookback)
+            assert len(l) == len(p), f"lookback={lookback} 行数不一致"
+            assert (l["close"].to_numpy() == p["close"].to_numpy()).all()
+
+        # 最新一条一致
+        assert lazy_b.get_latest()["close"] == phys_b.get_latest()["close"]
+
+    def test_lookback_from_cutoff(self, sample_bars_100):
+        """lookback 从截止时间（而非数据末尾）回溯"""
+        df = sample_bars_100
+        cutoff = df["date"].iloc[50]
+        barrier = DataBarrier(df, cutoff_time=cutoff, time_column="date", lazy=True)
+        recent = barrier.get(lookback=10)
+        # 最近 10 条应为索引 41..50
+        assert len(recent) == 10
+        assert recent["close"].iloc[-1] == df["close"].iloc[50]
+        assert recent["close"].iloc[0] == df["close"].iloc[41]
+
+    def test_check_access_and_assert(self, sample_bars_100):
+        """时间安全检查：未来时间被拦截，越界抛 LookAheadError"""
+        df = sample_bars_100
+        cutoff = df["date"].iloc[50]
+        barrier = DataBarrier(df, cutoff_time=cutoff, time_column="date", strict=True)
+
+        assert barrier.check_access(df["date"].iloc[30]) is True
+        assert barrier.check_access(df["date"].iloc[80]) is False
+
+        with pytest.raises(LookAheadError):
+            barrier.assert_safe(df["date"].iloc[80])
+
+        # 非严格模式不抛异常
+        soft = DataBarrier(df, cutoff_time=cutoff, time_column="date", strict=False)
+        soft.assert_safe(df["date"].iloc[80])  # 仅警告
+
+    def test_unsorted_data_falls_back_to_physical(self, sample_bars_100):
+        """乱序数据自动降级为物理隔离，且不暴露未来数据"""
+        df = sample_bars_100.sample(frac=1, random_state=1)  # 打乱顺序
+        cutoff = df["date"].iloc[30]
+        barrier = DataBarrier(df, cutoff_time=cutoff, time_column="date", lazy=True)
+        # 乱序时 lazy 自动降级，结果仍受截止时间约束
+        data = barrier.get()
+        assert (data["date"] <= cutoff).all()
+
+
 class TestPortfolioSnapshot:
     """PortfolioSnapshot 不可变快照测试"""
 

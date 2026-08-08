@@ -307,9 +307,6 @@ async def test_shared_memory_decay():
 async def test_shared_memory_stats():
     """测试SharedMemory统计信息"""
     memory = SharedMemory()
-    # Source code get_stats() references self._lock which doesn't exist in __init__.
-    # Work around by setting _lock to the actual global lock.
-    memory._lock = memory._global_lock
 
     # 空记忆统计
     stats = await memory.get_stats()
@@ -342,6 +339,77 @@ async def test_shared_memory_stats():
     assert stats["by_type"]["news_event"] == 1
     assert stats["by_agent"]["agent_a"] == 2
     assert stats["by_agent"]["agent_b"] == 1
+
+
+@pytest.mark.asyncio
+async def test_shared_memory_persistence_append(tmp_path):
+    """回归测试：持久化必须追加而非整文件覆盖
+
+    旧实现 _persist_entry_atomic 使用 os.replace 覆盖整个 jsonl 文件，
+    每次写入一条 high/critical 记忆都会丢失该类型之前持久化的所有记忆。
+    本测试验证：写入多条后重新加载，所有记忆都在。
+    """
+    import json as _json
+
+    persist_dir = tmp_path / "memory"
+
+    # 第一次实例：写入 3 条同类型 high/critical 记忆
+    memory = SharedMemory(persist_dir=str(persist_dir))
+    ids = []
+    for i in range(3):
+        mid = await memory.store(
+            agent_id=f"agent_{i}",
+            memory_type=MemoryType.ANALYSIS_REPORT,
+            content=f"持久化记忆 {i}",
+            importance=MemoryImportance.HIGH,
+        )
+        ids.append(mid)
+
+    # 持久化文件存在且包含 3 行
+    jsonl_files = list(persist_dir.glob("*.jsonl"))
+    assert len(jsonl_files) == 1
+    with open(jsonl_files[0], encoding="utf-8") as f:
+        lines = [l for l in f if l.strip()]
+    assert len(lines) == 3, f"持久化文件应包含 3 条记录，实际 {len(lines)} 条"
+
+    # 第二次实例：模拟进程重启后重新加载
+    memory2 = SharedMemory(persist_dir=str(persist_dir))
+    retrieved = await memory2.retrieve(
+        memory_type=MemoryType.ANALYSIS_REPORT,
+        limit=100,
+    )
+    contents = {m.content for m in retrieved}
+    assert contents == {"持久化记忆 0", "持久化记忆 1", "持久化记忆 2"}
+
+    # 内存计数一致
+    stats = await memory2.get_stats()
+    assert stats["total_memories"] == 3
+
+
+@pytest.mark.asyncio
+async def test_shared_memory_persistence_reload_all_types(tmp_path):
+    """回归测试：不同 memory_type 持久化到各自文件，重启后全部还原"""
+    persist_dir = tmp_path / "memory2"
+
+    memory = SharedMemory(persist_dir=str(persist_dir))
+    await memory.store(
+        agent_id="agent_a",
+        memory_type=MemoryType.RISK_DECISION,
+        content="风控决策1",
+        importance=MemoryImportance.CRITICAL,
+    )
+    await memory.store(
+        agent_id="agent_b",
+        memory_type=MemoryType.EXECUTION_RECORD,
+        content="执行记录1",
+        importance=MemoryImportance.CRITICAL,
+    )
+
+    memory2 = SharedMemory(persist_dir=str(persist_dir))
+    stats = await memory2.get_stats()
+    assert stats["total_memories"] == 2
+    assert stats["by_type"].get("risk_decision") == 1
+    assert stats["by_type"].get("execution_record") == 1
 
 
 # ============================================================

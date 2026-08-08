@@ -156,6 +156,12 @@ class AsyncEventEngine:
             strategy.set_parameters(params)
         strategy.on_init(context)
         
+        # 预计算时间序列（O(N) 一次），供每根 bar 的 DataBarrier 复用
+        if self.config.time_column in data.columns:
+            time_array = pd.to_datetime(data[self.config.time_column]).to_numpy()
+        else:
+            time_array = pd.to_datetime(data.index).to_numpy()
+        
         # 状态追踪
         trades: List[Dict[str, Any]] = []
         equity_curve: List[Dict[str, Any]] = []
@@ -168,6 +174,7 @@ class AsyncEventEngine:
         prev_date = None
         
         # === 事件驱动回测循环 ===
+        bar_index = 0  # 单调递增的 bar 序号（不依赖 DataFrame 行索引类型）
         for idx, row in data.iterrows():
             # 解析时间
             if self.config.time_column in row.index:
@@ -180,18 +187,15 @@ class AsyncEventEngine:
             context.current_time = bar_date.to_pydatetime()
             
             # --- Step 1: 创建数据屏障（时间隔离） ---
-            # 关键：只传入截止到当前bar的数据
-            if isinstance(idx, (int, np.integer)):
-                sliced_data = data.iloc[:idx + 1]
-            else:
-                time_col = pd.to_datetime(data[self.config.time_column])
-                sliced_data = data.loc[time_col <= bar_date]
-            
+            # 使用 lazy 二分定位（O(log N)），避免逐 bar 对 DataFrame
+            # 做 O(N) 物理切片导致的 O(N²) 总复杂度。
             barrier = DataBarrier(
-                data=sliced_data,
+                data=data,
                 cutoff_time=bar_date,
                 time_column=self.config.time_column,
                 strict=True,
+                lazy=True,
+                time_array=time_array,
             )
             
             # --- Step 2: 构造行情事件 ---
@@ -209,7 +213,7 @@ class AsyncEventEngine:
             bar_event = BarEvent(
                 timestamp=bar_date.to_pydatetime(),
                 bar=bar,
-                bar_index=idx if isinstance(idx, (int, np.integer)) else 0,
+                bar_index=bar_index,
                 data_barrier=barrier,
             )
             
@@ -337,6 +341,8 @@ class AsyncEventEngine:
                     },
                 )
                 snapshots.append(snapshot)
+            
+            bar_index += 1
         
         # 策略结束
         strategy.on_finish(context)

@@ -4,7 +4,7 @@
 
 优化:
 - 分片锁：按 memory_type 分片，减少并发竞争
-- 原子写入：持久化使用临时文件+原子重命名
+- 追加持久化：JSONL 逐行追加 + flush/fsync，不覆盖历史数据
 """
 from __future__ import annotations
 
@@ -127,7 +127,7 @@ class SharedMemory:
     
     优化:
     - 分片锁：按 memory_type 分片，减少并发竞争
-    - 原子写入：持久化使用临时文件+原子重命名
+    - 追加持久化：JSONL 逐行追加，重启后完整还原
     """
 
     def __init__(self, persist_dir: Optional[str] = None, max_short_term: int = 1000, lock_shards: int = 16):
@@ -382,34 +382,26 @@ class SharedMemory:
             await self.delete(entry.id)
 
     def _persist_entry_atomic(self, entry: MemoryEntry) -> None:
-        """原子写入持久化单条记忆到文件
-        
-        使用临时文件+原子重命名，保证写入不会损坏数据。
+        """追加持久化单条记忆到文件（JSONL 追加模式）
+
+        使用追加写而非整文件替换：每条记录一行，
+        追加写入不会覆盖该类型已有的持久化记忆。
+
+        并发安全说明：
+        - 同一 memory_type 的写入由 SharedMemory 分片锁串行化
+          （store() 在 memory_type 分片锁内调用本方法），单进程内无竞态
+        - 写入后 flush + fsync，保证落盘，进程崩溃不丢已写记录
         """
         if not self._persist_dir:
             return
         file_path = self._persist_dir / f"{entry.memory_type.value}.jsonl"
         try:
-            # 写入临时文件
-            temp_fd, temp_path = tempfile.mkstemp(
-                dir=self._persist_dir,
-                prefix=f".tmp_{entry.memory_type.value}_",
-                suffix=".jsonl"
-            )
-            with os.fdopen(temp_fd, "a", encoding="utf-8") as f:
+            with open(file_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry.to_dict(), ensure_ascii=False) + "\n")
-            # 原子重命名（追加模式需要先读取再写入，这里简化处理）
-            # 对于追加写入，直接写入临时文件后重命名覆盖不是原子操作
-            # 更安全的做法是使用文件锁或数据库，这里保持简单实现
-            os.replace(temp_path, str(file_path))
+                f.flush()
+                os.fsync(f.fileno())
         except Exception as e:
             logger.error(f"[SharedMemory] 持久化失败: {e}")
-            # 清理临时文件
-            if 'temp_path' in dir():
-                try:
-                    os.unlink(temp_path)
-                except:
-                    pass
 
     def _persist_entry(self, entry: MemoryEntry) -> None:
         """持久化单条记忆到文件（向后兼容）"""
@@ -438,7 +430,7 @@ class SharedMemory:
 
     async def get_stats(self) -> Dict[str, Any]:
         """获取记忆统计信息"""
-        async with self._lock:
+        async with self._global_lock:
             type_counts = {t.value: len(ids) for t, ids in self._type_index.items()}
             agent_counts = {aid: len(ids) for aid, ids in self._agent_index.items()}
             return {
@@ -451,7 +443,7 @@ class SharedMemory:
 
     async def clear(self) -> None:
         """清空所有短期记忆"""
-        async with self._lock:
+        async with self._global_lock:
             self._memories.clear()
             self._type_index = {t: [] for t in MemoryType}
             self._tag_index.clear()

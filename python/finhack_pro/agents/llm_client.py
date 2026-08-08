@@ -21,7 +21,7 @@ import asyncio
 import json
 import time
 from enum import Enum
-from typing import Any, Dict, List, Optional, Type, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
 from loguru import logger
 from pydantic import BaseModel
@@ -36,16 +36,36 @@ class LLMProvider(str, Enum):
 
 
 # 模型定价表 (每1K token, USD)
+# 国内模型价格按官方美元/人民币报价折算（汇率约 7.2），仅用于成本估算；
+# 价格会随厂商调价变化，可通过 LLMClient(model_pricing_override=...) 或
+# config 中 llm.model_pricing 覆盖。
 MODEL_PRICING: Dict[str, Dict[str, float]] = {
+    # OpenAI
     "gpt-4o": {"input": 0.0025, "output": 0.01},
     "gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
     "gpt-4-turbo": {"input": 0.01, "output": 0.03},
     "gpt-4": {"input": 0.03, "output": 0.06},
     "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015},
+    # Anthropic
     "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
     "claude-3-5-sonnet-latest": {"input": 0.003, "output": 0.015},
     "claude-3-opus-20240229": {"input": 0.015, "output": 0.075},
     "claude-3-haiku-20240307": {"input": 0.00025, "output": 0.00125},
+    "claude-3-7-sonnet-latest": {"input": 0.003, "output": 0.015},
+    # DeepSeek（官方美元价）
+    "deepseek-chat": {"input": 0.00027, "output": 0.0011},
+    "deepseek-reasoner": {"input": 0.00055, "output": 0.00219},
+    # 智谱 GLM（官方人民币价折算）
+    "glm-4-plus": {"input": 0.007, "output": 0.007},
+    "glm-4-flash": {"input": 0.0001, "output": 0.0001},
+    "glm-4-air": {"input": 0.0007, "output": 0.0007},
+    # 阿里 Qwen（官方人民币价折算）
+    "qwen-plus": {"input": 0.00011, "output": 0.00028},
+    "qwen-max": {"input": 0.0028, "output": 0.0028},
+    "qwen-turbo": {"input": 0.00003, "output": 0.00007},
+    # 月之暗面 Kimi
+    "moonshot-v1-8k": {"input": 0.00083, "output": 0.0028},
+    "moonshot-v1-32k": {"input": 0.00083, "output": 0.0028},
 }
 
 
@@ -91,6 +111,7 @@ class LLMClient:
         daily_budget: float = 10.0,
         monthly_budget: float = 200.0,
         enable_protection: bool = True,
+        model_pricing_override: Optional[Dict[str, Dict[str, float]]] = None,
     ) -> None:
         """初始化LLM客户端
 
@@ -110,10 +131,13 @@ class LLMClient:
             daily_budget: 每日预算（美元）
             monthly_budget: 每月预算（美元）
             enable_protection: 是否启用熔断限流保护
+            model_pricing_override: 模型定价覆盖（每1K token, USD），
+                优先于内置 MODEL_PRICING，用于厂商调价后的成本精确估算
         """
         self.provider = LLMProvider(provider)
         self.model = model
         self.temperature = temperature
+        self._pricing_override = model_pricing_override or {}
         self.max_tokens = max_tokens
         self.timeout = timeout
         self.max_retries = max_retries
@@ -190,7 +214,10 @@ class LLMClient:
         Returns:
             估算成本(USD)
         """
-        pricing = MODEL_PRICING.get(self.model)
+        # 查找顺序：调用方覆盖价 → 内置定价表 → 兜底模型价
+        pricing = self._pricing_override.get(self.model)
+        if pricing is None:
+            pricing = MODEL_PRICING.get(self.model)
         if not pricing:
             # 未知模型按GPT-4o价格估算
             pricing = MODEL_PRICING["gpt-4o"]
@@ -216,6 +243,9 @@ class LLMClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         estimated_cost: float = 0.01,
+        stream: bool = False,
+        on_token: Optional[Callable[[str], None]] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
         """发送聊天请求
 
@@ -228,6 +258,10 @@ class LLMClient:
             tools: 工具定义列表(function calling)
             tool_choice: 工具选择策略
             estimated_cost: 预估成本（用于预算检查）
+            stream: 是否流式输出（WebUI 思考过程展示用）
+            on_token: 流式回调，每产出一段文本调用一次
+            response_format: 结构化输出格式（如 {"type": "json_object"}）
+                优先使用原生响应格式约束，替代提示词方式
 
         Returns:
             LLM响应文本
@@ -253,10 +287,15 @@ class LLMClient:
         try:
             if self.provider == LLMProvider.OPENAI:
                 result = await self._chat_openai(
-                    messages, system, temp, max_tok, tools, tool_choice
+                    messages, system, temp, max_tok, tools, tool_choice,
+                    stream=stream, on_token=on_token,
+                    response_format=response_format,
                 )
             else:
-                result = await self._chat_anthropic(messages, system, temp, max_tok)
+                result = await self._chat_anthropic(
+                    messages, system, temp, max_tok,
+                    stream=stream, on_token=on_token,
+                )
             
             # 成功回调
             if self.enable_protection and self._protection:
@@ -278,6 +317,9 @@ class LLMClient:
         max_tokens: int,
         tools: Optional[List[Dict[str, Any]]],
         tool_choice: Optional[str],
+        stream: bool = False,
+        on_token: Optional[Callable[[str], None]] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
         """调用OpenAI API"""
         assert self._openai_client is not None
@@ -294,15 +336,46 @@ class LLMClient:
             kwargs["tools"] = tools
         if tool_choice:
             kwargs["tool_choice"] = tool_choice
+        if response_format:
+            kwargs["response_format"] = response_format
+        if stream:
+            kwargs["stream"] = True
+            kwargs["stream_options"] = {"include_usage": True}
 
         last_error: Optional[Exception] = None
         for attempt in range(self.max_retries):
             try:
-                response = await self._openai_client.chat.completions.create(**kwargs)
-                usage = response.usage
-                prompt_tokens = usage.prompt_tokens if usage else 0
-                completion_tokens = usage.completion_tokens if usage else 0
-                total_tokens = usage.total_tokens if usage else 0
+                if stream:
+                    # 流式输出：逐段回调，累积完整文本，从流中提取 usage
+                    full_text: List[str] = []
+                    prompt_tokens = 0
+                    completion_tokens = 0
+                    async for chunk in await self._openai_client.chat.completions.create(**kwargs):
+                        if not chunk.choices:
+                            # 流结束时的 usage 块
+                            if chunk.usage:
+                                prompt_tokens = chunk.usage.prompt_tokens or 0
+                                completion_tokens = chunk.usage.completion_tokens or 0
+                            continue
+                        delta = chunk.choices[0].delta
+                        piece = delta.content or ""
+                        if piece:
+                            full_text.append(piece)
+                            if on_token:
+                                on_token(piece)
+                    text = "".join(full_text)
+                    if not prompt_tokens and not completion_tokens:
+                        # 服务商未返回 usage，按文本粗估
+                        prompt_tokens = sum(len(m.get("content", "")) for m in messages) // 2
+                        completion_tokens = len(text) // 2
+                else:
+                    response = await self._openai_client.chat.completions.create(**kwargs)
+                    usage = response.usage
+                    prompt_tokens = usage.prompt_tokens if usage else 0
+                    completion_tokens = usage.completion_tokens if usage else 0
+                    text = response.choices[0].message.content or ""
+
+                total_tokens = prompt_tokens + completion_tokens
                 cost = self._estimate_cost(prompt_tokens, completion_tokens)
 
                 # 更新用量统计
@@ -314,7 +387,7 @@ class LLMClient:
                 logger.debug(
                     f"OpenAI调用完成: tokens={total_tokens}, cost=${cost:.4f}"
                 )
-                return response.choices[0].message.content or ""
+                return text
 
             except Exception as e:
                 last_error = e
@@ -336,6 +409,8 @@ class LLMClient:
         system: str,
         temperature: float,
         max_tokens: int,
+        stream: bool = False,
+        on_token: Optional[Callable[[str], None]] = None,
     ) -> str:
         """调用Anthropic API"""
         assert self._anthropic_client is not None
@@ -348,13 +423,40 @@ class LLMClient:
         }
         if system:
             kwargs["system"] = system
+        if stream:
+            kwargs["stream"] = True
 
         last_error: Optional[Exception] = None
         for attempt in range(self.max_retries):
             try:
-                response = await self._anthropic_client.messages.create(**kwargs)
-                prompt_tokens = response.usage.input_tokens
-                completion_tokens = response.usage.output_tokens
+                if stream:
+                    # 流式输出：Anthropic stream 返回事件序列
+                    full_text: List[str] = []
+                    prompt_tokens = 0
+                    completion_tokens = 0
+                    async with self._anthropic_client.messages.stream(**kwargs) as s:
+                        async for text in s.text_stream:
+                            full_text.append(text)
+                            if on_token:
+                                on_token(text)
+                        final_usage = await s.get_final_message()
+                        if final_usage.usage:
+                            prompt_tokens = final_usage.usage.input_tokens
+                            completion_tokens = final_usage.usage.output_tokens
+                    text = "".join(full_text)
+                    if not prompt_tokens and not completion_tokens:
+                        prompt_tokens = sum(len(m.get("content", "")) for m in messages) // 2
+                        completion_tokens = len(text) // 2
+                else:
+                    response = await self._anthropic_client.messages.create(**kwargs)
+                    prompt_tokens = response.usage.input_tokens
+                    completion_tokens = response.usage.output_tokens
+                    # 提取文本内容
+                    text_blocks = [
+                        block.text for block in response.content if block.type == "text"
+                    ]
+                    text = "\n".join(text_blocks)
+
                 total_tokens = prompt_tokens + completion_tokens
                 cost = self._estimate_cost(prompt_tokens, completion_tokens)
 
@@ -366,11 +468,7 @@ class LLMClient:
                 logger.debug(
                     f"Anthropic调用完成: tokens={total_tokens}, cost=${cost:.4f}"
                 )
-                # 提取文本内容
-                text_blocks = [
-                    block.text for block in response.content if block.type == "text"
-                ]
-                return "\n".join(text_blocks)
+                return text
 
             except Exception as e:
                 last_error = e
@@ -398,7 +496,12 @@ class LLMClient:
     ) -> T:
         """结构化输出 - 返回Pydantic模型实例
 
-        通过在system prompt中要求JSON输出，然后解析为Pydantic模型。
+        优先级（从强到弱）：
+        1. 原生 Structured Outputs（response_format=json_schema，OpenAI）
+        2. 原生 JSON mode（response_format=json_object）
+        3. 提示词约束 + 宽松 JSON 提取（兼容所有 OpenAI 兼容服务商）
+
+        解析失败时自动携带错误信息重试，最多重试 parse_retries 次。
 
         Args:
             message: 用户消息
@@ -410,7 +513,7 @@ class LLMClient:
         Returns:
             解析后的Pydantic模型实例
         """
-        # 构建JSON schema提示
+        # 构建JSON schema提示（作为最终兜底）
         schema = response_model.model_json_schema()
         json_instruction = (
             "\n\n你必须严格按照以下JSON Schema格式输出结果，"
@@ -419,30 +522,96 @@ class LLMClient:
         )
         full_system = system + json_instruction if system else json_instruction
 
-        response_text = await self.chat(
-            message=message,
-            system=full_system,
-            history=history,
-            temperature=temperature,
+        # 原生 JSON mode（OpenAI 兼容服务商普遍支持）
+        native_response_format: Optional[Dict[str, Any]] = None
+        if self.provider == LLMProvider.OPENAI:
+            # 服务商如果支持 json_schema 用 json_schema，否则降级 json_object
+            native_response_format = {
+                "type": "json_object",
+            }
+
+        last_error: Optional[Exception] = None
+        for attempt in range(max(1, self.max_retries)):
+            try:
+                response_text = await self.chat(
+                    message=message,
+                    system=full_system,
+                    history=history,
+                    temperature=temperature,
+                    response_format=native_response_format,
+                )
+
+                # 解析JSON响应
+                try:
+                    data = self._extract_json(response_text)
+                    return response_model.model_validate(data)
+                except Exception as e:
+                    last_error = e
+                    if attempt < max(1, self.max_retries) - 1:
+                        logger.warning(
+                            f"结构化输出解析失败(第{attempt + 1}次)，"
+                            f"携带错误重试: {e}"
+                        )
+                        # 重试时把错误信息带给模型，帮助其修正输出
+                        native_response_format = None  # 降级为提示词模式
+                        message = (
+                            f"{message}\n\n[上一次输出无法解析: {e}，"
+                            f"请严格按照 JSON Schema 输出合法 JSON]"
+                        )
+                        continue
+                    raise
+
+            except Exception as e:
+                last_error = e
+                if attempt < max(1, self.max_retries) - 1:
+                    await asyncio.sleep(2 ** attempt + 1)
+                    continue
+                raise
+
+        raise ValueError(
+            f"无法将LLM响应解析为 {response_model.__name__}: {last_error}"
         )
 
-        # 解析JSON响应
+    @staticmethod
+    def _extract_json(text: str) -> Any:
+        """宽松提取 JSON：处理代码块、BOM、前后杂文本
+
+        Returns:
+            解析后的 JSON 对象
+
+        Raises:
+            ValueError: 无法提取有效 JSON
+        """
+        import re
+
+        json_str = text.strip().lstrip("\ufeff")
+        # 去掉外层代码块
+        if "```json" in json_str:
+            json_str = json_str.split("```json")[1].split("```")[0].strip()
+        elif "```" in json_str:
+            json_str = json_str.split("```")[1].split("```")[0].strip()
+
         try:
-            # 尝试提取JSON块
-            json_str = response_text.strip()
-            if "```json" in json_str:
-                json_str = json_str.split("```json")[1].split("```")[0].strip()
-            elif "```" in json_str:
-                json_str = json_str.split("```")[1].split("```")[0].strip()
-
-            data = json.loads(json_str)
-            return response_model.model_validate(data)
-
-        except (json.JSONDecodeError, Exception) as e:
-            logger.error(f"JSON解析失败: {e}\n原始响应: {response_text[:500]}")
-            raise ValueError(
-                f"无法将LLM响应解析为 {response_model.__name__}: {e}"
-            ) from e
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            # 尝试提取第一个 {...} 或 [...] 平衡块
+            for open_ch, close_ch in (("{", "}"), ("[", "]")):
+                start = json_str.find(open_ch)
+                if start == -1:
+                    continue
+                depth = 0
+                for i in range(start, len(json_str)):
+                    if json_str[i] == open_ch:
+                        depth += 1
+                    elif json_str[i] == close_ch:
+                        depth -= 1
+                        if depth == 0:
+                            candidate = json_str[start:i + 1]
+                            try:
+                                return json.loads(candidate)
+                            except json.JSONDecodeError:
+                                break
+            raise ValueError(f"无法从响应中提取JSON: {text[:200]}")
 
     async def chat_with_tools(
         self,
@@ -477,16 +646,26 @@ class LLMClient:
         tools: List[Dict[str, Any]],
         system: str,
         history: Optional[List[Dict[str, str]]],
+        messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        """OpenAI Function Calling"""
+        """OpenAI Function Calling
+
+        Args:
+            message: 用户消息（messages 未提供时使用）
+            tools: 工具定义列表
+            system: 系统提示词（messages 未提供时使用）
+            history: 对话历史（messages 未提供时使用）
+            messages: 完整消息列表（agent loop 复用，提供时忽略前三参数）
+        """
         assert self._openai_client is not None
 
-        messages: List[Dict[str, Any]] = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        if history:
-            messages.extend(history)
-        messages.append({"role": "user", "content": message})
+        if messages is None:
+            messages = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            if history:
+                messages.extend(history)
+            messages.append({"role": "user", "content": message})
 
         response = await self._openai_client.chat.completions.create(
             model=self.model,
@@ -567,3 +746,146 @@ class LLMClient:
                 })
 
         return result
+
+    async def run_agent_loop(
+        self,
+        message: str,
+        tools: List[Dict[str, Any]],
+        system: str = "",
+        history: Optional[List[Dict[str, str]]] = None,
+        tool_executor: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
+        max_iterations: int = 5,
+        on_step: Optional[Callable[[int, Dict[str, Any]], None]] = None,
+    ) -> Dict[str, Any]:
+        """多轮工具调用 Agent Loop
+
+        实现完整的 ReAct 循环：
+        模型 → 工具调用请求 → 执行工具 → 结果回填 → 模型（直到无工具调用或达到上限）
+
+        这是"聊天机器人"与"Agent"的分水岭 —— 此前 chat_with_tools 只能发一次
+        工具请求，无法根据工具结果继续推理。
+
+        Args:
+            message: 用户消息
+            tools: OpenAI 格式工具定义列表
+            system: 系统提示词
+            history: 对话历史
+            tool_executor: 工具执行器回调，签名 (tool_name, arguments) -> result
+                未提供时返回错误结果，工具调用不会真正执行
+            max_iterations: 最大工具调用轮数（默认 5）
+            on_step: 每轮回调 (iteration, step_info)，用于 WebUI 展示思考过程
+
+        Returns:
+            {
+                "content": 最终文本回复,
+                "tool_calls": 全部工具调用记录,
+                "iterations": 实际轮数,
+                "messages": 完整对话历史（含工具结果回填）,
+            }
+        """
+        # 构造初始消息
+        messages: List[Dict[str, Any]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": message})
+
+        tool_calls_log: List[Dict[str, Any]] = []
+        final_content = ""
+        iterations = 0
+
+        for iteration in range(max_iterations):
+            iterations = iteration + 1
+            step_info: Dict[str, Any] = {"iteration": iteration, "tool_calls": []}
+
+            # 调用模型（含工具），直接复用完整消息列表
+            response = await self._chat_with_tools_openai(
+                message="",
+                tools=tools,
+                system="",
+                history=None,
+                messages=messages,
+            )
+
+            content = response.get("content", "")
+            calls = response.get("tool_calls", [])
+
+            if content:
+                final_content = content
+
+            if on_step:
+                step_info["content"] = content
+                step_info["tool_calls"] = calls
+
+            # 没有工具调用 → 模型已给出最终回答，结束
+            if not calls:
+                if on_step:
+                    on_step(iteration, step_info)
+                break
+
+            # 有工具调用：执行并回填
+            messages.append({
+                "role": "assistant",
+                "content": content or None,
+                "tool_calls": [
+                    {
+                        "id": c["id"],
+                        "type": "function",
+                        "function": {
+                            "name": c["name"],
+                            "arguments": json.dumps(c["arguments"], ensure_ascii=False),
+                        },
+                    }
+                    for c in calls
+                ],
+            })
+
+            for call in calls:
+                tool_name = call["name"]
+                tool_args = call.get("arguments", {})
+                tool_calls_log.append({
+                    "iteration": iteration,
+                    "id": call.get("id", ""),
+                    "name": tool_name,
+                    "arguments": tool_args,
+                })
+                step_info["tool_calls"].append({
+                    "name": tool_name,
+                    "arguments": tool_args,
+                })
+
+                # 执行工具
+                result_text: str
+                if tool_executor is None:
+                    result_text = (
+                        f"错误: 未提供 tool_executor，无法执行工具 {tool_name}"
+                    )
+                else:
+                    try:
+                        result = tool_executor(tool_name, tool_args)
+                        if asyncio.iscoroutine(result):
+                            result = await result
+                        result_text = (
+                            result if isinstance(result, str)
+                            else json.dumps(result, ensure_ascii=False, default=str)
+                        )
+                    except Exception as e:
+                        result_text = f"工具执行异常: {type(e).__name__}: {e}"
+
+                # 工具结果回填
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id", f"call_{iteration}_{len(tool_calls_log)}"),
+                    "content": result_text[:8000],  # 截断过长的工具结果
+                })
+
+            if on_step:
+                on_step(iteration, step_info)
+
+        return {
+            "content": final_content,
+            "tool_calls": tool_calls_log,
+            "iterations": iterations,
+            "messages": messages,
+        }

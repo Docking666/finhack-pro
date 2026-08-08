@@ -4,34 +4,57 @@ version = "2.2.0"
 description = "FinHack Pro 量化交易系统 - Python策略层与AI Agent系统"
 requires-python = ">=3.10"
 license = {text = "MIT"}
+# 依赖与 requirements.txt 保持同步（requirements.txt 是打包用的超集）
 dependencies = [
+    # 核心
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "httpx>=0.25",
     "openai>=1.0",
     "anthropic>=0.18",
+    # WebUI 后端
+    "uvicorn>=0.24",
+    "fastapi>=0.104",
+    "starlette>=0.35",
+    "python-multipart>=0.0.6",
+    "jinja2>=3.1",
+    # 数据处理
     "pandas>=2.0",
     "numpy>=1.24",
-    "ta>=0.11",
+    "matplotlib>=3.7",
+    # 数据源
     "akshare>=1.12",
     "tushare>=1.4",
+    # 配置与工具
     "pyyaml>=6.0",
     "redis>=5.0",
     "websockets>=12.0",
     "loguru>=0.7",
     "rich>=13.0",
-    "matplotlib>=3.7",
-    "uvicorn>=0.24",
-    "fastapi>=0.104",
+    # 导出功能
+    "reportlab>=4.0.0",
+    "openpyxl>=3.1.0",
+    "xlsxwriter>=3.1.0",
+    "qrcode>=7.4",
+    "Pillow>=10.0.0",
 ]
 
 [project.optional-dependencies]
+# 可选加速：ta 库技术指标、numba JIT（无则自动降级到内置实现）
+accelerate = [
+    "ta>=0.11",
+    "numba>=0.57",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.0",
     "mypy>=1.5",
     "ruff>=0.1",
+]
+# Rust 加速（finhack-pyo3），仅开发构建需要
+rust = [
+    "maturin>=1.0,<2.0",
 ]
 
 [build-system]

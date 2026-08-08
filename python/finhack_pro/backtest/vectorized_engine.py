@@ -111,6 +111,13 @@ class VectorizedEngine:
         # 初始化策略
         strategy.on_init(context)
         
+        # 预计算时间序列（O(N) 一次），供每根 bar 的 DataBarrier 复用，
+        # 避免逐 bar to_datetime 造成 O(N²) 总开销
+        if self.config.time_column in data.columns:
+            time_array = pd.to_datetime(data[self.config.time_column]).to_numpy()
+        else:
+            time_array = pd.to_datetime(data.index).to_numpy()
+        
         # 运行回测循环
         trades: List[Dict[str, Any]] = []
         equity_curve: List[Dict[str, Any]] = []
@@ -147,12 +154,16 @@ class VectorizedEngine:
             
             # === 时间切片保护 ===
             if self.config.enable_time_slice:
-                # 创建时间切片上下文
+                # 创建时间切片上下文。
+                # DataBarrier 使用 lazy 二分定位（O(log N)），
+                # 避免逐 bar 对 DataFrame 做 O(N) 物理切片导致的 O(N²) 总复杂度。
                 barrier = DataBarrier(
-                    data=data.iloc[:idx + 1] if isinstance(idx, (int, np.integer)) else data.loc[:bar_date],
+                    data=data,
                     cutoff_time=bar_date,
                     time_column=self.config.time_column,
                     strict=self.config.strict_mode,
+                    lazy=True,
+                    time_array=time_array,
                 )
                 
                 ts_context = TimeSliceContext(
@@ -375,14 +386,11 @@ class VectorizedEngine:
         else:
             annual_return = total_return
         
-        # 夏普比率
+        # 夏普比率（Rust 加速优先，NumPy 回退）
         sharpe = 0.0
         if len(daily_returns) > 1:
-            returns_arr = np.array(daily_returns)
-            mean_ret = np.mean(returns_arr)
-            std_ret = np.std(returns_arr)
-            if std_ret > 0:
-                sharpe = (mean_ret / std_ret) * np.sqrt(252)
+            from finhack_pro.backtest.rust_accelerator import sharpe_ratio
+            sharpe = sharpe_ratio(np.array(daily_returns, dtype=np.float64))
         
         # 胜率、盈亏比
         sell_trades = [t for t in trades if t.get("direction") == "sell"]

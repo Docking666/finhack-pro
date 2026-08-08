@@ -54,6 +54,13 @@ class DataBarrier:
     
     包装 DataFrame，拦截所有可能访问未来数据的操作。
     在异步事件驱动模式下强制启用，向量化模式下可选启用。
+
+    两种隔离模式：
+    - lazy=True（默认）：逻辑隔离。构造 O(1)，get/get_latest 通过
+      二分定位（np.searchsorted）按截止时间截取，总回测复杂度 O(N log N)。
+      要求时间序列按升序排列（回测数据默认满足），不满足时自动降级为物理切片。
+    - lazy=False：物理隔离。构造时立即按截止时间切片并复制，
+      返回的数据物理上不包含未来行（内存开销 O(N²)）。
     """
     
     def __init__(
@@ -62,6 +69,8 @@ class DataBarrier:
         cutoff_time: Union[datetime, pd.Timestamp, str],
         time_column: str = "date",
         strict: bool = True,
+        lazy: bool = True,
+        time_array: Optional[np.ndarray] = None,
     ):
         """
         Args:
@@ -69,6 +78,9 @@ class DataBarrier:
             cutoff_time: 截止时间
             time_column: 时间列名
             strict: 严格模式，访问未来数据时抛出异常
+            lazy: 逻辑隔离模式（默认），false 时物理切片
+            time_array: 预计算的 datetime64 数组（由引擎在循环外算一次），
+                避免每个 barrier 重复 to_datetime，是 O(N²)→O(N log N) 的关键
         """
         self._original_data = data
         self._time_column = time_column
@@ -78,18 +90,44 @@ class DataBarrier:
             cutoff_time = pd.to_datetime(cutoff_time)
         self._cutoff_time = pd.Timestamp(cutoff_time)
         
-        # 执行物理切片
-        if time_column in data.columns:
-            time_series = pd.to_datetime(data[time_column])
-            self._mask = time_series <= self._cutoff_time
-            self._data = data.loc[self._mask].copy()
+        # 预计算时间序列（供 lazy 定位 / 物理切片共用）
+        if time_array is not None:
+            self._time_series = time_array  # np.ndarray[datetime64]
+        elif time_column in data.columns:
+            self._time_series = pd.to_datetime(data[time_column]).to_numpy()
         else:
-            # 如果没有时间列，使用索引
-            time_series = pd.to_datetime(data.index)
-            self._mask = time_series <= self._cutoff_time
-            self._data = data.loc[self._mask].copy()
+            self._time_series = pd.to_datetime(data.index).to_numpy()
         
-        self._available_count = len(self._data)
+        if lazy:
+            # 逻辑隔离：保留引用，get 时二分定位。
+            # 时间序列必须升序，否则 searchsorted 结果不可靠，自动降级。
+            if self._time_series_is_sorted():
+                self._lazy = True
+                self._data = data
+                self._available_count = int(
+                    (self._time_series <= self._cutoff_time.to_datetime64()).sum()
+                )
+            else:
+                logger.warning(
+                    "[DataBarrier] 时间序列未排序，lazy 模式不可用，降级为物理切片"
+                )
+                self._lazy = False
+                self._mask = self._time_series <= self._cutoff_time.to_datetime64()
+                self._data = data.loc[np.asarray(self._mask)].copy()
+                self._available_count = len(self._data)
+        else:
+            # 物理隔离：立即切片并复制，未来数据在物理上不可访问
+            self._lazy = False
+            self._mask = self._time_series <= self._cutoff_time.to_datetime64()
+            self._data = data.loc[np.asarray(self._mask)].copy()
+            self._available_count = len(self._data)
+
+    def _time_series_is_sorted(self) -> bool:
+        """判断时间序列是否严格升序（lazy 二分定位的前提）"""
+        ts = self._time_series
+        if len(ts) < 2:
+            return True
+        return bool(np.all(ts[1:] >= ts[:-1]))
     
     @property
     def cutoff_time(self) -> pd.Timestamp:
@@ -99,7 +137,7 @@ class DataBarrier:
     @property
     def data(self) -> pd.DataFrame:
         """获取安全的数据副本"""
-        return self._data.copy()
+        return self.get()
     
     @property
     def available_count(self) -> int:
@@ -113,11 +151,20 @@ class DataBarrier:
             symbol: 标的代码（如果数据有多标的）
             lookback: 回看期数（0表示全部）
         """
-        result = self._data
+        if self._lazy:
+            # 二分定位：找到 <= cutoff 的最后一个位置（O(log N)）
+            cutoff_np = np.datetime64(self._cutoff_time.to_datetime64())
+            pos = int(np.searchsorted(self._time_series, cutoff_np, side="right"))
+            if pos <= 0:
+                return self._data.iloc[0:0].copy()
+            start = max(0, pos - lookback) if lookback > 0 else 0
+            result = self._data.iloc[start:pos]
+        else:
+            result = self._data
+            if lookback > 0:
+                result = result.tail(lookback)
         if symbol is not None and "symbol" in result.columns:
             result = result[result["symbol"] == symbol]
-        if lookback > 0:
-            result = result.tail(lookback)
         return result.copy()
     
     def get_latest(self, symbol: Optional[str] = None) -> Optional[pd.Series]:
@@ -184,9 +231,9 @@ class PortfolioSnapshot:
         return self.positions.get(symbol, {"volume": 0, "cost": 0.0, "pnl": 0.0})
     
     def hash(self) -> str:
-        """生成状态哈希（用于验证不可变性）"""
+        """生成状态哈希（SHA256，用于验证不可变性）"""
         content = f"{self.cash:.2f}|{self.total_value:.2f}|{sorted(self.positions.items())}"
-        return hashlib.md5(content.encode()).hexdigest()[:16]
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
 
 
 @dataclass

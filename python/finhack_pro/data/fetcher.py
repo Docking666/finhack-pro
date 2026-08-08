@@ -2,12 +2,16 @@
 数据获取模块
 
 支持tushare和akshare两个数据源，自动fallback。
-提供日线、分钟线、实时行情的获取接口，支持批量下载和CSV缓存。
+提供日线、分钟线、实时行情的获取接口，支持批量下载。
+统一使用 DataCache（pickle+gzip、TTL、MD5校验、按日期过滤），
+取代旧的"日期入文件名"CSV 缓存（避免两套缓存并存）。
 """
 
 from __future__ import annotations
 
 import os
+import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -24,7 +28,7 @@ class DataFetcher:
     """数据获取器
 
     支持tushare和akshare两个数据源，自动fallback。
-    数据存储为CSV格式，兼容Rust引擎。
+    数据通过 DataCache 统一缓存（TTL + MD5 校验）。
 
     Usage:
         fetcher = DataFetcher(source="akshare", cache_dir="data/cache")
@@ -37,6 +41,7 @@ class DataFetcher:
         source: str = "akshare",
         tushare_token: str = "",
         cache_dir: str = "data/cache",
+        adjust: str = "qfq",
     ) -> None:
         """初始化数据获取器
 
@@ -44,10 +49,19 @@ class DataFetcher:
             source: 数据源 (akshare / tushare)
             tushare_token: tushare API token
             cache_dir: 缓存目录
+            adjust: 复权方式 (qfq 前复权 / hfq 后复权 / "" 不复权)
         """
         self.source = source
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.adjust = adjust
+
+        # 统一缓存：DataCache（pickle+gzip，TTL+MD5 校验，按日期过滤）
+        from finhack_pro.data.cache import DataCache
+        self._cache = DataCache(cache_dir=str(self.cache_dir))
+
+        # 全市场快照缓存锁（get_realtime 并发保护）
+        self._snapshot_lock = threading.Lock()
 
         # 初始化数据源客户端
         self._tushare_pro: Optional[Any] = None
@@ -61,7 +75,7 @@ class DataFetcher:
         self._init_akshare()
 
         logger.info(
-            f"数据获取器初始化: source={source}, "
+            f"数据获取器初始化: source={source}, adjust={adjust}, "
             f"akshare={'可用' if self._akshare_available else '不可用'}, "
             f"tushare={'可用' if self._tushare_available else '不可用'}"
         )
@@ -112,12 +126,13 @@ class DataFetcher:
         # 标准化标的代码
         std_symbol = self._standardize_symbol(symbol)
 
-        # 检查缓存
-        cache_file = self.cache_dir / f"{std_symbol}_daily_{start_date}_{end_date}.csv"
-        if use_cache and cache_file.exists():
-            logger.debug(f"从缓存加载: {std_symbol}")
-            df = pd.read_csv(cache_file, parse_dates=["date"])
-            return df
+        # 统一缓存：DataCache 按 symbol+freq 缓存全量数据，get 时按日期过滤。
+        # 相比旧的"日期入文件名"缓存，命中率大幅提高（不同日期范围共享同一份缓存）。
+        if use_cache:
+            cached = self._cache.get(std_symbol, start_date, end_date, freq="daily")
+            if cached is not None:
+                logger.debug(f"缓存命中: {std_symbol} ({start_date}~{end_date})")
+                return cached
 
         # 获取数据
         df = pd.DataFrame()
@@ -138,9 +153,16 @@ class DataFetcher:
         if not df.empty:
             # 标准化列名
             df = self._standardize_columns(df)
-            # 保存缓存
-            df.to_csv(cache_file, index=False)
+            # 写入统一缓存
+            self._cache.set(std_symbol, df, freq="daily")
             logger.info(f"数据获取成功: {std_symbol}, {len(df)}条记录")
+
+        # 按日期范围过滤返回
+        if not df.empty and "date" in df.columns:
+            df = df[
+                (df["date"] >= pd.to_datetime(start_date))
+                & (df["date"] <= pd.to_datetime(end_date))
+            ].reset_index(drop=True)
 
         return df
 
@@ -189,7 +211,7 @@ class DataFetcher:
                 period="daily",
                 start_date=start_date.replace("-", ""),
                 end_date=end_date.replace("-", ""),
-                adjust="qfq",  # 前复权
+                adjust=self.adjust,  # 复权方式配置化（qfq/hfq/空）
             )
             if df is not None and not df.empty:
                 # akshare列名: 日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
@@ -245,7 +267,7 @@ class DataFetcher:
                     period=period,
                     start_date=start_date.replace("-", " "),
                     end_date=end_date.replace("-", " "),
-                    adjust="qfq",
+                    adjust=self.adjust,
                 )
                 if df is not None and not df.empty:
                     df = df.rename(columns={
@@ -268,6 +290,10 @@ class DataFetcher:
     def get_realtime(self, symbol: str) -> Dict[str, Any]:
         """获取实时行情
 
+        东财全市场快照接口（stock_zh_a_spot_em）单次返回全市场 5000+ 行，
+        逐只调用浪费严重。这里对全市场快照做 15 秒 TTL 缓存：
+        同一窗口内多次查询只拉取一次快照。
+
         Args:
             symbol: 标的代码
 
@@ -276,31 +302,75 @@ class DataFetcher:
         """
         std_symbol = self._standardize_symbol(symbol)
 
-        if self._akshare_available:
-            try:
-                import akshare as ak
-                ak_symbol = self._to_akshare_symbol(std_symbol)
-                df = ak.stock_zh_a_spot_em()
-                if df is not None and not df.empty:
-                    row = df[df["代码"] == ak_symbol]
-                    if not row.empty:
-                        row = row.iloc[0]
-                        return {
-                            "symbol": std_symbol,
-                            "name": row.get("名称", ""),
-                            "price": float(row.get("最新价", 0)),
-                            "change_pct": float(row.get("涨跌幅", 0)),
-                            "volume": float(row.get("成交量", 0)),
-                            "amount": float(row.get("成交额", 0)),
-                            "high": float(row.get("最高", 0)),
-                            "low": float(row.get("最低", 0)),
-                            "open": float(row.get("今开", 0)),
-                            "pre_close": float(row.get("昨收", 0)),
-                        }
-            except Exception as e:
-                logger.error(f"获取实时行情失败: {e}")
+        if not self._akshare_available:
+            return {}
+
+        df = self._get_market_snapshot()
+        if df is None or df.empty:
+            return {}
+
+        try:
+            ak_symbol = self._to_akshare_symbol(std_symbol)
+            row = df[df["代码"] == ak_symbol]
+            if not row.empty:
+                row = row.iloc[0]
+                return {
+                    "symbol": std_symbol,
+                    "name": row.get("名称", ""),
+                    "price": float(row.get("最新价", 0)),
+                    "change_pct": float(row.get("涨跌幅", 0)),
+                    "volume": float(row.get("成交量", 0)),
+                    "amount": float(row.get("成交额", 0)),
+                    "high": float(row.get("最高", 0)),
+                    "low": float(row.get("最低", 0)),
+                    "open": float(row.get("今开", 0)),
+                    "pre_close": float(row.get("昨收", 0)),
+                }
+        except Exception as e:
+            logger.error(f"获取实时行情失败: {e}")
 
         return {}
+
+    def _get_market_snapshot(self) -> Optional[pd.DataFrame]:
+        """获取全市场快照（带 15 秒 TTL 缓存）"""
+        cache_path = self.cache_dir / "_realtime_snapshot.pkl.gz"
+        ttl = 15.0  # 秒
+
+        # 命中缓存
+        try:
+            if cache_path.exists():
+                import gzip
+                import pickle
+                age = time.time() - cache_path.stat().st_mtime
+                if age < ttl:
+                    with gzip.open(cache_path, "rb") as f:
+                        return pickle.load(f)
+        except Exception:
+            pass
+
+        # 拉取快照（带锁，避免并发重复拉取）
+        with self._snapshot_lock:
+            try:
+                # 双检：等待锁期间可能已被其他线程刷新
+                import gzip
+                import pickle
+                if cache_path.exists():
+                    age = time.time() - cache_path.stat().st_mtime
+                    if age < ttl:
+                        with gzip.open(cache_path, "rb") as f:
+                            return pickle.load(f)
+
+                import akshare as ak
+                df = ak.stock_zh_a_spot_em()
+                if df is not None and not df.empty:
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    with gzip.open(cache_path, "wb") as f:
+                        pickle.dump(df, f, protocol=pickle.HIGHEST_PROTOCOL)
+                    return df
+            except Exception as e:
+                logger.error(f"获取全市场快照失败: {e}")
+
+        return None
 
     def batch_download(
         self,
@@ -308,7 +378,9 @@ class DataFetcher:
         start_date: str = "2020-01-01",
         end_date: str = "",
     ) -> Dict[str, pd.DataFrame]:
-        """批量下载数据
+        """批量下载数据（串行版，兼容同步调用方）
+
+        大量标的时推荐使用 batch_download_async（并发 + 限流）。
 
         Args:
             symbols: 标的代码列表
@@ -332,6 +404,93 @@ class DataFetcher:
 
         logger.info(f"批量下载完成: {len(results)}/{total} 成功")
         return results
+
+    async def batch_download_async(
+        self,
+        symbols: List[str],
+        start_date: str = "2020-01-01",
+        end_date: str = "",
+        max_concurrent: int = 8,
+    ) -> Dict[str, pd.DataFrame]:
+        """批量下载数据（异步并发版）
+
+        使用 asyncio.Semaphore 限流，避免对数据源造成压力。
+        先检查统一缓存，缓存命中直接返回，不触发网络请求。
+
+        Args:
+            symbols: 标的代码列表
+            start_date: 开始日期
+            end_date: 结束日期
+            max_concurrent: 最大并发数（默认 8）
+
+        Returns:
+            {symbol: DataFrame} 字典
+        """
+        import asyncio
+
+        semaphore = asyncio.Semaphore(max_concurrent)
+        results: Dict[str, pd.DataFrame] = {}
+        total = len(symbols)
+
+        async def _download_one(symbol: str) -> None:
+            async with semaphore:
+                try:
+                    df = self.get_daily(symbol, start_date, end_date)
+                    if not df.empty:
+                        results[symbol] = df
+                except Exception as e:
+                    logger.error(f"下载 {symbol} 失败: {e}")
+
+        # 分片并发，避免一次性创建过多任务
+        BATCH = max_concurrent * 4
+        for start in range(0, total, BATCH):
+            chunk = symbols[start:start + BATCH]
+            await asyncio.gather(*(_download_one(s) for s in chunk))
+            logger.info(
+                f"并发下载进度: {min(start + BATCH, total)}/{total}"
+            )
+
+        logger.info(f"并发批量下载完成: {len(results)}/{total} 成功")
+        return results
+
+    def batch_download_runner(
+        self,
+        symbols: List[str],
+        start_date: str = "2020-01-01",
+        end_date: str = "",
+        max_concurrent: int = 8,
+    ) -> Dict[str, pd.DataFrame]:
+        """批量下载（同步入口，内部运行事件循环）
+
+        无 asyncio 上下文的同步代码可直接调用本方法获得并发收益。
+
+        Args:
+            symbols: 标的代码列表
+            start_date: 开始日期
+            end_date: 结束日期
+            max_concurrent: 最大并发数（默认 8）
+
+        Returns:
+            {symbol: DataFrame} 字典
+        """
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        if loop.is_running():
+            # 已在事件循环内：不能嵌套 run_until_complete，退回串行
+            logger.warning("已在运行事件循环中，使用串行批量下载")
+            return self.batch_download(symbols, start_date, end_date)
+
+        return loop.run_until_complete(
+            self.batch_download_async(
+                symbols, start_date, end_date, max_concurrent
+            )
+        )
 
     @staticmethod
     def _standardize_symbol(symbol: str) -> str:

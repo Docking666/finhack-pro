@@ -201,10 +201,14 @@ class NicheStrategy(BaseStrategy):
         if not events:
             return signals
             
-        # 分析最近事件
-        recent_events = [e for e in events if 
-                        datetime.fromisoformat(e.get("time", "2000-01-01")) > 
-                        datetime.now() - timedelta(days=7)]
+        # 分析最近事件（以当前 bar 时间为基准，而非 wall-clock now，
+        # 保证回测/历史场景下事件窗口判断正确）
+        bar_time = bar.datetime
+        recent_events = []
+        for ev in events:
+            ev_time = self._parse_event_time(ev.get("time", ""))
+            if ev_time >= bar_time - timedelta(days=7):
+                recent_events.append(ev)
         
         if not recent_events:
             return signals
@@ -383,7 +387,9 @@ class NicheStrategy(BaseStrategy):
             
         # 需要至少3个维度共振
         if signals_count >= 3:
-            confidence = total_confidence / signals_count
+            # 置信度 = 各维度置信度加权之和（封顶 1.0）。
+            # 注意：不能用平均分——信号越多共振越强，置信度应越高而非被稀释。
+            confidence = min(1.0, total_confidence)
             if confidence >= self.config.min_confidence:
                 signal = Signal(
                     symbol=bar.symbol,
@@ -422,6 +428,147 @@ class NicheStrategy(BaseStrategy):
         # 限制历史长度
         if len(self._event_history[symbol]) > 100:
             self._event_history[symbol] = self._event_history[symbol][-100:]
+
+    def feed_micro_events(self, events: List[Any]) -> int:
+        """将微观事件批量喂入策略（打通 Agent → 策略管道）
+
+        兼容两种事件格式：
+        - MicroEvent dataclass（finhack_pro.agents.micro_event_agent.MicroEvent）
+        - 普通 dict（key 同时兼容 event_id/event_time 与 id/time）
+
+        Args:
+            events: 微观事件列表
+
+        Returns:
+            成功接入的事件数量
+        """
+        fed = 0
+        for event in events:
+            # 统一转换为 dict
+            if isinstance(event, dict):
+                e: Dict[str, Any] = dict(event)
+            elif hasattr(event, "__dataclass_fields__"):
+                from dataclasses import asdict
+                e = asdict(event)
+            else:
+                logger.warning(f"[NicheStrategy] 跳过未知格式事件: {type(event)}")
+                continue
+
+            symbol = e.get("symbol", "")
+            if not symbol:
+                logger.warning(f"[NicheStrategy] 事件缺少 symbol，跳过: {e.get('title', '')[:50]}")
+                continue
+
+            internal: Dict[str, Any] = {
+                "id": e.get("event_id", e.get("id", "")),
+                "time": e.get("event_time", e.get("time", datetime.now().isoformat())),
+                "title": e.get("title", ""),
+                "type": e.get("event_type", e.get("type", "unknown")),
+                "impact_level": e.get("impact_level", "low"),
+                "impact_direction": e.get("impact_direction", "neutral"),
+                "confidence": e.get("confidence", 0.5),
+                "raw_data": e.get("raw_data", {}),
+            }
+            # 事件类型枚举转字符串
+            if not isinstance(internal["type"], str):
+                internal["type"] = str(internal["type"].value)
+            if not isinstance(internal["impact_level"], str):
+                internal["impact_level"] = str(internal["impact_level"].value)
+            if not isinstance(internal["impact_direction"], str):
+                internal["impact_direction"] = str(internal["impact_direction"].value)
+
+            self.add_event(symbol, internal)
+            fed += 1
+
+        if fed > 0:
+            logger.info(f"[NicheStrategy] 接入 {fed} 条微观事件")
+        return fed
+
+    def build_bar_extra(
+        self,
+        symbol: str,
+        market_cap: Optional[float] = None,
+        turnover: Optional[float] = None,
+        volume_ratio: Optional[float] = None,
+        sentiment_score: Optional[float] = None,
+        sentiment_trend: Optional[str] = None,
+        dragon_tiger: Optional[Dict[str, Any]] = None,
+        net_inflow: Optional[float] = None,
+        rsi: Optional[float] = None,
+        macd_signal: Optional[str] = None,
+        is_st: Optional[bool] = None,
+        days_listed: Optional[int] = None,
+        as_of: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """构建 BarData.extra 数据（打通另类数据 → 策略的入口）
+
+        五类差异化策略依赖的 bar.extra 字段统一从这里组装，
+        调用方（数据管道/Agent 层）只需提供可用字段，缺失项安全跳过。
+
+        Args:
+            symbol: 标的代码
+            as_of: 事件窗口基准时间（回测场景传 bar.datetime，
+                实盘场景省略则用当前时间）
+            ...: 各策略所需字段，均为可选
+
+        Returns:
+            可直接赋值给 BarData.extra 的字典
+        """
+        extra: Dict[str, Any] = {}
+
+        # 小市值策略
+        if market_cap is not None:
+            extra["market_cap"] = market_cap
+        if turnover is not None:
+            extra["turnover"] = turnover
+        if volume_ratio is not None:
+            extra["volume_ratio"] = volume_ratio
+        if is_st is not None:
+            extra["is_st"] = is_st
+        if days_listed is not None:
+            extra["days_listed"] = days_listed
+
+        # 情绪反转策略
+        if sentiment_score is not None:
+            extra["sentiment_score"] = sentiment_score
+        if sentiment_trend is not None:
+            extra["sentiment_trend"] = sentiment_trend
+
+        # 龙虎榜跟随策略
+        if dragon_tiger is not None:
+            extra["dragon_tiger"] = dragon_tiger
+
+        # 另类数据交叉策略
+        if net_inflow is not None:
+            extra["net_inflow"] = net_inflow
+        if rsi is not None:
+            extra["rsi"] = rsi
+        if macd_signal is not None:
+            extra["macd_signal"] = macd_signal
+
+        # 事件信号（as_of 前 7 天是否有高影响正面事件）
+        as_of = as_of or datetime.now()
+        recent_events = [
+            ev for ev in self._event_history.get(symbol, [])
+            if self._parse_event_time(ev.get("time", "")) >= as_of - timedelta(days=7)
+        ]
+        extra["has_positive_event"] = any(
+            ev.get("impact_level") in ("high", "critical")
+            and ev.get("impact_direction") == "positive"
+            for ev in recent_events
+        )
+
+        return extra
+
+    @staticmethod
+    def _parse_event_time(time_str: str) -> datetime:
+        """宽松解析事件时间（兼容 ISO / 空格分隔 / 无效值）"""
+        if not time_str:
+            return datetime.min
+        try:
+            return datetime.fromisoformat(str(time_str).replace(" ", "T"))
+        except (ValueError, TypeError):
+            return datetime.min
             
     def get_event_pattern(self, symbol: str) -> Dict[str, Any]:
         """获取股票的事件-反应历史模式
