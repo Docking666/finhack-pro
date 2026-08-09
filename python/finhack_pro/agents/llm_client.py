@@ -531,6 +531,7 @@ class LLMClient:
             }
 
         last_error: Optional[Exception] = None
+        data: Any = None
         for attempt in range(max(1, self.max_retries)):
             try:
                 response_text = await self.chat(
@@ -568,9 +569,87 @@ class LLMClient:
                     continue
                 raise
 
+        # 重试用尽后兜底：尝试补全必填字段（如 symbol 等可从上下文推断的字段）
+        try:
+            fallback_data = self._try_fill_required_fields(data, response_model)
+            if fallback_data is not None:
+                return response_model.model_validate(fallback_data)
+        except Exception as e:
+            last_error = e
+            logger.warning(f"结构化输出兜底补全失败: {e}")
+
         raise ValueError(
             f"无法将LLM响应解析为 {response_model.__name__}: {last_error}"
         )
+
+    @staticmethod
+    def _try_fill_required_fields(
+        data: Any,
+        response_model: Type[T],
+    ) -> Any:
+        """兜底补全必填字段
+
+        某些 LLM（如 DeepSeek）在 json_object 模式下会省略必填字段
+        （如 symbol），导致 Pydantic 校验失败。这里从 LLM 输出中
+        可能存在的零散字段（如 "股票代码"、"symbol" 别名）推断，
+        或从已有数据补 default。若无法补全返回 None。
+        """
+        if not isinstance(data, dict):
+            return None
+        try:
+            schema = response_model.model_json_schema()
+            required = schema.get("required", [])
+            props = schema.get("properties", {})
+            if not required:
+                return data
+            filled = False
+            for field in required:
+                if field in data and data[field] is not None:
+                    continue
+                # 尝试从已有数据中找同义字段
+                synonyms = {
+                    "symbol": ["代码", "股票代码", "证券代码", "ticker", "code"],
+                    "code": ["symbol", "代码", "股票代码"],
+                }
+                found = None
+                for alias in synonyms.get(field, []):
+                    for k, v in data.items():
+                        if k != field and alias in str(k).lower():
+                            found = v
+                            break
+                        if isinstance(v, str) and alias.lower() in str(k).lower():
+                            found = v
+                            break
+                    if found is not None:
+                        break
+                if found is not None:
+                    data[field] = found
+                    filled = True
+                    continue
+                # 使用默认值（若模型字段有默认值）
+                default_val = props.get(field, {}).get("default")
+                if default_val is not None:
+                    data[field] = default_val
+                    filled = True
+                    continue
+                # 类型默认值兜底
+                type_map = {
+                    "string": "",
+                    "integer": 0,
+                    "number": 0.0,
+                    "boolean": False,
+                    "array": [],
+                    "object": {},
+                }
+                json_type = props.get(field, {}).get("type")
+                if json_type in type_map:
+                    data[field] = type_map[json_type]
+                    filled = True
+            if filled:
+                return data
+            return data if filled else None
+        except Exception:
+            return None
 
     @staticmethod
     def _extract_json(text: str) -> Any:

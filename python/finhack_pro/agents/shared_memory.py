@@ -130,6 +130,14 @@ class SharedMemory:
     - 追加持久化：JSONL 逐行追加，重启后完整还原
     """
 
+    # 类属性别名：兼容 coordinator 等模块中的
+    # `self.shared_memory.MemoryType.XXX` 调用方式
+    # （MemoryType 枚举定义在本模块顶层）
+    MemoryType = MemoryType
+    # 同上：MemoryImportance 枚举也是模块级定义，
+    # 通过类属性别名兼容 `self.shared_memory.MemoryImportance.XXX`
+    MemoryImportance = MemoryImportance
+
     def __init__(self, persist_dir: Optional[str] = None, max_short_term: int = 1000, lock_shards: int = 16):
         self._memories: Dict[str, MemoryEntry] = {}
         self._type_index: Dict[MemoryType, List[str]] = {t: [] for t in MemoryType}
