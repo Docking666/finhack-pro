@@ -1118,6 +1118,8 @@ function startPythonBackendWithExe(pythonExe, backendPath) {
     waitForBackend()
       .then(() => {
         console.log('后端启动成功');
+        // 热修复：PyInstaller 打包漏掉 akshare 数据文件时自动补丁
+        patchAkshareDataFiles();
         resolve(true);
       })
       .catch((err) => {
@@ -1129,6 +1131,103 @@ function startPythonBackendWithExe(pythonExe, backendPath) {
         reject(err);
       });
   });
+}
+
+/**
+ * 热修复 akshare 数据文件缺失问题
+ *
+ * PyInstaller onefile 打包时若漏掉 akshare 的 file_fold 数据文件
+ * （如 calendar.json 交易日历），回测/分析流水线会报：
+ *   No such file or directory: _MEIxxxx/akshare/file_fold/calendar.json
+ *
+ * 本函数在后端启动后扫描当前 _MEI 临时目录，若 akshare/file_fold
+ * 缺失则尝试从以下来源补充：
+ *   1. 本机 pip 安装的 akshare 包（site-packages/akshare/file_fold）
+ *   2. 用户数据目录中的备份（%APPDATA%/finhack-pro/akshare_data）
+ *
+ * @returns {boolean} 是否成功打上补丁
+ */
+function patchAkshareDataFiles() {
+  try {
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+
+    // 1. 定位当前 PyInstaller 解包目录（含 akshare 包结构的 _MEI 目录）
+    const tempDir = os.tmpdir();
+    let meiDirs = [];
+    try {
+      meiDirs = fs.readdirSync(tempDir).filter((name) => name.startsWith('_MEI'));
+    } catch (e) {
+      return false;
+    }
+
+    let patched = false;
+    for (const dir of meiDirs) {
+      const akshareDir = path.join(tempDir, dir, 'akshare');
+      const fileFold = path.join(akshareDir, 'file_fold');
+      // 无 akshare 目录或已有 file_fold 则跳过
+      if (!fs.existsSync(akshareDir)) continue;
+      if (fs.existsSync(fileFold)) continue;
+
+      // 2. 查找数据文件来源
+      const sources = [];
+      // 2a. 本机 site-packages
+      try {
+        const sitePkgs = [
+          path.join(os.homedir(), 'AppData', 'Roaming', 'Python'),
+          'C:/Python313/Lib/site-packages',
+        ];
+        for (const sp of sitePkgs) {
+          if (fs.existsSync(sp)) {
+            const candidates = [];
+            const walk = (d) => {
+              try {
+                const entries = fs.readdirSync(d, { withFileTypes: true });
+                for (const e of entries) {
+                  if (!e.isDirectory()) continue;
+                  if (e.name === 'akshare') {
+                    const ff = path.join(d, e.name, 'file_fold');
+                    if (fs.existsSync(ff)) candidates.push(ff);
+                  } else {
+                    walk(path.join(d, e.name));
+                  }
+                }
+              } catch (err) {}
+            };
+            walk(sp);
+            sources.push(...candidates);
+          }
+        }
+      } catch (e) {}
+      // 2b. 用户数据目录备份
+      const backupDir = path.join(app.getPath('userData'), 'akshare_data', 'file_fold');
+      if (fs.existsSync(backupDir)) sources.push(backupDir);
+
+      // 3. 复制补丁
+      for (const src of sources) {
+        try {
+          fs.mkdirSync(fileFold, { recursive: true });
+          const files = fs.readdirSync(src);
+          for (const f of files) {
+            const srcFile = path.join(src, f);
+            if (fs.statSync(srcFile).isFile()) {
+              fs.copyFileSync(srcFile, path.join(fileFold, f));
+            }
+          }
+          console.log(`[热修复] akshare 数据已补丁: ${fileFold} (来源: ${src})`);
+          patched = true;
+          break;
+        } catch (e) {
+          console.warn(`[热修复] 从 ${src} 补丁失败:`, e.message);
+        }
+      }
+    }
+    return patched;
+  } catch (e) {
+    console.warn('[热修复] akshare 补丁异常:', e.message);
+    return false;
+  }
 }
 
 // 停止 Python 后端
