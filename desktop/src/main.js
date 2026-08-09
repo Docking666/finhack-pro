@@ -1164,10 +1164,15 @@ function patchAkshareDataFiles() {
 
     let patched = false;
     for (const dir of meiDirs) {
-      const akshareDir = path.join(tempDir, dir, 'akshare');
-      const fileFold = path.join(akshareDir, 'file_fold');
-      // 无 akshare 目录或已有 file_fold 则跳过
-      if (!fs.existsSync(akshareDir)) continue;
+      // 只处理本应用的后端解包目录（含 finhack_pro 包）
+      const meiRoot = path.join(tempDir, dir);
+      const isAppMei = fs.existsSync(path.join(meiRoot, 'finhack_pro'));
+      if (!isAppMei) continue;
+
+      // akshare 纯 Python 代码在 PYZ 压缩归档中，磁盘上没有 akshare 目录，
+      // 但 akshare 的 get_json_path() 会按模块路径解析到 _MEI/akshare/file_fold/，
+      // 因此需要主动创建目录并补入数据文件。
+      const fileFold = path.join(meiRoot, 'akshare', 'file_fold');
       if (fs.existsSync(fileFold)) continue;
 
       // 2. 查找数据文件来源
