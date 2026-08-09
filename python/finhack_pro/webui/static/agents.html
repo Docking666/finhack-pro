@@ -123,35 +123,73 @@
         </div>
     </div>
 
-    <!-- 流水线执行历史 -->
-    <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
-        <h3 class="text-sm font-medium text-white mb-3">执行历史</h3>
-        <div x-show="pipelineHistory.length > 0">
-            <table class="w-full text-sm">
-                <thead>
-                    <tr class="text-gray-500 text-xs border-b border-[#334155]">
-                        <th class="text-left py-2 px-2">时间</th>
-                        <th class="text-left py-2 px-2">标的</th>
-                        <th class="text-left py-2 px-2">步骤</th>
-                        <th class="text-left py-2 px-2">状态</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <template x-for="record in pipelineHistory.slice().reverse().slice(0, 10)" :key="record.run_id">
-                        <tr class="border-b border-[#334155]/50 hover:bg-[#334155]/30">
-                            <td class="py-2 px-2 text-gray-400" x-text="formatTime(record.start_time)"></td>
-                            <td class="py-2 px-2 text-white font-mono" x-text="record.symbol"></td>
-                            <td class="py-2 px-2 text-gray-400" x-text="record.steps_completed + '/6'"></td>
-                            <td class="py-2 px-2">
-                                <span class="px-2 py-0.5 rounded text-xs"
-                                      :class="record.status === 'completed' ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'"
-                                      x-text="record.status === 'completed' ? '完成' : '失败'"></span>
-                            </td>
-                        </tr>
-                    </template>
-                </tbody>
-            </table>
+    <!-- 流水线日志面板 -->
+    <div class="bg-[#1e293b] rounded-lg border border-[#334155]">
+        <div class="px-4 py-2 border-b border-[#334155] flex items-center justify-between">
+            <h3 class="text-sm font-medium text-white">流水线日志</h3>
+            <div class="flex items-center gap-2">
+                <span class="text-xs text-gray-500" x-text="pipelineHistory.length + ' 条记录'"></span>
+                <button @click="loadPipelineLogs()" class="text-xs text-blue-400 hover:text-blue-300">刷新</button>
+            </div>
         </div>
-        <div x-show="pipelineHistory.length === 0" class="text-sm text-gray-500 py-4 text-center">暂无执行历史</div>
+
+        <div x-show="pipelineHistory.length === 0" class="text-sm text-gray-500 py-6 text-center">
+            暂无流水线日志。运行分析流水线后，这里会展示每个 Agent 的执行过程和思考结果。
+        </div>
+
+        <div x-show="pipelineHistory.length > 0" class="divide-y divide-[#334155]/50">
+            <template x-for="record in pipelineHistory.slice().reverse().slice(0, 10)" :key="record.run_id">
+                <div class="px-4 py-3">
+                    <!-- 运行摘要行(可点击展开) -->
+                    <div class="flex items-center justify-between cursor-pointer select-none" @click="togglePipelineLog(record.run_id)">
+                        <div class="flex items-center gap-3">
+                            <svg class="w-3.5 h-3.5 text-gray-500 transition-transform" :class="expandedLogs.includes(record.run_id) ? 'rotate-90' : ''"
+                                 fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                            </svg>
+                            <div class="w-2 h-2 rounded-full" :class="record.status === 'completed' ? 'bg-green-500' : 'bg-red-500'"></div>
+                            <span class="text-sm text-white font-mono" x-text="record.symbol"></span>
+                            <span class="text-xs text-gray-500" x-text="formatTime(record.start_time)"></span>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <span class="text-xs text-gray-400">
+                                <span class="text-green-400" x-text="record.steps_completed"></span>/<span x-text="record.steps_total || 6"></span> 步
+                            </span>
+                            <span class="px-2 py-0.5 rounded text-xs"
+                                  :class="record.status === 'completed' ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'"
+                                  x-text="record.status === 'completed' ? '完成' : '失败'"></span>
+                        </div>
+                    </div>
+
+                    <!-- 展开详情: 各步骤日志 -->
+                    <div x-show="expandedLogs.includes(record.run_id)" class="mt-3 ml-5 space-y-2">
+                        <div x-show="record.error" class="p-2.5 rounded-lg bg-red-900/20 border border-red-900/40 text-xs text-red-300">
+                            <span class="font-medium">错误:</span> <span x-text="record.error"></span>
+                        </div>
+
+                        <template x-if="(record.steps || []).length > 0">
+                            <template x-for="s in record.steps" :key="s.step">
+                                <div class="p-2.5 rounded-lg bg-[#0f172a] border border-[#334155]/50">
+                                    <div class="flex items-center justify-between mb-1">
+                                        <div class="flex items-center gap-2">
+                                            <span class="text-xs font-medium text-gray-200" x-text="s.agent_name"></span>
+                                            <span class="text-[10px] text-gray-500" x-text="'Step ' + s.step"></span>
+                                        </div>
+                                        <div class="flex items-center gap-2">
+                                            <span x-show="s.duration_ms" class="text-[10px] text-gray-500" x-text="s.duration_ms + 'ms'"></span>
+                                            <span class="px-1.5 py-0.5 rounded text-[10px]"
+                                                  :class="s.status === 'completed' ? 'bg-green-900/50 text-green-400' : s.status === 'running' ? 'bg-blue-900/50 text-blue-400' : s.status === 'skipped' ? 'bg-gray-800 text-gray-400' : 'bg-red-900/50 text-red-400'"
+                                                  x-text="s.status === 'completed' ? '完成' : s.status === 'running' ? '运行中' : s.status === 'skipped' ? '跳过' : '失败'"></span>
+                                        </div>
+                                    </div>
+                                    <div x-show="s.summary" class="text-xs text-gray-400 markdown-content" x-html="renderMarkdown(s.summary)"></div>
+                                </div>
+                            </template>
+                        </template>
+                        <div x-show="!(record.steps || []).length" class="text-xs text-gray-500 p-2">该次运行未记录详细步骤</div>
+                    </div>
+                </div>
+            </template>
+        </div>
     </div>
 </div>

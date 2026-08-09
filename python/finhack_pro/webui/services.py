@@ -771,7 +771,27 @@ class AgentService:
                 result.end_time = datetime.now().isoformat()
                 logger.error(f"[Pipeline {run_id}] 流水线执行失败: {e}", exc_info=True)
 
+                # 记录失败步骤，便于前端日志面板展示
+                if not any(s.status == "failed" for s in result.steps):
+                    fail_step = PipelineStepResult(
+                        step=len(result.steps) + 1,
+                        agent_name="流水线",
+                        status="failed",
+                        duration_ms=0,
+                        summary=f"流水线执行失败: {str(e)[:200]}",
+                    )
+                    result.steps.append(fail_step)
+
                 if stream_callback:
+                    await stream_callback({
+                        "type": "agent_thought",
+                        "run_id": run_id,
+                        "step": len(result.steps),
+                        "agent_id": "system",
+                        "agent_name": "流水线",
+                        "content": f"## ❌ 流水线执行失败\n\n**错误信息**\n\n```\n{str(e)}\n```\n\n请检查 API Key 配置后重试。",
+                        "duration_ms": 0,
+                    })
                     await stream_callback({
                         "type": "pipeline_error",
                         "run_id": run_id,
@@ -780,6 +800,17 @@ class AgentService:
         else:
             # 无coordinator: 明确告知用户需要配置API
             logger.warning(f"[Pipeline {run_id}] 无coordinator，无法执行真实分析")
+
+            # 记录一条系统步骤，让前端日志面板能看到原因
+            sys_step = PipelineStepResult(
+                step=1,
+                agent_name="系统",
+                status="failed",
+                duration_ms=0,
+                summary="未配置LLM API，无法执行分析",
+            )
+            result.steps.append(sys_step)
+
             if stream_callback:
                 await stream_callback({
                     "type": "agent_thinking",
@@ -788,6 +819,15 @@ class AgentService:
                     "agent_id": "system",
                     "agent_name": "系统提示",
                     "content": "## ⚠️ 未配置LLM API\n\n请在「API配置」页面填写 API Key 和 Base URL，\n然后点击「测试连接」确认可用。\n\n配置完成后重新运行分析流水线。",
+                })
+                await stream_callback({
+                    "type": "agent_thought",
+                    "run_id": run_id,
+                    "step": 0,
+                    "agent_id": "system",
+                    "agent_name": "系统提示",
+                    "content": "## ⚠️ 未配置LLM API\n\n请在「API配置」页面填写 API Key 和 Base URL，\n然后点击「测试连接」确认可用。\n\n配置完成后重新运行分析流水线。",
+                    "duration_ms": 0,
                 })
 
             result.status = "failed"
@@ -808,7 +848,11 @@ class AgentService:
             "run_id": run_id,
             "symbol": request.symbol,
             "status": result.status,
+            "error": result.error,
             "steps_completed": len([s for s in result.steps if s.status == "completed"]),
+            "steps_total": len(result.steps),
+            "steps": [s.model_dump() for s in result.steps],
+            "final_signal": result.final_signal,
             "start_time": result.start_time,
             "end_time": result.end_time,
         })

@@ -1000,6 +1000,7 @@ function agentsPage() {
         thinkingMessage: '',
         finalSignal: null,
         pipelineHistory: [],
+        expandedLogs: [],
 
         async init() {
             window.__agentsPage = this;
@@ -1020,6 +1021,27 @@ function agentsPage() {
                 }
             } catch (e) {
                 console.error('加载Agent数据失败:', e);
+            }
+        },
+
+        async loadPipelineLogs() {
+            try {
+                const resp = await API.getPipelineHistory();
+                if (resp.success) {
+                    this.pipelineHistory = resp.data;
+                    window.__alpineApp.showToast('日志已刷新', 'success');
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('刷新日志失败: ' + e.message, 'error');
+            }
+        },
+
+        togglePipelineLog(runId) {
+            const idx = this.expandedLogs.indexOf(runId);
+            if (idx >= 0) {
+                this.expandedLogs.splice(idx, 1);
+            } else {
+                this.expandedLogs.push(runId);
             }
         },
 
@@ -1100,7 +1122,26 @@ function agentsPage() {
                     }
                     // 刷新历史
                     this.loadData();
-                    window.__alpineApp.showToast('分析流水线完成', 'success');
+                    if (data.status === 'failed') {
+                        window.__alpineApp.showToast('分析流水线失败', 'error');
+                    } else {
+                        window.__alpineApp.showToast('分析流水线完成', 'success');
+                    }
+                    break;
+
+                case 'pipeline_error':
+                    this.pipelineRunning = false;
+                    this.thinkingMessage = '';
+                    // 记录错误消息到思考区
+                    this.thoughtMessages.push({
+                        step: 99,
+                        agent_id: 'system',
+                        agent_name: '系统错误',
+                        content: '## ❌ 流水线执行失败\n\n```\n' + (data.error || '未知错误') + '\n```',
+                        duration_ms: 0,
+                    });
+                    this.loadData();
+                    window.__alpineApp.showToast('分析流水线失败: ' + (data.error || '未知错误'), 'error');
                     break;
             }
         },

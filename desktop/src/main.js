@@ -1120,6 +1120,8 @@ function startPythonBackendWithExe(pythonExe, backendPath) {
         console.log('后端启动成功');
         // 热修复：PyInstaller 打包漏掉 akshare 数据文件时自动补丁
         patchAkshareDataFiles();
+        // 热修复：补丁 WebUI 静态文件（流水线日志面板等前端增强）
+        patchWebuiStaticFiles();
         resolve(true);
       })
       .catch((err) => {
@@ -1231,6 +1233,80 @@ function patchAkshareDataFiles() {
     return patched;
   } catch (e) {
     console.warn('[热修复] akshare 补丁异常:', e.message);
+    return false;
+  }
+}
+
+/**
+ * 热修复 WebUI 静态文件（app.js / agents.html 等）
+ *
+ * 已安装版的 backend exe 打包了旧版前端，流水线日志面板等新功能
+ * 不在其中。本函数把应用目录下（resources/app-asar 外置补丁目录）
+ * 的修复版静态文件复制进当前 _MEI 的 finhack_pro/webui/static，
+ * 使前端增强立即生效，无需重新打包 exe。
+ *
+ * 补丁源目录优先级：
+ *   1. %APPDATA%/finhack-pro/webui_patch/static（推荐，用户可更新）
+ *   2. 安装目录 resources/webui_patch/static
+ *
+ * @returns {boolean} 是否成功打上补丁
+ */
+function patchWebuiStaticFiles() {
+  try {
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+
+    // 1. 定位补丁源
+    const sources = [];
+    const userPatchDir = path.join(app.getPath('userData'), 'webui_patch', 'static');
+    if (fs.existsSync(userPatchDir)) sources.push(userPatchDir);
+    const installPatchDir = path.join(getAppPath(), 'resources', 'webui_patch', 'static');
+    if (fs.existsSync(installPatchDir)) sources.push(installPatchDir);
+    if (sources.length === 0) {
+      console.log('[热修复] 未找到 WebUI 补丁目录，跳过静态文件补丁');
+      return false;
+    }
+
+    // 2. 定位 _MEI 中 finhack_pro/webui/static
+    const tempDir = os.tmpdir();
+    let patched = false;
+    let meiDirs = [];
+    try {
+      meiDirs = fs.readdirSync(tempDir).filter((name) => name.startsWith('_MEI'));
+    } catch (e) {
+      return false;
+    }
+
+    for (const dir of meiDirs) {
+      const staticDir = path.join(tempDir, dir, 'finhack_pro', 'webui', 'static');
+      if (!fs.existsSync(staticDir)) continue;
+
+      for (const srcDir of sources) {
+        try {
+          const files = fs.readdirSync(srcDir);
+          let copied = 0;
+          for (const f of files) {
+            const srcFile = path.join(srcDir, f);
+            const dstFile = path.join(staticDir, f);
+            if (fs.statSync(srcFile).isFile()) {
+              fs.copyFileSync(srcFile, dstFile);
+              copied++;
+            }
+          }
+          if (copied > 0) {
+            console.log(`[热修复] WebUI 静态文件已补丁 ${copied} 个文件 → ${staticDir} (来源: ${srcDir})`);
+            patched = true;
+          }
+          break;
+        } catch (e) {
+          console.warn(`[热修复] 从 ${srcDir} 补丁 WebUI 失败:`, e.message);
+        }
+      }
+    }
+    return patched;
+  } catch (e) {
+    console.warn('[热修复] WebUI 补丁异常:', e.message);
     return false;
   }
 }
