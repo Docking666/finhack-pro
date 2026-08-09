@@ -5,11 +5,12 @@
 社区后端（CloudBase / GitHub）接入后，将在此追加远端列表/下载端点。
 
 Usage:
-    GET  /api/workshop/packages        # 列出已安装策略包
-    POST /api/workshop/install         # 安装本地 zip 包
-    POST /api/workshop/pack            # 打包策略目录为 zip
-    POST /api/workshop/{id}/uninstall  # 卸载
-    POST /api/workshop/scan            # 安全扫描（仅检测，不安装）
+    GET  /api/workshop/packages            # 列出已安装策略包
+    POST /api/workshop/install             # 安装本地 zip 包
+    POST /api/workshop/share-generated     # 分享策略工坊生成的策略代码
+    POST /api/workshop/pack                # 打包策略目录为 zip
+    POST /api/workshop/{id}/uninstall      # 卸载
+    POST /api/workshop/scan                # 安全扫描（仅检测，不安装）
 """
 
 from __future__ import annotations
@@ -47,6 +48,18 @@ class PackRequest(BaseModel):
     description: str = Field("", description="描述")
     entry_class: str = Field("", description="策略类名")
     params_schema: Dict[str, Any] = Field(default_factory=dict, description="参数 JSON Schema")
+
+
+class ShareGeneratedRequest(BaseModel):
+    """分享策略工坊生成的策略代码"""
+    code: str = Field(..., description="策略代码（LLM 生成）")
+    name: str = Field("生成的策略", description="策略名称")
+    description: str = Field("", description="策略描述")
+    version: str = Field("0.1.0", description="版本")
+    author: str = Field("workshop", description="作者")
+    entry_class: str = Field("", description="策略类名")
+    params_schema: Dict[str, Any] = Field(default_factory=dict, description="参数 JSON Schema")
+    strategy_id: str = Field("", description="策略 ID（留空自动生成）")
 
 
 class ScanRequest(BaseModel):
@@ -138,6 +151,67 @@ async def pack_package(req: PackRequest) -> APIResponse:
     except Exception as e:
         logger.error(f"[Workshop] 打包失败: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/share-generated", response_model=APIResponse)
+async def share_generated(req: ShareGeneratedRequest) -> APIResponse:
+    """分享策略工坊生成的策略代码
+
+    把 LLM 生成的策略代码打包为标准工坊 zip（manifest + strategy.py），
+    输出到 workshop 目录供下载分发；同时返回包 ID，安装方可直接安装。
+
+    - 自动生成策略 ID（gen_ 前缀 + 随机串，可指定 strategy_id 覆盖）
+    - 分享前执行安全扫描：含高危调用则拒绝分享
+    """
+    import re
+    import tempfile
+    import uuid
+
+    # 1. 安全扫描（分享的代码会被他人安装执行，必须过安全关）
+    scanner = PackageScanner()
+    issues = scanner.scan_code(req.code)
+    high_issues = [i for i in issues if i.severity == "high"]
+    if high_issues:
+        detail = "; ".join(i.message for i in high_issues[:5])
+        raise HTTPException(
+            status_code=400,
+            detail=f"策略代码含高危安全风险，禁止分享: {detail}",
+        )
+
+    # 2. 构造策略 ID 与 manifest
+    pkg_id = req.strategy_id.strip() or f"gen_{uuid.uuid4().hex[:10]}"
+    manifest = StrategyManifest.from_dict({
+        "id": pkg_id,
+        "name": req.name,
+        "version": req.version,
+        "author": req.author,
+        "description": req.description,
+        "type": "strategy",
+        "entry": "strategy.py",
+        "entry_class": req.entry_class,
+        "params_schema": req.params_schema or StrategyManifest.default_params_schema(),
+    })
+    manifest.touch()
+
+    # 3. 写入临时目录并打包
+    manager = _get_manager()
+    with tempfile.TemporaryDirectory(prefix="workshop_share_") as tmp:
+        tmp_dir = Path(tmp)
+        (tmp_dir / "strategy.py").write_text(req.code, encoding="utf-8")
+        (tmp_dir / "manifest.yaml").write_text(manifest.to_yaml(), encoding="utf-8")
+        pkg_path = manager.pack(strategy_dir=str(tmp_dir), manifest=manifest)
+
+    return APIResponse(
+        success=True,
+        data={
+            "path": str(pkg_path),
+            "name": pkg_path.name,
+            "package_id": manifest.package_id,
+            "strategy_id": pkg_id,
+            "manifest": manifest.to_dict(),
+        },
+        message="分享成功",
+    )
 
 
 @router.post("/{package_id}/uninstall", response_model=APIResponse)

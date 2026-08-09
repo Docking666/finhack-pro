@@ -237,3 +237,72 @@ class TestPackageManager:
             zf.writestr("../evil.py", "print('evil')")
         with pytest.raises(ManifestError, match="非法路径"):
             mgr.install(str(evil_zip))
+
+
+# ============================================================================
+# 分享策略工坊生成代码（generate → share 闭环）
+# ============================================================================
+
+class TestShareGenerated:
+    """策略工坊生成 → 分享 → 安装 闭环"""
+
+    SAFE_CODE = '''
+from finhack_pro.strategies.base import BaseStrategy, Signal, SignalDirection
+
+class DemoStrategy(BaseStrategy):
+    def on_bar(self, context, bar):
+        if bar.close > 100:
+            return [Signal(symbol=bar.symbol, direction=SignalDirection.BUY, price=bar.close)]
+        return []
+'''
+
+    def test_share_generated_packs_zip(self, tmp_path):
+        """分享生成代码 → 产出 zip 包（含 manifest + strategy.py）"""
+        import zipfile
+
+        mgr = PackageManager(
+            workshop_dir=str(tmp_path / "workshop"),
+            strategies_dir=str(tmp_path / "strategies"),
+            allowlist_scope="finhack",
+        )
+        manifest = StrategyManifest.from_dict({
+            "id": "gen_test01", "name": "示例策略", "version": "0.1.0",
+            "author": "workshop", "type": "strategy", "entry": "strategy.py",
+        })
+
+        # 构造：把代码写入临时目录再打包（模拟分享接口的临时目录流程）
+        from pathlib import Path
+        src = tmp_path / "gen_src"
+        src.mkdir()
+        (src / "strategy.py").write_text(self.SAFE_CODE, encoding="utf-8")
+        (src / "manifest.yaml").write_text(manifest.to_yaml(), encoding="utf-8")
+        pkg = mgr.pack(strategy_dir=str(src), manifest=manifest)
+
+        with zipfile.ZipFile(pkg) as zf:
+            names = zf.namelist()
+            assert "manifest.yaml" in names
+            assert "strategy.py" in names
+            assert "DemoStrategy" in zf.read("strategy.py").decode()
+
+    def test_share_install_roundtrip(self, tmp_path):
+        """分享的包可安装并出现在列表"""
+        from pathlib import Path
+        src = tmp_path / "gen_src"
+        src.mkdir()
+        (src / "strategy.py").write_text(self.SAFE_CODE, encoding="utf-8")
+
+        mgr = PackageManager(
+            workshop_dir=str(tmp_path / "workshop"),
+            strategies_dir=str(tmp_path / "strategies"),
+            allowlist_scope="finhack",
+        )
+        manifest = StrategyManifest.from_dict({
+            "id": "gen_roundtrip", "name": "闭环策略", "version": "0.1.0",
+            "author": "workshop", "type": "strategy", "entry": "strategy.py",
+        })
+        pkg = mgr.pack(strategy_dir=str(src), manifest=manifest)
+        installed = mgr.install(str(pkg))
+        assert installed.manifest.id == "gen_roundtrip"
+
+        listed = mgr.list_installed()
+        assert any(p.manifest.id == "gen_roundtrip" for p in listed)

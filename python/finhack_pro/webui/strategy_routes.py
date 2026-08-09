@@ -707,6 +707,32 @@ async def generate_strategy(request: StrategyGenerateRequest):
         code = result.get("code", "")
         valid, msg = _validate_strategy_code(code)
         result["validation"] = {"valid": valid, "message": msg}
+
+        # 生成策略 ID（供分享到创意工坊使用）
+        strategy_id = f"gen_{uuid.uuid4().hex[:10]}"
+        result["strategy_id"] = strategy_id
+        result["name"] = result.get("name") or request.description[:20]
+
+        # 若验证通过，保存到本地生成目录（供分享/安装）
+        if valid:
+            from finhack_pro.workshop import PackageManager, StrategyManifest
+            gen_dir = Path("data/generated_strategies") / strategy_id
+            gen_dir.mkdir(parents=True, exist_ok=True)
+            (gen_dir / "strategy.py").write_text(code, encoding="utf-8")
+            manifest = StrategyManifest.from_dict({
+                "id": strategy_id,
+                "name": result["name"],
+                "version": "0.1.0",
+                "author": "workshop",
+                "description": request.description,
+                "type": "strategy",
+                "entry": "strategy.py",
+                "entry_class": result.get("class_name", ""),
+                "params_schema": result.get("params_schema") or StrategyManifest.default_params_schema(),
+            })
+            (gen_dir / "manifest.yaml").write_text(manifest.to_yaml(), encoding="utf-8")
+            result["saved_path"] = str(gen_dir)
+
         return APIResponse(message="策略生成成功", data=result)
     except ValueError as e:
         return APIResponse(message="策略已生成但格式解析失败", data={"raw_response": response, "validation": {"valid": False, "message": str(e)}})

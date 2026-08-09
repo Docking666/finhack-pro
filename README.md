@@ -987,9 +987,31 @@ manager.uninstall("dual_thrust")
 | `/api/workshop/packages` | GET | 列出已安装策略包 |
 | `/api/workshop/install` | POST | 安装本地 zip 包 |
 | `/api/workshop/install/upload` | POST | 上传 zip 并安装 |
+| `/api/workshop/share-generated` | POST | **分享策略工坊生成的策略代码** |
 | `/api/workshop/pack` | POST | 打包策略目录为 zip |
 | `/api/workshop/scan` | POST | 安全扫描（仅检测） |
 | `/api/workshop/{id}/uninstall` | POST | 卸载 |
+
+### 生成即分享（策略工坊 → 创意工坊闭环）
+
+在 WebUI「策略工坊」中通过 LLM 生成策略后，可以直接一键分享到创意工坊：
+
+```
+策略工坊 generate ──→ strategy_id + 代码 ──→ /api/workshop/share-generated
+                                                 │ 安全扫描（高危调用拒绝）
+                                                 ▼
+                                         产出标准 zip 包
+                                                 │
+                                    ┌────────────┴────────────┐
+                                    ▼                        ▼
+                              本机创意工坊                分发他人安装
+                          （可安装/升级/卸载）        （upload 或 install）
+```
+
+- `generate` 接口现在会返回 `strategy_id` 并把代码保存到 `data/generated_strategies/`
+- `share-generated` 接收代码 → 安全扫描 → 生成 `manifest.yaml` + `strategy.py` 标准 zip
+- 含高危调用（`os.system`/`eval`/`subprocess` 等）的代码**拒绝分享**
+- 分享产物与内置策略包同格式，安装方通过工坊页面或 `PackageManager.install()` 直接使用
 
 **社区后端规划**：当前为本地安装 + GitHub 仓库分发；
 后续将接入 CloudBase（云函数 API + 云数据库元数据 + 云存储策略包），

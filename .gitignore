@@ -68,3 +68,6 @@ site/
 # Misc
 *.bak
 *.tmp
+
+# 创意工坊临时解压目录
+python/data/workshop/.tmp_*
