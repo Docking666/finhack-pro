@@ -1086,7 +1086,14 @@ function startPythonBackendWithExe(pythonExe, backendPath) {
         PYTHONUNBUFFERED: '1',
         FLASK_ENV: 'production',
         HOST: BACKEND_HOST,
-        PORT: String(BACKEND_PORT)
+        PORT: String(BACKEND_PORT),
+        // 热修复：PYTHONPATH 指向用户数据目录的 py_patch，
+        // 让修复后的 Python 模块(shared_memory.py 等)优先于
+        // PyInstaller PYZ 内置模块加载，避免重打包 exe。
+        // 仅在存在补丁目录时注入，避免影响正常启动。
+        ...(fs.existsSync(path.join(app.getPath('userData'), 'py_patch'))
+          ? { PYTHONPATH: path.join(app.getPath('userData'), 'py_patch') }
+          : {}),
       },
       stdio: ['ignore', 'pipe', 'pipe']
     });
