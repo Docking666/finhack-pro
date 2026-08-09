@@ -1013,9 +1013,45 @@ manager.uninstall("dual_thrust")
 - 含高危调用（`os.system`/`eval`/`subprocess` 等）的代码**拒绝分享**
 - 分享产物与内置策略包同格式，安装方通过工坊页面或 `PackageManager.install()` 直接使用
 
-**社区后端规划**：当前为本地安装 + GitHub 仓库分发；
-后续将接入 CloudBase（云函数 API + 云数据库元数据 + 云存储策略包），
-支持浏览 / 搜索 / 评分 / 一键升级。
+### 云端市场（CloudBase 已接入 ✅）
+
+工坊已接入 CloudBase 云端（**云函数 API + 云数据库 + 云存储**），实现跨用户策略市场：
+
+```
+本地客户端 (WorkshopCloud)  ←→  CloudBase HTTP 云函数 workshop-api
+                                 │  GET  /api/packages          浏览/搜索/分页
+                                 │  GET  /api/packages/:id      详情
+                                 │  POST /api/packages          上传（zip→云存储）
+                                 │  GET  /api/packages/:id/download  临时下载 URL
+                                 │  POST /api/packages/:id/reviews   评分/评论
+                                 └─ 云数据库 workshop_packages / workshop_reviews
+```
+
+```python
+from finhack_pro.workshop import WorkshopCloud
+
+cloud = WorkshopCloud()  # 默认指向 FinHack Pro 官方市场
+
+# 浏览云端
+market = cloud.list_packages(keyword="动量")
+for pkg in market["items"]:
+    print(pkg["name"], pkg["version"], f"评分 {pkg['rating_avg']}")
+
+# 一键下载安装
+cloud.download_and_install("dual_thrust")
+
+# 分享本地策略到云端
+cloud.upload_package("data/workshop/my_strat-v1.0.0.zip")
+
+# 评分
+cloud.rate_package("dual_thrust", 5, "经典策略，稳健")
+```
+
+WebUI 云端接口（`/api/workshop/cloud/*`）：浏览市场 / 详情 / 云端安装 / 云端上传。
+
+**云端部署**：后端为 `cloudfunctions/workshop-api`（Node.js HTTP 云函数，监听 9000），
+数据存 `workshop_packages` / `workshop_reviews` 集合，策略包存云存储 `workshop/` 目录。
+部署步骤见 `cloudfunctions/workshop-api/README.md`。
 
 ---
 

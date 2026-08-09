@@ -17,6 +17,11 @@ Usage:
     installed = manager.install("data/workshop/dual_thrust_a-v1.2.0.zip")
 """
 
+from finhack_pro.workshop.cloud import (
+    DEFAULT_CLOUD_API,
+    WorkshopCloud,
+    WorkshopCloudError,
+)
 from finhack_pro.workshop.manifest import (
     MANIFEST_FILENAME,
     ManifestError,
@@ -39,4 +44,7 @@ __all__ = [
     "InstalledPackage",
     "PackageScanner",
     "SecurityIssue",
+    "WorkshopCloud",
+    "WorkshopCloudError",
+    "DEFAULT_CLOUD_API",
 ]

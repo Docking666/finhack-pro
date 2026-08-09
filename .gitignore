@@ -71,3 +71,6 @@ site/
 
 # 创意工坊临时解压目录
 python/data/workshop/.tmp_*
+
+# Node.js 依赖（云函数部署时本地安装）
+node_modules/

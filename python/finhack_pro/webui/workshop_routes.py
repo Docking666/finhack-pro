@@ -2,7 +2,7 @@
 创意工坊 API 路由
 
 提供策略包的浏览、上传（本地打包）、安装、卸载、注册表查询等接口。
-社区后端（CloudBase / GitHub）接入后，将在此追加远端列表/下载端点。
+已接入 CloudBase 云端（云函数 API + 云数据库 + 云存储），支持云端浏览/下载/上传。
 
 Usage:
     GET  /api/workshop/packages            # 列出已安装策略包
@@ -11,6 +11,11 @@ Usage:
     POST /api/workshop/pack                # 打包策略目录为 zip
     POST /api/workshop/{id}/uninstall      # 卸载
     POST /api/workshop/scan                # 安全扫描（仅检测，不安装）
+    # 云端（CloudBase）
+    GET  /api/workshop/cloud/packages      # 浏览云端策略市场
+    GET  /api/workshop/cloud/packages/{id} # 云端策略详情
+    POST /api/workshop/cloud/install       # 下载云端策略并安装到本地
+    POST /api/workshop/cloud/upload        # 上传本地策略包到云端
 """
 
 from __future__ import annotations
@@ -23,7 +28,14 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from finhack_pro.webui.models import APIResponse
-from finhack_pro.workshop import ManifestError, PackageManager, PackageScanner, StrategyManifest
+from finhack_pro.workshop import (
+    ManifestError,
+    PackageManager,
+    PackageScanner,
+    StrategyManifest,
+    WorkshopCloud,
+    WorkshopCloudError,
+)
 
 router = APIRouter(prefix="/api/workshop", tags=["workshop"])
 
@@ -244,4 +256,90 @@ async def scan_code(req: ScanRequest) -> APIResponse:
         )
     except Exception as e:
         logger.error(f"[Workshop] 扫描失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# ============================================================
+# 云端工坊（CloudBase）
+# ============================================================
+
+class CloudInstallRequest(BaseModel):
+    """云端安装请求"""
+    package_id: str = Field(..., description="云端策略 ID")
+    force: bool = Field(False, description="同版本已安装时是否覆盖")
+
+
+class CloudUploadRequest(BaseModel):
+    """云端上传请求"""
+    zip_path: str = Field(..., description="本地策略包 zip 路径")
+    name: str = Field("", description="策略名称（默认取 ID）")
+    version: str = Field("", description="版本（默认从文件名推导）")
+    author: str = Field("anonymous", description="作者")
+    description: str = Field("", description="描述")
+    entry_class: str = Field("", description="策略类名")
+    package_id: str = Field("", description="策略 ID（默认从文件名推导）")
+
+
+def _get_cloud() -> WorkshopCloud:
+    """获取云端客户端"""
+    return WorkshopCloud()
+
+
+@router.get("/cloud/packages", response_model=APIResponse)
+async def cloud_list_packages(q: str = "", page: int = 1, page_size: int = 20) -> APIResponse:
+    """浏览云端策略市场"""
+    try:
+        data = _get_cloud().list_packages(keyword=q, page=page, page_size=page_size)
+        return APIResponse(success=True, data=data)
+    except WorkshopCloudError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except Exception as e:
+        logger.error(f"[Workshop] 云端列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/cloud/packages/{package_id}", response_model=APIResponse)
+async def cloud_get_package(package_id: str) -> APIResponse:
+    """获取云端策略详情"""
+    try:
+        data = _get_cloud().get_package(package_id)
+        return APIResponse(success=True, data=data)
+    except WorkshopCloudError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except Exception as e:
+        logger.error(f"[Workshop] 云端详情失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/cloud/install", response_model=APIResponse)
+async def cloud_install(req: CloudInstallRequest) -> APIResponse:
+    """下载云端策略并安装到本地"""
+    try:
+        installed = _get_cloud().download_and_install(req.package_id, force=req.force)
+        return APIResponse(success=True, data=installed, message="云端策略安装成功")
+    except WorkshopCloudError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except Exception as e:
+        logger.error(f"[Workshop] 云端安装失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/cloud/upload", response_model=APIResponse)
+async def cloud_upload(req: CloudUploadRequest) -> APIResponse:
+    """上传本地策略包到云端"""
+    try:
+        data = _get_cloud().upload_package(
+            zip_path=req.zip_path,
+            package_id=req.package_id,
+            name=req.name,
+            version=req.version,
+            author=req.author,
+            description=req.description,
+            entry_class=req.entry_class,
+        )
+        return APIResponse(success=True, data=data, message="上传云端成功")
+    except WorkshopCloudError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except Exception as e:
+        logger.error(f"[Workshop] 云端上传失败: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e

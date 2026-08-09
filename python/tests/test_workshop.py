@@ -306,3 +306,103 @@ class DemoStrategy(BaseStrategy):
 
         listed = mgr.list_installed()
         assert any(p.manifest.id == "gen_roundtrip" for p in listed)
+
+
+# ============================================================================
+# 云端客户端（WorkshopCloud）测试 - mock 网络
+# ============================================================================
+
+class TestWorkshopCloud:
+    """云端客户端测试（mock HTTP，不依赖真实 CloudBase）"""
+
+    def test_list_packages_builds_request(self, monkeypatch):
+        """list_packages 构造正确请求并解析响应"""
+        from finhack_pro.workshop.cloud import WorkshopCloud
+
+        captured = {}
+
+        def fake_request(method, path, body=None):
+            captured["method"] = method
+            captured["path"] = path
+            return {"items": [{"package_id": "dual_thrust"}], "page": 1, "pageSize": 20, "total": 1}
+
+        cloud = WorkshopCloud(base_url="https://example.test/api")
+        monkeypatch.setattr(cloud, "_request", fake_request)
+
+        result = cloud.list_packages(keyword="突破", page=2)
+        assert result["total"] == 1
+        assert captured["method"] == "GET"
+        assert "page=2" in captured["path"]
+        assert "q=" in captured["path"]  # 关键词已 URL 编码
+
+    def test_download_and_install_roundtrip(self, monkeypatch, tmp_path):
+        """下载 → 安装 闭环（mock 下载）"""
+        from finhack_pro.workshop.cloud import WorkshopCloud
+
+        cloud = WorkshopCloud(
+            base_url="https://example.test/api",
+            workshop_dir=str(tmp_path / "workshop"),
+            strategies_dir=str(tmp_path / "strategies"),
+        )
+
+        # 构造一个可安装的 zip 用于"下载"
+        src = tmp_path / "pkg_src"
+        src.mkdir()
+        (src / "strategy.py").write_text(
+            "class CloudStrat:/n    def on_bar(self, bar):\n        return []\n",
+            encoding="utf-8",
+        )
+        manifest = StrategyManifest.from_dict({
+            "id": "cloud_strat", "name": "云端策略", "version": "1.0.0",
+            "author": "cloud", "type": "strategy", "entry": "strategy.py",
+        })
+        zip_path = cloud._local.pack(strategy_dir=str(src), manifest=manifest)
+
+        def fake_download(package_id, save_dir=None):
+            return zip_path  # 返回本地预构造的 zip
+
+        monkeypatch.setattr(cloud, "download", fake_download)
+        installed = cloud.download_and_install("cloud_strat")
+        assert installed["manifest"]["id"] == "cloud_strat"
+
+    def test_upload_builds_body(self, monkeypatch, tmp_path):
+        """upload_package 构造正确请求体"""
+        from finhack_pro.workshop.cloud import WorkshopCloud
+
+        cloud = WorkshopCloud(base_url="https://example.test/api")
+        captured = {}
+
+        # 造一个最小 zip
+        import zipfile
+        zip_path = tmp_path / "my_strat-v2.0.0.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("strategy.py", "class X: pass")
+
+        def fake_request(method, path, body=None):
+            captured["body"] = body
+            return {"package_id": body["package_id"], "version": body["version"]}
+
+        monkeypatch.setattr(cloud, "_request", fake_request)
+        result = cloud.upload_package(str(zip_path))
+        assert result["package_id"] == "my_strat"      # 文件名推导
+        assert result["version"] == "2.0.0"            # 文件名推导
+        assert captured["body"]["zip_base64"]           # 内容已 base64
+
+    def test_network_error_wrapped(self, monkeypatch):
+        """网络异常包装为 WorkshopCloudError"""
+        import urllib.error
+
+        from finhack_pro.workshop.cloud import WorkshopCloud, WorkshopCloudError
+
+        cloud = WorkshopCloud(base_url="https://example.test/api")
+
+        def boom(*args, **kwargs):
+            raise urllib.error.URLError("connection refused")
+
+        # patch 底层 urlopen（保留 _request 的异常包装逻辑）
+        monkeypatch.setattr(urllib.request, "urlopen", boom)
+        try:
+            cloud.list_packages()
+            assert False, "应抛出 WorkshopCloudError"
+        except WorkshopCloudError as e:
+            assert "无法连接" in str(e)

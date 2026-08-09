@@ -1,0 +1,12 @@
+{
+  "name": "workshop-api",
+  "version": "1.0.0",
+  "description": "FinHack Pro 创意工坊后端 API",
+  "main": "index.js",
+  "dependencies": {
+    "@cloudbase/node-sdk": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
