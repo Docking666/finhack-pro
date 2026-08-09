@@ -81,8 +81,13 @@ class ConfigService:
                             config_dict[section][key] = value
 
         # 重新创建配置对象
+        # 注意：reset_config() 会清空全局单例，但这里必须把新配置同步回全局单例，
+        # 否则 strategy_routes._call_llm 等模块通过 get_config() 读到的仍是空配置，
+        # 导致"已填写 API Key 仍提示请设置 API Key"。
+        from finhack_pro.config import set_global_config
         reset_config()
         self._config = FinhackProConfig(**config_dict)
+        set_global_config(self._config)
         logger.info("配置已更新")
         return self._mask_sensitive(self._config.model_dump())
 

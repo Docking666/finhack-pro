@@ -72,6 +72,14 @@ datas = [
     ('../config', 'config'),
 ]
 
+# 收集 akshare 的数据文件（file_fold/*.json 交易日历等）
+# 缺少这些文件会导致回测/分析流水线报
+# No such file or directory: _MEIxxxx/akshare/file_fold/calendar.json
+try:
+    datas += collect_data_files('akshare')
+except Exception as e:
+    print(f'[WARN] 收集 akshare 数据文件失败: {e}')
+
 a = Analysis(
     ['finhack_pro/webui/standalone.py'],
     pathex=[],

@@ -153,6 +153,12 @@ def get_config(config_path: Optional[str] = None, force_reload: bool = False) ->
     return _global_config
 
 
+def set_global_config(config: FinhackProConfig) -> None:
+    """设置全局配置单例（供 update_config 等场景同步使用）"""
+    global _global_config
+    _global_config = config
+
+
 def reset_config() -> None:
     """重置全局配置(主要用于测试)"""
     global _global_config

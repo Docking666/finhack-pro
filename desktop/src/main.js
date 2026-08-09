@@ -625,6 +625,16 @@ function runEnvCheck(action = 'check', mirror = 'default') {
     const appPath = getAppPath();
     let scriptPath;
 
+    // 打包环境（PyInstaller onefile）下跳过环境检测：
+    // getPythonExecutable() 返回的是 finhack-backend.exe（服务程序），
+    // 用它执行 setup_env.py 会忽略参数直接启动后端服务，进程永不退出，
+    // 导致启动流程卡 120 秒。打包环境依赖已全部内置，无需检测。
+    if (app.isPackaged) {
+      console.log('打包环境：跳过 setup_env.py 环境检测（依赖已内置）');
+      resolve({ success: true, data: null });
+      return;
+    }
+
     if (app.isPackaged) {
       // 打包后: setup_env.py 在 resources/scripts/ 下
       scriptPath = path.join(appPath, 'resources', 'scripts', 'setup_env.py');
