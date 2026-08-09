@@ -521,6 +521,8 @@ class DataFetcher:
             "trade_date": "date",
             "vol": "volume",
             "amount": "amount",
+            "pre_close": "pre_close",
+            "昨收": "pre_close",
         }
         df = df.rename(columns={k: v for k, v in column_map.items() if k in df.columns})
 
@@ -529,5 +531,11 @@ class DataFetcher:
         for col in required:
             if col not in df.columns:
                 df[col] = 0.0
+
+        # 派生昨收列（供涨跌停撮合约束使用）：
+        # 数据源未提供 pre_close 时，用前一根 close 填充
+        if "pre_close" not in df.columns:
+            df["pre_close"] = df["close"].shift(1)
+        df["pre_close"] = df["pre_close"].fillna(method="bfill").fillna(df["close"])
 
         return df

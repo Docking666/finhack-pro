@@ -15,8 +15,10 @@
 - [系统架构](#系统架构)
 - [安全与可靠性](#安全与可靠性)
 - [回测引擎系统](#回测引擎系统)
+- [撮合精度约束](#撮合精度约束-backtestexecutionpy)
 - [性能加速模块](#性能加速模块)
-- [Rust 核心桥接服务](#rust-核心桥接服务)
+- [Rust 加速层](#rust-加速层)
+- [创意工坊](#创意工坊workshop)
 - [可观测性模块](#可观测性模块)
 - [信号处理流水线](#信号处理流水线)
 - [差异化策略框架](#差异化策略框架)
@@ -412,6 +414,42 @@ async def call_llm(prompt):
 相比旧的逐 bar 物理切片实现（O(N²)，3,000 bars 耗时 6.2s）加速约 18 倍。
 保护成本换来的是物理上不可能产生未来函数的结果可信度。
 
+### 撮合精度约束 (`backtest/execution.py`)
+
+> **回测保真度**：防未来函数解决"数据污染"，撮合约束解决"成交失真"。
+> 两者互补，共同决定回测结果是否可信。
+
+`ExecutionGate` 提供 A 股真实交易规则约束，默认**全部关闭**（向后兼容），逐项开启后回测逐步贴近实盘：
+
+| 约束 | 开关 | 说明 |
+|------|------|------|
+| 涨跌停 | `enable_limit_up_down` | 涨停价拒绝买单、跌停价拒绝卖单（支持 ST 5% / 创业板科创板 20% 自动识别） |
+| T+1 | `enable_t1` | 当日买入次日才可卖出（持仓记录 `available_date`） |
+| 停牌 | `enable_suspension` | 停牌 bar（`trading_status=suspended` 或零成交）跳过全部成交 |
+| 最小变动价位 | `enable_price_tick` | 成交价对齐 0.01 元 |
+| 滑点模型 | `slippage_model` | `fixed`（固定比例）/ `volume_proportional`（成交量比例）/ `impact_cost`（平方根冲击） |
+
+```python
+from finhack_pro.backtest.vectorized_engine import VectorizedEngine, VectorizedEngineConfig
+
+cfg = VectorizedEngineConfig(
+    enable_limit_up_down=True,   # 涨停拒买、跌停拒卖
+    enable_t1=True,              # 当日买次日卖
+    enable_suspension=True,      # 停牌不成交
+    slippage_model="volume_proportional",  # 大单滑点更大
+)
+result = VectorizedEngine(cfg).run(strategy, "600519.SH", data)
+```
+
+- 涨跌停幅度按标的自动识别：`bar.extra['limit_pct']` / `bar.extra['is_st']` /
+  代码前缀（300/301/688/689 → 20%），默认主板 10%
+- 昨收通过 `bar.extra['pre_close']` 传入（数据层可预先填充 `pre_close` 列）
+- 拒绝原因通过 `reject_reason` 记录（`limit_up` / `limit_down` / `suspended` / `t1_frozen`），
+  便于审计"哪些信号为什么没成交"
+
+Rust 加速层同样支持涨跌停约束：`finhack_pyo3.backtest_ma_constrained()`
+（详见「Rust 加速层」章节），保证 Python/Rust 两条路径撮合规则一致。
+
 ### 引擎工厂 (`backtest/engine_factory.py`)
 
 ```python
@@ -569,9 +607,29 @@ Rust 加速
 |------|------|------|---------------|
 | `calculate_indicators()` | 共享内存 | 批量技术指标（RSI/MACD/BB/ATR） | rayon 并行计算多指标 |
 | `batch_backtest()` | 共享内存 | 批量回测（多策略并行） | rayon par_iter 并行策略 |
+| `backtest_ma_constrained()` | 共享内存 | 带涨跌停约束的双均线回测 | 撮合时检查涨跌停，记录拒绝数 |
 | `parallel_signal_compute()` | 共享内存 | 并行信号计算（分治-聚合） | rayon par_iter 并行标的 |
 | `calculate_max_drawdown()` | 共享内存 | 最大回撤 | 单遍扫描 O(N) |
 | `calculate_sharpe_ratio()` | 共享内存 | 夏普比率 | 单遍统计 O(N) |
+
+### 指标缓存（`backtest/rust_accelerator.py`）
+
+参数扫描 / 多策略复用同一份行情数据时，指标计算是重复劳动。
+`calculate_indicators_cached()` 内置 **LRU 缓存**（数据指纹 + 指标名 → 结果），
+同一数据二次请求直接命中，参数扫描场景可省去 60~80% 计算：
+
+```python
+from finhack_pro.backtest.rust_accelerator import calculate_indicators_cached
+
+# 第一次计算（Rust 优先）
+r1 = calculate_indicators_cached(closes, indicators=["rsi", "macd"], use_cache=True)
+# 同一数据再次计算 → 命中缓存，几乎零耗时
+r2 = calculate_indicators_cached(closes, indicators=["rsi", "macd"], use_cache=True)
+```
+
+- 缓存键 = 数据指纹（长度 + 首尾值 + 前 256 字节哈希）+ 排序后的指标名列表
+- 容量上限 64 条，超过自动淘汰最久未使用项；`_clear_indicator_cache()` 可清空（测试用）
+- 单次计算路径与缓存无关：Rust 优先，NumPy 回退，数值一致
 
 ### 使用方式
 
@@ -867,6 +925,75 @@ FinHack Pro 内置了一个现代化的 Web 管理界面，提供可视化的系
 | WS | `/ws/agents` | Agent思考流 |
 | WS | `/ws/backtest` | 回测进度 |
 | WS | `/ws/system` | 系统事件 |
+
+---
+
+## 创意工坊（Workshop）
+
+策略包分享与安装系统，让用户之间的策略、指标、Agent 配置可以流通。
+
+### 策略包格式
+
+每个策略包是一个标准 zip，包含：
+
+```
+my-strategy-v1.2.0.zip
+├── manifest.yaml        # 元数据（id / name / version / author / type / entry）
+├── strategy.py          # 策略实现（继承 BaseStrategy）
+├── params_schema.json   # 参数 JSON Schema（WebUI 自动生成配置表单）
+├── preview.png          # 封面图（可选）
+└── benchmark.json       # 作者提交的回测报告（可选）
+```
+
+### 安全机制
+
+| 防护 | 实现 | 说明 |
+|------|------|------|
+| 静态扫描 | `workshop/security.py` | AST 级检测：禁 `os`/`subprocess`/`socket`/`eval`/`exec`/`__import__` 等危险调用 |
+| zip 穿越防护 | `packager.py` | 解压前校验路径，拒绝 `../` 越界文件 |
+| 白名单信任 | `allowlist_scope` | 内置策略包（`finhack` 作用域）跳过扫描 |
+| 子进程隔离 | `pyo3_isolated` | 高风险场景可在独立子进程执行策略 |
+
+> ⚠️ 静态扫描是"减轻风险"而非"绝对防护"，任意 Python 代码理论上可绕过。
+> 对社区上传的策略，建议配合子进程隔离 + 人工审核。
+
+### 使用方式
+
+```python
+from finhack_pro.workshop import PackageManager, StrategyManifest
+
+manager = PackageManager(
+    workshop_dir="data/workshop",
+    strategies_dir="finhack_pro/strategies",
+)
+
+# 打包（内置策略：dual_thrust / momentum / mean_reversion 已内置打包脚本）
+#   python scripts/build_workshop_packages.py
+pkg = manager.pack(strategy_dir="finhack_pro/strategies", manifest=manifest)
+
+# 安装（自动安全扫描）
+installed = manager.install("data/workshop/dual_thrust-v1.0.0.zip")
+print(installed.manifest.package_id)  # dual_thrust@1.0.0
+
+# 查询 / 卸载
+manager.list_installed()
+manager.uninstall("dual_thrust")
+```
+
+### WebUI 集成
+
+| API | 方法 | 说明 |
+|-----|------|------|
+| `/api/workshop/packages` | GET | 列出已安装策略包 |
+| `/api/workshop/install` | POST | 安装本地 zip 包 |
+| `/api/workshop/install/upload` | POST | 上传 zip 并安装 |
+| `/api/workshop/pack` | POST | 打包策略目录为 zip |
+| `/api/workshop/scan` | POST | 安全扫描（仅检测） |
+| `/api/workshop/{id}/uninstall` | POST | 卸载 |
+
+**社区后端规划**：当前为本地安装 + GitHub 仓库分发；
+后续将接入 CloudBase（云函数 API + 云数据库元数据 + 云存储策略包），
+支持浏览 / 搜索 / 评分 / 一键升级。
 
 ---
 

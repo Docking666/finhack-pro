@@ -358,6 +358,172 @@ fn run_single_backtest_impl(
     }
 }
 
+/// 带精度约束的回测结果
+#[derive(Debug, Clone)]
+struct ConstrainedBacktestResult {
+    total_return: f64,
+    max_drawdown: f64,
+    sharpe_ratio: f64,
+    total_trades: u64,
+    winning_trades: u64,
+    losing_trades: u64,
+    rejected_trades: u64,   // 因涨跌停等约束被拒的交易数
+}
+
+/// 带 A 股精度约束的双均线回测（涨跌停）
+///
+/// 在撮合阶段检查涨跌停：涨停拒绝买单、跌停拒绝卖单。
+/// pre_closes 为昨收价数组（与 closes 等长，首元素可填 0 表示无昨收）。
+///
+/// 与 Python 侧 ExecutionGate 的涨跌停逻辑保持一致：
+/// limit_up = round(pre_close * (1 + limit_pct), 2)
+fn run_backtest_constrained_impl(
+    closes: &[f64],
+    pre_closes: &[f64],
+    fast_period: usize,
+    slow_period: usize,
+    initial_capital: f64,
+    commission_rate: f64,
+    slippage: f64,
+    limit_pct: f64,
+    enable_limit_up_down: bool,
+) -> ConstrainedBacktestResult {
+    let n = closes.len();
+    let default_result = ConstrainedBacktestResult {
+        total_return: 0.0,
+        max_drawdown: 0.0,
+        sharpe_ratio: 0.0,
+        total_trades: 0,
+        winning_trades: 0,
+        losing_trades: 0,
+        rejected_trades: 0,
+    };
+
+    if n < slow_period.max(fast_period) + 1 {
+        return default_result;
+    }
+
+    let mut cash = initial_capital;
+    let mut position: i64 = 0;
+    let mut position_cost = 0.0;
+    let mut peak = initial_capital;
+    let mut max_dd = 0.0;
+    let mut total_trades: u64 = 0;
+    let mut winning: u64 = 0;
+    let mut losing: u64 = 0;
+    let mut rejected: u64 = 0;
+    let mut daily_returns: Vec<f64> = Vec::new();
+    let mut prev_value = initial_capital;
+
+    let loop_start = slow_period.max(fast_period);
+    if loop_start >= n {
+        return default_result;
+    }
+
+    for i in loop_start..n {
+        let fast_ma: f64 = closes[i + 1 - fast_period..=i].iter().sum::<f64>() / fast_period as f64;
+        let slow_ma: f64 = closes[i + 1 - slow_period..=i].iter().sum::<f64>() / slow_period as f64;
+        let prev_fast_ma: f64 = closes[i - fast_period..i].iter().sum::<f64>() / fast_period as f64;
+        let prev_slow_ma: f64 = closes[i - slow_period..i].iter().sum::<f64>() / slow_period as f64;
+
+        // 涨跌停判断（与 Python ExecutionGate 一致）
+        let pre_close = if i < pre_closes.len() { pre_closes[i] } else { 0.0 };
+        let mut is_limit_up = false;
+        let mut is_limit_down = false;
+        if enable_limit_up_down && pre_close > 0.0 {
+            let limit_up = (pre_close * (1.0 + limit_pct) * 100.0).round() / 100.0;
+            let limit_down = (pre_close * (1.0 - limit_pct) * 100.0).round() / 100.0;
+            is_limit_up = closes[i] >= limit_up - 1e-9;
+            is_limit_down = closes[i] <= limit_down + 1e-9;
+        }
+
+        // 金叉买入（涨停拒买）
+        if fast_ma > slow_ma && prev_fast_ma <= prev_slow_ma && position == 0 {
+            if is_limit_up {
+                rejected += 1;
+            } else {
+                let price = closes[i] * (1.0 + slippage);
+                let available = cash * 0.9;
+                let vol = (available / price / 100.0).floor() as i64 * 100;
+                if vol > 0 {
+                    let cost = vol as f64 * price;
+                    let comm = cost * commission_rate;
+                    cash -= cost + comm;
+                    position = vol;
+                    position_cost = price;
+                    total_trades += 1;
+                }
+            }
+        }
+        // 死叉卖出（跌停拒卖）
+        else if fast_ma < slow_ma && prev_fast_ma >= prev_slow_ma && position > 0 {
+            if is_limit_down {
+                rejected += 1;
+            } else {
+                let price = closes[i] * (1.0 - slippage);
+                let revenue = position as f64 * price;
+                let comm = revenue * commission_rate;
+                let tax = revenue * 0.001;
+                let pnl = revenue - position as f64 * position_cost - comm - tax;
+                cash += revenue - comm - tax;
+
+                if pnl > 0.0 {
+                    winning += 1;
+                } else {
+                    losing += 1;
+                }
+                position = 0;
+                position_cost = 0.0;
+                total_trades += 1;
+            }
+        }
+
+        let current_value = cash + position as f64 * closes[i];
+        if current_value > peak {
+            peak = current_value;
+        }
+        let dd = (peak - current_value) / peak;
+        if dd > max_dd {
+            max_dd = dd;
+        }
+
+        if prev_value > 0.0 {
+            daily_returns.push((current_value - prev_value) / prev_value);
+        }
+        prev_value = current_value;
+    }
+
+    let final_value = cash + position as f64 * closes[n - 1];
+    let total_return = (final_value - initial_capital) / initial_capital;
+
+    let sharpe = if daily_returns.len() > 1 {
+        let mean_r: f64 = daily_returns.iter().sum::<f64>() / daily_returns.len() as f64;
+        let variance: f64 = daily_returns
+            .iter()
+            .map(|r| (r - mean_r).powi(2))
+            .sum::<f64>()
+            / (daily_returns.len() - 1) as f64;
+        let std_r = variance.sqrt();
+        if std_r > 0.0 {
+            mean_r / std_r * 252.0_f64.sqrt()
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+
+    ConstrainedBacktestResult {
+        total_return,
+        max_drawdown: max_dd,
+        sharpe_ratio: sharpe,
+        total_trades,
+        winning_trades: winning,
+        losing_trades: losing,
+        rejected_trades: rejected,
+    }
+}
+
 // ============================================================================
 // PyO3 函数定义
 // ============================================================================
@@ -650,6 +816,71 @@ fn calculate_sharpe_ratio(returns: PyReadonlyArray1<f64>, risk_free_rate: Option
     })
 }
 
+/// 带 A 股精度约束（涨跌停）的双均线回测
+///
+/// Args:
+///     closes: 收盘价数组
+///     pre_closes: 昨收价数组（与 closes 等长，无昨收处填 0）
+///     fast_period: 快线周期
+///     slow_period: 慢线周期
+///     initial_capital: 初始资金
+///     commission_rate: 佣金率
+///     slippage: 滑点比例
+///     limit_pct: 涨跌停幅度（如 0.10）
+///     enable_limit_up_down: 是否启用涨跌停约束
+///
+/// Returns:
+///     dict: 含 total_return / max_drawdown / sharpe_ratio / total_trades /
+///           winning_trades / losing_trades / rejected_trades
+#[pyfunction]
+#[pyo3(signature = (
+    closes, pre_closes, fast_period=5, slow_period=20,
+    initial_capital=1000000.0, commission_rate=0.0003, slippage=0.001,
+    limit_pct=0.10, enable_limit_up_down=false
+))]
+fn backtest_ma_constrained(
+    py: Python<'_>,
+    closes: PyReadonlyArray1<f64>,
+    pre_closes: PyReadonlyArray1<f64>,
+    fast_period: usize,
+    slow_period: usize,
+    initial_capital: f64,
+    commission_rate: f64,
+    slippage: f64,
+    limit_pct: f64,
+    enable_limit_up_down: bool,
+) -> PyResult<PyObject> {
+    safe_call!(|| -> PyResult<PyObject> {
+        let closes_slice = closes.as_slice().map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let pre_slice = pre_closes.as_slice().map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let start = Instant::now();
+
+        let result = run_backtest_constrained_impl(
+            closes_slice,
+            pre_slice,
+            fast_period,
+            slow_period,
+            initial_capital,
+            commission_rate,
+            slippage,
+            limit_pct,
+            enable_limit_up_down,
+        );
+
+        let dict = PyDict::new(py);
+        dict.set_item("total_return", result.total_return)?;
+        dict.set_item("max_drawdown", result.max_drawdown)?;
+        dict.set_item("sharpe_ratio", result.sharpe_ratio)?;
+        dict.set_item("total_trades", result.total_trades)?;
+        dict.set_item("winning_trades", result.winning_trades)?;
+        dict.set_item("losing_trades", result.losing_trades)?;
+        dict.set_item("rejected_trades", result.rejected_trades)?;
+        dict.set_item("total_time_ms", start.elapsed().as_secs_f64() * 1000.0)?;
+
+        Ok(dict.into_any().unbind())
+    })
+}
+
 // ============================================================================
 // 模块定义
 // ============================================================================
@@ -663,6 +894,7 @@ fn finhack_pyo3(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parallel_signal_compute, m)?)?;
     m.add_function(wrap_pyfunction!(calculate_max_drawdown, m)?)?;
     m.add_function(wrap_pyfunction!(calculate_sharpe_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(backtest_ma_constrained, m)?)?;
 
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
 

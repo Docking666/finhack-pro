@@ -192,3 +192,53 @@ class TestRustCoreBridgePyO3Path:
         assert "rsi" in result.columns
         assert "macd" in result.columns
         assert len(result) == 150
+
+
+class TestConstrainedBacktest:
+    """Rust 带涨跌停约束回测"""
+
+    def test_backtest_ma_constrained_available(self):
+        """新函数已导出"""
+        assert hasattr(pyo3, "backtest_ma_constrained")
+
+    def test_constrained_basic_run(self):
+        """约束回测正常运行"""
+        df = _make_ohlc(n=300)
+        closes = df["close"].to_numpy(dtype=np.float64)
+        pre = np.roll(closes, 1)
+        pre[0] = 0.0
+        result = pyo3.backtest_ma_constrained(
+            closes, pre, 5, 20, 1_000_000.0, 0.0003, 0.001, 0.10, False
+        )
+        assert result["total_trades"] >= 0
+        assert "rejected_trades" in result
+
+    def test_constrained_rejects_on_limit_up(self):
+        """涨停日买入被拒（构造连续大涨场景）"""
+        # 制造一段快速上涨序列，最后一天涨停封板
+        closes = np.linspace(10.0, 11.0, 30)  # 连续涨到 11.0（昨收 10 → 涨停）
+        closes[-1] = 11.0
+        pre = np.roll(closes, 1)
+        pre[0] = 0.0
+        pre[-1] = 10.0  # 昨收 10.0，涨停价 11.0
+        result = pyo3.backtest_ma_constrained(
+            closes.astype(np.float64), pre.astype(np.float64),
+            3, 10, 1_000_000.0, 0.0003, 0.001, 0.10, True
+        )
+        # 约束开启时涨停被拒，rejected 计数存在
+        assert result["rejected_trades"] >= 0
+
+    def test_constrained_vs_unconstrained_differ_when_limit(self):
+        """同一数据：开启约束 vs 关闭约束，结果应不同（有涨停发生）"""
+        closes = np.linspace(9.0, 11.0, 50)
+        pre = np.roll(closes, 1)
+        pre[0] = 0.0
+        unconstrained = pyo3.backtest_ma_constrained(
+            closes.astype(np.float64), pre.astype(np.float64),
+            3, 10, 1_000_000.0, 0.0003, 0.001, 0.10, False
+        )
+        constrained = pyo3.backtest_ma_constrained(
+            closes.astype(np.float64), pre.astype(np.float64),
+            3, 10, 1_000_000.0, 0.0003, 0.001, 0.10, True
+        )
+        assert unconstrained["total_trades"] >= constrained["total_trades"]

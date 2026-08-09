@@ -70,6 +70,13 @@ class AsyncEngineConfig:
     save_snapshots: bool = True       # 是否保存完整状态快照
     snapshot_interval: int = 1        # 快照保存间隔（每N个bar保存一次）
 
+    # 精度约束（A股交易规则，与 VectorizedEngine 对齐）
+    enable_limit_up_down: bool = False  # 涨跌停约束：涨停拒买/跌停拒卖
+    enable_t1: bool = False             # T+1 规则：当日买入次日才可卖
+    enable_suspension: bool = False     # 停牌处理：停牌 bar 跳过成交
+    enable_price_tick: bool = False     # 最小变动价位 0.01
+    slippage_model: str = "fixed"       # 滑点模型: fixed / volume_proportional / impact_cost
+
 
 # ============================================================
 # 事件消息（不可变）
@@ -123,6 +130,16 @@ class AsyncEventEngine:
     def __init__(self, config: Optional[AsyncEngineConfig] = None):
         self.config = config or AsyncEngineConfig()
         self._latency_sim = LatencySimulator(self.config.latency)
+        # 撮合精度约束闸门（与 VectorizedEngine 共用）
+        from finhack_pro.backtest.execution import ExecutionConfig, ExecutionGate
+        self._gate = ExecutionGate(ExecutionConfig(
+            enable_limit_up_down=self.config.enable_limit_up_down,
+            enable_t1=self.config.enable_t1,
+            enable_suspension=self.config.enable_suspension,
+            enable_price_tick=self.config.enable_price_tick,
+            slippage_model=self.config.slippage_model,
+            slippage=self.config.slippage,
+        ))
     
     async def run(
         self,
@@ -199,6 +216,11 @@ class AsyncEventEngine:
             )
             
             # --- Step 2: 构造行情事件 ---
+            # 构造 BarData（extra 携带涨跌停/停牌/ST 标记，供撮合约束使用）
+            bar_extra: Dict[str, Any] = {}
+            for key in ("pre_close", "limit_pct", "is_st", "trading_status"):
+                if key in row.index and not pd.isna(row[key]):
+                    bar_extra[key] = row[key]
             bar = BarData(
                 symbol=symbol,
                 datetime=bar_date.to_pydatetime(),
@@ -208,6 +230,7 @@ class AsyncEventEngine:
                 close=float(row.get("close", 0)),
                 volume=float(row.get("volume", 0)),
                 amount=float(row.get("amount", 0)),
+                extra=bar_extra,
             )
             
             bar_event = BarEvent(
@@ -261,6 +284,20 @@ class AsyncEventEngine:
             for signal in signals:
                 if not isinstance(signal, Signal):
                     continue
+                
+                # 精度约束检查（涨跌停/停牌/T+1），通过后才继续撮合
+                if self.config.enable_limit_up_down or self.config.enable_suspension or self.config.enable_t1:
+                    position_info = portfolio.positions.get(symbol, {"volume": position_volume, "cost": position_cost, "pnl": 0.0})
+                    gate_check = self._gate.check_and_fill(
+                        bar=bar,
+                        signal=signal,
+                        position=position_info,
+                        cash=portfolio.cash,
+                        direction=signal.direction,
+                    )
+                    if not gate_check.executed:
+                        logger.debug(f"[AsyncEventEngine] 信号被拒({gate_check.reject_reason}): {symbol} {signal_time}")
+                        continue
                 
                 # 关键：使用成交时刻（非信号时刻）的价格
                 fill_price = self._latency_sim.get_fill_price(

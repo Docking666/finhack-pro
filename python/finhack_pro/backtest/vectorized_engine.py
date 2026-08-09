@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -55,6 +55,13 @@ class VectorizedEngineConfig:
     enable_time_slice: bool = True      # 启用时间切片保护
     enable_data_barrier: bool = False   # 启用数据屏障（额外开销）
 
+    # 精度约束（A股交易规则，默认关闭保持向后兼容）
+    enable_limit_up_down: bool = False  # 涨跌停约束：涨停拒买/跌停拒卖
+    enable_t1: bool = False             # T+1 规则：当日买入次日才可卖
+    enable_suspension: bool = False     # 停牌处理：停牌 bar 跳过成交
+    enable_price_tick: bool = False     # 最小变动价位 0.01
+    slippage_model: str = "fixed"       # 滑点模型: fixed / volume_proportional / impact_cost
+
 
 class VectorizedEngine:
     """向量化回测引擎
@@ -68,6 +75,16 @@ class VectorizedEngine:
     
     def __init__(self, config: Optional[VectorizedEngineConfig] = None):
         self.config = config or VectorizedEngineConfig()
+        # 撮合精度约束闸门
+        from finhack_pro.backtest.execution import ExecutionConfig, ExecutionGate
+        self._gate = ExecutionGate(ExecutionConfig(
+            enable_limit_up_down=self.config.enable_limit_up_down,
+            enable_t1=self.config.enable_t1,
+            enable_suspension=self.config.enable_suspension,
+            enable_price_tick=self.config.enable_price_tick,
+            slippage_model=self.config.slippage_model,
+            slippage=self.config.slippage,
+        ))
     
     def run(
         self,
@@ -140,7 +157,11 @@ class VectorizedEngine:
             
             context.current_time = bar_date.to_pydatetime()
             
-            # 构造 BarData
+            # 构造 BarData（extra 携带涨跌停/停牌/ST 标记，供撮合约束使用）
+            bar_extra: Dict[str, Any] = {}
+            for key in ("pre_close", "limit_pct", "is_st", "trading_status"):
+                if key in row.index and not pd.isna(row[key]):
+                    bar_extra[key] = row[key]
             bar = BarData(
                 symbol=symbol,
                 datetime=bar_date.to_pydatetime(),
@@ -150,6 +171,7 @@ class VectorizedEngine:
                 close=float(row.get("close", 0)),
                 volume=float(row.get("volume", 0)),
                 amount=float(row.get("amount", 0)),
+                extra=bar_extra,
             )
             
             # === 时间切片保护 ===
@@ -287,74 +309,100 @@ class VectorizedEngine:
         position_cost: float,
         symbol: str,
     ) -> Optional[Dict[str, Any]]:
-        """执行交易信号"""
+        """执行交易信号（带撮合精度约束）"""
         trade = None
-        
+
+        position = portfolio.positions.get(symbol, {"volume": position_volume, "cost": position_cost, "pnl": 0.0})
+
         if signal.direction == SignalDirection.BUY:
-            # 买入：用90%现金
-            available_cash = portfolio.cash * 0.9
-            price = bar.close * (1 + self.config.slippage)
-            volume = int(available_cash / price / 100) * 100  # 整手
-            
-            if volume > 0:
-                cost = volume * price
-                commission = cost * self.config.commission_rate
-                portfolio.cash -= (cost + commission)
-                position_volume += volume
-                position_cost = (position_cost * (position_volume - volume) + cost) / position_volume
-                
-                # 更新持仓
-                portfolio.positions[symbol] = {
-                    "volume": position_volume,
-                    "cost": position_cost,
-                    "pnl": 0.0,
-                }
-                
-                trade = {
-                    "datetime": bar.datetime.isoformat(),
-                    "symbol": symbol,
-                    "direction": "buy",
-                    "price": price,
-                    "volume": volume,
-                    "commission": commission,
-                    "position_volume": position_volume,
-                    "position_cost": position_cost,
-                    "cash_after": portfolio.cash,
-                }
-        
+            fill = self._gate.check_and_fill(
+                bar=bar,
+                signal=signal,
+                position=position,
+                cash=portfolio.cash,
+                direction=SignalDirection.BUY,
+            )
+            if not fill.executed:
+                logger.debug(f"[VectorizedEngine] 买入被拒({fill.reject_reason}): {symbol} {bar.datetime}")
+                return None
+
+            volume = fill.fill_volume
+            price = fill.fill_price
+            cost = volume * price
+            commission = cost * self.config.commission_rate
+            portfolio.cash -= (cost + commission)
+            new_volume = position_volume + volume
+            position_cost = (position_cost * position_volume + cost) / new_volume
+            position_volume = new_volume
+
+            # 更新持仓（T+1: 记录可卖日期 = 次日）
+            position_entry = {
+                "volume": position_volume,
+                "cost": position_cost,
+                "pnl": 0.0,
+            }
+            if self.config.enable_t1:
+                next_day = bar.datetime.date() + timedelta(days=1)
+                position_entry["available_date"] = next_day
+            portfolio.positions[symbol] = position_entry
+
+            trade = {
+                "datetime": bar.datetime.isoformat(),
+                "symbol": symbol,
+                "direction": "buy",
+                "price": price,
+                "volume": volume,
+                "commission": commission,
+                "position_volume": position_volume,
+                "position_cost": position_cost,
+                "cash_after": portfolio.cash,
+                "reject_reason": None,
+            }
+
         elif signal.direction == SignalDirection.SELL:
-            # 卖出：全部持仓
             if position_volume > 0:
-                price = bar.close * (1 - self.config.slippage)
-                revenue = position_volume * price
+                fill = self._gate.check_and_fill(
+                    bar=bar,
+                    signal=signal,
+                    position=position,
+                    cash=portfolio.cash,
+                    direction=SignalDirection.SELL,
+                )
+                if not fill.executed:
+                    logger.debug(f"[VectorizedEngine] 卖出被拒({fill.reject_reason}): {symbol} {bar.datetime}")
+                    return None
+
+                price = fill.fill_price
+                volume = fill.fill_volume
+                revenue = volume * price
                 commission = revenue * self.config.commission_rate
                 stamp_tax = revenue * self.config.stamp_tax_rate
-                pnl = revenue - position_volume * position_cost - commission - stamp_tax
-                
+                pnl = revenue - volume * position_cost - commission - stamp_tax
+
                 portfolio.cash += (revenue - commission - stamp_tax)
-                
+
                 trade = {
                     "datetime": bar.datetime.isoformat(),
                     "symbol": symbol,
                     "direction": "sell",
                     "price": price,
-                    "volume": position_volume,
+                    "volume": volume,
                     "commission": commission + stamp_tax,
                     "pnl": pnl,
-                    "position_volume": 0,
-                    "position_cost": 0.0,
+                    "position_volume": position_volume - volume,
+                    "position_cost": position_cost,
                     "cash_after": portfolio.cash,
+                    "reject_reason": None,
                 }
-                
-                position_volume = 0
-                position_cost = 0.0
-                
-                # 清除持仓
-                if symbol in portfolio.positions:
-                    portfolio.positions[symbol] = {
-                        "volume": 0, "cost": 0.0, "pnl": pnl,
-                    }
-        
+
+                position_volume -= volume
+                if position_volume <= 0:
+                    position_volume = 0
+                    position_cost = 0.0
+                    portfolio.positions[symbol] = {"volume": 0, "cost": 0.0, "pnl": pnl}
+                else:
+                    portfolio.positions[symbol] = {"volume": position_volume, "cost": position_cost, "pnl": 0.0}
+
         return trade
     
     def _calculate_result(

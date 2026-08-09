@@ -35,6 +35,7 @@ from finhack_pro.webui.services import (
     StreamService,
 )
 from finhack_pro.webui.strategy_routes import router as strategy_router
+from finhack_pro.webui.workshop_routes import router as workshop_router
 from finhack_pro.webui.ws_routes import router as ws_router
 
 
@@ -95,6 +96,7 @@ def create_app(config_path: Optional[str] = None) -> FastAPI:
     app.include_router(api_router)
     app.include_router(export_router)
     app.include_router(strategy_router)
+    app.include_router(workshop_router)
     app.include_router(ws_router)
 
     # ---- 静态文件目录 ----

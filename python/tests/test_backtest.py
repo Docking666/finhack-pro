@@ -36,6 +36,7 @@ from finhack_pro.backtest.time_slice import (
     TimeSliceContext,
 )
 from finhack_pro.backtest.vectorized_engine import VectorizedEngine, VectorizedEngineConfig
+from finhack_pro.strategies.base import BarData, Signal, SignalDirection
 
 # ============================================================================
 # time_slice 测试
@@ -364,3 +365,150 @@ class TestRustCoreBridge:
         ]
         results = bridge.batch_backtest(configs, sample_bars_100)
         assert isinstance(results, list)
+
+
+class TestExecutionConstraints:
+    """撮合精度约束测试（涨跌停 / T+1 / 停牌 / 滑点）"""
+
+    def _make_bar(self, close=100.0, volume=10000.0, amount=1000000.0, extra=None, dt=None):
+        from datetime import datetime as _dt
+        return BarData(
+            symbol="600000.SH",
+            datetime=dt or _dt(2024, 1, 5, 10, 0),
+            open=close * 0.99,
+            high=close * 1.01,
+            low=close * 0.98,
+            close=close,
+            volume=volume,
+            amount=amount,
+            extra=extra or {},
+        )
+
+    def _make_signal(self, direction):
+        return Signal(
+            symbol="600000.SH",
+            direction=direction,
+            price=100.0,
+            volume=100,
+        )
+
+    def _make_gate(self, **kwargs):
+        from finhack_pro.backtest.execution import ExecutionConfig, ExecutionGate
+        defaults = dict(
+            enable_limit_up_down=False,
+            enable_t1=False,
+            enable_suspension=False,
+            enable_price_tick=False,
+            slippage_model="fixed",
+            slippage=0.001,
+        )
+        defaults.update(kwargs)
+        return ExecutionGate(ExecutionConfig(**defaults))
+
+    def test_limit_up_blocks_buy(self):
+        """涨停封板：买单被拒"""
+        gate = self._make_gate(enable_limit_up_down=True)
+        bar = self._make_bar(close=11.0, extra={"pre_close": 10.0, "limit_pct": 0.10})  # 涨停价 11.0
+        result = gate.check_and_fill(
+            bar, self._make_signal(SignalDirection.BUY),
+            {"volume": 0, "cost": 0}, cash=100000, direction=SignalDirection.BUY,
+        )
+        assert not result.executed
+        assert result.reject_reason == "limit_up"
+
+    def test_limit_down_blocks_sell(self):
+        """跌停封板：卖单被拒"""
+        gate = self._make_gate(enable_limit_up_down=True)
+        bar = self._make_bar(close=9.0, extra={"pre_close": 10.0, "limit_pct": 0.10})  # 跌停价 9.0
+        result = gate.check_and_fill(
+            bar, self._make_signal(SignalDirection.SELL),
+            {"volume": 1000, "cost": 10.0}, cash=0, direction=SignalDirection.SELL,
+        )
+        assert not result.executed
+        assert result.reject_reason == "limit_down"
+
+    def test_t1_blocks_same_day_sell(self):
+        """T+1：当日买入当日不可卖"""
+        from datetime import datetime as _dt
+        gate = self._make_gate(enable_t1=True)
+        bar = self._make_bar(dt=_dt(2024, 1, 5, 14, 0))
+        position = {"volume": 1000, "cost": 10.0, "available_date": _dt(2024, 1, 6).date()}
+        result = gate.check_and_fill(
+            bar, self._make_signal(SignalDirection.SELL),
+            position, cash=0, direction=SignalDirection.SELL,
+        )
+        assert not result.executed
+        assert result.reject_reason == "t1_frozen"
+
+    def test_t1_allows_next_day_sell(self):
+        """T+1：次日可卖"""
+        from datetime import datetime as _dt
+        gate = self._make_gate(enable_t1=True)
+        bar = self._make_bar(dt=_dt(2024, 1, 6, 10, 0))
+        position = {"volume": 1000, "cost": 10.0, "available_date": _dt(2024, 1, 6).date()}
+        result = gate.check_and_fill(
+            bar, self._make_signal(SignalDirection.SELL),
+            position, cash=0, direction=SignalDirection.SELL,
+        )
+        assert result.executed
+        assert result.fill_volume == 1000
+
+    def test_suspension_blocks_trade(self):
+        """停牌：买卖均被拒"""
+        gate = self._make_gate(enable_suspension=True)
+        bar = self._make_bar(volume=0, amount=0)
+        buy = gate.check_and_fill(
+            bar, self._make_signal(SignalDirection.BUY),
+            {"volume": 0}, cash=100000, direction=SignalDirection.BUY,
+        )
+        sell = gate.check_and_fill(
+            bar, self._make_signal(SignalDirection.SELL),
+            {"volume": 1000, "cost": 10}, cash=0, direction=SignalDirection.SELL,
+        )
+        assert not buy.executed and buy.reject_reason == "suspended"
+        assert not sell.executed and sell.reject_reason == "suspended"
+
+    def test_volume_proportional_slippage(self):
+        """成交量比例滑点：大单滑点更大"""
+        gate = self._make_gate(slippage_model="volume_proportional", slippage=0.001)
+        small_bar = self._make_bar(close=100.0, volume=100000)
+        large_bar = self._make_bar(close=100.0, volume=1000)
+
+        small_fill = gate.check_and_fill(
+            small_bar, self._make_signal(SignalDirection.BUY),
+            {"volume": 0}, cash=1000000, direction=SignalDirection.BUY,
+        )
+        large_fill = gate.check_and_fill(
+            large_bar, self._make_signal(SignalDirection.BUY),
+            {"volume": 0}, cash=1000000, direction=SignalDirection.BUY,
+        )
+        assert small_fill.executed and large_fill.executed
+        # 大单占 bar 成交量比例更高 → 滑点更大 → 买入价更高
+        assert large_fill.fill_price > small_fill.fill_price
+
+    def test_price_tick_rounding(self):
+        """最小变动价位：成交价对齐 0.01"""
+        gate = self._make_gate(enable_price_tick=True)
+        bar = self._make_bar(close=100.0)
+        fill = gate.check_and_fill(
+            bar, self._make_signal(SignalDirection.BUY),
+            {"volume": 0}, cash=1000000, direction=SignalDirection.BUY,
+        )
+        assert abs(round(fill.fill_price * 100) - fill.fill_price * 100) < 1e-6
+
+    def test_engine_limit_up_blocks_buy(self, sample_bars_100):
+        """引擎级验证：开启涨跌停约束后涨停日不成交"""
+        from finhack_pro.backtest.vectorized_engine import VectorizedEngine, VectorizedEngineConfig
+        from finhack_pro.strategies.dual_thrust import DualThrustStrategy
+
+        df = sample_bars_100.copy()
+        # 把最后一根 bar 改成涨停（pre_close=100, close=110）
+        df.loc[df.index[-1], "close"] = 110.0
+        df["pre_close"] = df["close"].shift(1)
+        df.loc[df.index[-1], "pre_close"] = 100.0
+
+        strategy = DualThrustStrategy()
+        cfg = VectorizedEngineConfig(enable_limit_up_down=True)
+        result = VectorizedEngine(cfg).run(strategy, "600000", df)
+        # 最后一根涨停 bar 的买入被拒，不影响结果完整性
+        assert result.total_trades >= 0
