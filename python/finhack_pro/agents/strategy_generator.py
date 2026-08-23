@@ -325,8 +325,13 @@ class StrategyGeneratorAgent(BaseAgent):
         fundamental_report: Any = None,
         micro_event_report: Any = None,
         current_price: Optional[float] = None,
+        report_paths: Optional[Dict[str, str]] = None,
     ) -> str:
-        """构建多空辩论的四方报告上下文"""
+        """构建多空辩论的四方报告上下文
+
+        三层架构：摘要级信息内联到 prompt，完整报告通过 md 文件路径引用
+        （LLM 可按需读取文件全文，避免 token 膨胀且保留全部细节）。
+        """
         parts: List[str] = []
 
         if analysis_report is not None:
@@ -377,6 +382,12 @@ class StrategyGeneratorAgent(BaseAgent):
             if getattr(micro_event_report, 'summary', None):
                 parts.append(f"**摘要**: {micro_event_report.summary}")
 
+        # 完整报告 md 文件引用（三层架构第2层）：LLM 可按需读取全文
+        if report_paths:
+            parts.append("\n## 完整报告文件（可按需读取细节）")
+            for label, p in report_paths.items():
+                parts.append(f"- {label}: {p}")
+
         if current_price:
             parts.append(f"\n**当前价格**: {current_price:.2f}")
 
@@ -389,6 +400,7 @@ class StrategyGeneratorAgent(BaseAgent):
         fundamental_report: Any = None,
         micro_event_report: Any = None,
         current_price: Optional[float] = None,
+        report_paths: Optional[Dict[str, str]] = None,
     ) -> StrategySignal:
         """执行多空辩论并生成最终策略信号
 
@@ -406,6 +418,8 @@ class StrategyGeneratorAgent(BaseAgent):
             fundamental_report: 基本面分析报告(可选)
             micro_event_report: 微观事件分析报告(可选)
             current_price: 当前价格(可选)
+            report_paths: 各报告 md 落盘路径字典（三层架构第2层），
+                如 {"analysis": ".../step1_market_analysis.md", ...}
 
         Returns:
             StrategySignal 策略信号
@@ -418,7 +432,8 @@ class StrategyGeneratorAgent(BaseAgent):
 
         self._logger.info(f"[{symbol}] 开始多空辩论...")
         context = self._build_debate_context(
-            analysis_report, news_report, fundamental_report, micro_event_report, current_price
+            analysis_report, news_report, fundamental_report, micro_event_report, current_price,
+            report_paths=report_paths,
         )
 
         # 第一轮：多头论点

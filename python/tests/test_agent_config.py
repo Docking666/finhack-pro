@@ -14,9 +14,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from finhack_pro.config import FinhackProConfig, PROVIDER_PRESETS
+from finhack_pro.config import PROVIDER_PRESETS, FinhackProConfig
 from finhack_pro.webui.services import ConfigService
-
 
 # ============================================================
 # config.py
@@ -149,8 +148,8 @@ class TestStrategyGeneratorDebate:
     @pytest.mark.asyncio
     async def test_debate_three_rounds(self):
         """debate 执行三轮 LLM 调用并返回 StrategySignal"""
-        from finhack_pro.agents.strategy_generator import StrategyGeneratorAgent
         from finhack_pro.agents.market_analyzer import MarketAnalysisReport
+        from finhack_pro.agents.strategy_generator import StrategyGeneratorAgent
 
         agent = StrategyGeneratorAgent(config={"model": "test", "api_key": "sk-test"})
         llm = MagicMock()
@@ -183,12 +182,12 @@ class TestStrategyGeneratorDebate:
     @pytest.mark.asyncio
     async def test_debate_structured_signal(self):
         """debate 后 chat_structured 正常生成信号"""
+        from finhack_pro.agents.market_analyzer import MarketAnalysisReport
         from finhack_pro.agents.strategy_generator import (
             SignalDirection,
             StrategyGeneratorAgent,
             StrategySignal,
         )
-        from finhack_pro.agents.market_analyzer import MarketAnalysisReport
 
         agent = StrategyGeneratorAgent(config={"model": "test", "api_key": "sk-test"})
         llm = MagicMock()
@@ -217,8 +216,8 @@ class TestStrategyGeneratorDebate:
     @pytest.mark.asyncio
     async def test_debate_fallback_on_llm_error(self):
         """LLM 硬错误时抛异常（由 coordinator 回退 generate_strategy）"""
-        from finhack_pro.agents.strategy_generator import StrategyGeneratorAgent
         from finhack_pro.agents.market_analyzer import MarketAnalysisReport
+        from finhack_pro.agents.strategy_generator import StrategyGeneratorAgent
 
         agent = StrategyGeneratorAgent(config={"model": "test", "api_key": "sk-test"})
         llm = MagicMock()

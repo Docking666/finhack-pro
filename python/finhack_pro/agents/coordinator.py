@@ -21,6 +21,9 @@ Agent协调器
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import os
+import time
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 
@@ -342,6 +345,57 @@ class AgentCoordinator:
     # 分析流水线
     # ============================================================
 
+    def _get_pipeline_dir(self, run_id: str) -> str:
+        """获取流水线产物目录（报告 md 落盘）"""
+        base = self.config.get("pipeline", {}).get("output_dir", "data/pipeline")
+        run_dir = os.path.join(base, run_id)
+        os.makedirs(run_dir, exist_ok=True)
+        return run_dir
+
+    def _write_report_md(self, run_id: str, step: int, name: str, report: Any) -> str:
+        """将报告落盘为 Markdown 文件
+
+        三层上下文架构的第二层：完整报告写文件，供跨模型读取、人工审阅、
+        崩溃恢复。返回文件路径，调用方可将其写入 SharedMemory 引用。
+
+        Args:
+            run_id: 流水线运行ID
+            step: 步骤号
+            name: 报告名称(如 market_analysis)
+            report: 报告对象(Pydantic模型)或 dict
+
+        Returns:
+            md 文件绝对路径；写入失败返回空串
+        """
+        try:
+            run_dir = self._get_pipeline_dir(run_id)
+            path = os.path.join(run_dir, f"step{step}_{name}.md")
+
+            # 转 dict
+            data = report.model_dump() if hasattr(report, "model_dump") else (
+                dict(report) if isinstance(report, dict) else {"value": str(report)}
+            )
+
+            # 渲染 Markdown
+            lines: List[str] = [f"# {name}", ""]
+            for key, value in data.items():
+                lines.append(f"## {key}")
+                lines.append("")
+                if isinstance(value, (dict, list)):
+                    import json as _json
+                    rendered = _json.dumps(value, ensure_ascii=False, indent=2, default=str)
+                    lines.append(f"```json\n{rendered}\n```")
+                else:
+                    lines.append(str(value))
+                lines.append("")
+
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+            return path
+        except Exception as e:
+            self._logger.warning(f"[Pipeline {run_id}] 报告落盘失败 ({name}): {e}")
+            return ""
+
     async def run_analysis_pipeline(
         self,
         symbol: str,
@@ -373,6 +427,11 @@ class AgentCoordinator:
         """
         self._logger.info(f"========== 开始分析流水线: {symbol} ==========")
         result: Dict[str, Any] = {"symbol": symbol}
+
+        # 生成 run_id 并初始化流水线产物目录（md 落盘）
+        run_id = hashlib.md5(f"{symbol}:{time.time()}".encode()).hexdigest()[:12]
+        result["run_id"] = run_id
+        result["report_dir"] = self._get_pipeline_dir(run_id)
 
         try:
             # ---- 第1阶段: 并行执行 Step 1-4 (市场/新闻/基本面/微观事件) ----
@@ -462,6 +521,10 @@ class AgentCoordinator:
             # 记录结果
             if analysis_report:
                 result["analysis"] = analysis_report.model_dump()
+                # 三层架构第2层：完整报告落盘为 md
+                report_path = self._write_report_md(run_id, 1, "market_analysis", analysis_report)
+                if report_path:
+                    result["analysis_report_path"] = report_path
                 self._logger.info(
                     f"[Step 1/7] 市场分析完成: 状态={analysis_report.market_state.value}, "
                     f"趋势={analysis_report.trend_direction.value}"
@@ -472,6 +535,9 @@ class AgentCoordinator:
 
             if news_report:
                 result["news_analysis"] = news_report.model_dump()
+                report_path = self._write_report_md(run_id, 2, "news_analysis", news_report)
+                if report_path:
+                    result["news_report_path"] = report_path
                 self._logger.info(
                     f"[Step 2/7] 新闻分析完成: 情感={news_report.overall_sentiment}, "
                     f"分数={news_report.sentiment_score:.2f}"
@@ -482,6 +548,9 @@ class AgentCoordinator:
 
             if fundamental_report:
                 result["fundamental_analysis"] = fundamental_report.model_dump()
+                report_path = self._write_report_md(run_id, 3, "fundamental_analysis", fundamental_report)
+                if report_path:
+                    result["fundamental_report_path"] = report_path
                 self._logger.info(
                     f"[Step 3/7] 基本面分析完成: 评级={fundamental_report.overall_rating}, "
                     f"分数={fundamental_report.rating_score:.2f}"
@@ -492,6 +561,9 @@ class AgentCoordinator:
 
             if micro_event_report:
                 result["micro_event_analysis"] = micro_event_report.model_dump()
+                report_path = self._write_report_md(run_id, 4, "micro_event_analysis", micro_event_report)
+                if report_path:
+                    result["micro_event_report_path"] = report_path
                 self._logger.info(
                     f"[Step 4/7] 微观事件分析完成: 发现{micro_event_report.events_count}个事件, "
                     f"情绪变化={micro_event_report.sentiment_shift}"
@@ -500,10 +572,42 @@ class AgentCoordinator:
                 self._logger.warning("[Step 4/7] 微观事件分析失败，使用空报告")
                 result["micro_event_analysis"] = None
 
+            # 三层架构第3层：将报告 md 路径引用写入共享记忆（供检索/复盘）
+            try:
+                ref_paths = {k: v for k, v in {
+                    "analysis": result.get("analysis_report_path"),
+                    "news": result.get("news_report_path"),
+                    "fundamental": result.get("fundamental_report_path"),
+                    "micro_event": result.get("micro_event_report_path"),
+                }.items() if v}
+                if ref_paths:
+                    await self.shared_memory.store(
+                        agent_id="coordinator",
+                        memory_type=self.shared_memory.MemoryType.SYSTEM_EVENT,
+                        content=(
+                            f"{symbol} 分析报告落盘 (run_id={run_id}): "
+                            + ", ".join(f"{k}={v}" for k, v in ref_paths.items())
+                        ),
+                        structured_data={"report_paths": ref_paths, "run_id": run_id, "symbol": symbol},
+                        importance=self.shared_memory.MemoryImportance.HIGH,
+                        tags=[symbol, "pipeline_reports", run_id],
+                    )
+            except Exception as e:
+                self._logger.warning(f"[Pipeline {run_id}] 报告路径写入共享记忆失败: {e}")
+
             self._logger.info("[Phase 1] 并行分析阶段完成")
 
             # ---- 第5步: 策略生成(多空辩论) ----
             self._logger.info("[Step 5/7] 策略生成(多空辩论)...")
+            # 组装报告 md 落盘路径（三层架构第2层，供辩论读取全文）
+            report_paths = {
+                k: v for k, v in {
+                    "analysis": result.get("analysis_report_path"),
+                    "news": result.get("news_report_path"),
+                    "fundamental": result.get("fundamental_report_path"),
+                    "micro_event": result.get("micro_event_report_path"),
+                }.items() if v
+            }
             strategy_signal = await self._generate_strategy_with_debate(
                 symbol=symbol,
                 analysis_report=analysis_report,
@@ -511,6 +615,7 @@ class AgentCoordinator:
                 fundamental_report=fundamental_report,
                 micro_event_report=micro_event_report,
                 current_price=current_price,
+                report_paths=report_paths,
             )
             result["signal"] = strategy_signal.model_dump()
             self._logger.info(
@@ -610,6 +715,7 @@ class AgentCoordinator:
         fundamental_report: Any,
         micro_event_report: Any = None,
         current_price: Optional[float] = None,
+        report_paths: Optional[Dict[str, str]] = None,
     ) -> Any:
         """使用多空辩论模式生成策略
 
@@ -623,6 +729,8 @@ class AgentCoordinator:
             fundamental_report: 基本面分析报告
             micro_event_report: 微观事件分析报告(新增)
             current_price: 当前价格
+            report_paths: 各报告 md 落盘路径字典（三层架构第2层），
+                如 {"analysis": ".../step1_market_analysis.md", ...}
 
         Returns:
             StrategySignal 策略信号
@@ -637,6 +745,7 @@ class AgentCoordinator:
                     fundamental_report=fundamental_report,
                     micro_event_report=micro_event_report,
                     current_price=current_price,
+                    report_paths=report_paths,
                 )
                 return signal
             except Exception as e:
