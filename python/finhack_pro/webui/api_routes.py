@@ -184,10 +184,38 @@ async def test_connection(request: Request, req: ConnectionTestRequest):
 
 @router.post("/api/config/save", response_model=APIResponse)
 async def save_config(request: Request):
-    """保存配置到文件"""
+    """保存配置到文件，保存后自动重建 Agent 系统使 per-Agent 配置生效"""
     config_svc = _get_config_service(request)
     path = config_svc.save_config()
-    return APIResponse(message=f"配置已保存到: {path}")
+
+    # 重建 Agent 系统（per-Agent 配置变更后生效）
+    reload_msg = ""
+    try:
+        from finhack_pro.webui.app import reload_agent_system
+        ok = await reload_agent_system(request.app)
+        if ok:
+            reload_msg = "，Agent 系统已按新配置重建"
+        else:
+            reload_msg = "，Agent 系统重建失败(受限模式)"
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"保存后重建 Agent 系统失败: {e}")
+        reload_msg = "，Agent 系统重建失败"
+
+    return APIResponse(message=f"配置已保存到: {path}{reload_msg}")
+
+
+@router.post("/api/config/reload-agents", response_model=APIResponse)
+async def reload_agents(request: Request):
+    """显式重建 Agent 系统（使 per-Agent 配置生效）"""
+    try:
+        from finhack_pro.webui.app import reload_agent_system
+        ok = await reload_agent_system(request.app)
+        if ok:
+            return APIResponse(message="Agent 系统已按当前配置重建")
+        return APIResponse(message="Agent 系统重建失败(受限模式)", success=False)
+    except Exception as e:
+        return APIResponse(message=f"Agent 系统重建失败: {e}", success=False)
 
 
 # ============================================================

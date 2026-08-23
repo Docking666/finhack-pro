@@ -67,6 +67,21 @@ class LLMConfigUpdate(BaseModel):
     model: Optional[str] = None
     temperature: Optional[float] = Field(None, ge=0, le=2)
     max_tokens: Optional[int] = Field(None, ge=1, le=128000)
+    timeout: Optional[int] = Field(None, ge=1, le=600)
+    max_retries: Optional[int] = Field(None, ge=0, le=10)
+
+
+class AgentLLMConfigUpdate(BaseModel):
+    """单 Agent LLM 配置覆盖更新（全可选，留空跟随全局）"""
+    provider: Optional[str] = None
+    openai_api_key: Optional[str] = None
+    openai_base_url: Optional[str] = None
+    anthropic_api_key: Optional[str] = None
+    model: Optional[str] = None
+    temperature: Optional[float] = Field(None, ge=0, le=2)
+    max_tokens: Optional[int] = Field(None, ge=1, le=128000)
+    timeout: Optional[int] = Field(None, ge=1, le=600)
+    max_retries: Optional[int] = Field(None, ge=0, le=10)
 
 
 class DataConfigUpdate(BaseModel):
@@ -101,6 +116,8 @@ class ConfigUpdate(BaseModel):
     data: Optional[DataConfigUpdate] = None
     risk: Optional[RiskConfigUpdate] = None
     execution: Optional[ExecutionConfigUpdate] = None
+    # per-Agent LLM 配置覆盖（键为 agent 名，值全可选，留空跟随全局）
+    agents: Optional[Dict[str, Optional[AgentLLMConfigUpdate]]] = None
 
 
 class ConnectionTestRequest(BaseModel):

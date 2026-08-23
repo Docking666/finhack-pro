@@ -123,8 +123,16 @@ class AgentCoordinator:
                          f"model={llm_config.get('model')}")
 
         def _merge_config(agent_specific: Dict[str, Any]) -> Dict[str, Any]:
-            """合并LLM全局配置和Agent专属配置"""
-            merged = {**llm_config, **agent_specific}
+            """合并LLM全局配置和Agent专属配置
+
+            仅覆盖非空字段：per-Agent 配置中 None/空串/空 dict 表示跟随全局。
+            """
+            # 过滤掉空值字段（None、空串、空 dict、空 list）
+            overrides = {
+                k: v for k, v in (agent_specific or {}).items()
+                if v is not None and v != "" and v != {} and v != []
+            }
+            merged = {**llm_config, **overrides}
             # 将 openai_api_key 映射为 api_key（Agent统一使用 api_key）
             if "openai_api_key" in merged and "api_key" not in merged:
                 merged["api_key"] = merged["openai_api_key"]

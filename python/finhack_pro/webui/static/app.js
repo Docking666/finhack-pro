@@ -493,6 +493,24 @@ function configPage() {
             risk: { max_position_pct: 30, max_drawdown_pct: 15, max_daily_loss_pct: 5, var_confidence: 0.95, stop_loss_pct: 5, take_profit_pct: 10 },
             backtest: { slippage: 0.001, commission_rate: 0.0003, stamp_tax_rate: 0.001 },
         },
+        // 服务商预置表（与后端 PROVIDER_PRESETS 保持一致）
+        PROVIDER_PRESETS: {
+            orca: { label: 'OrcaRouter', base_url: 'https://api.orcarouter.ai/v1', default_model: 'orcarouter/auto' },
+            deepseek: { label: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', default_model: 'deepseek-chat' },
+            openai: { label: 'OpenAI', base_url: 'https://api.openai.com/v1', default_model: 'gpt-4o' },
+            zhipu: { label: '智谱AI', base_url: 'https://open.bigmodel.cn/api/paas/v4', default_model: 'glm-4-plus' },
+        },
+        // 7 个 Agent 独立 LLM 配置
+        agentDefs: [
+            { name: 'market_analyzer', label: '市场分析' },
+            { name: 'news_analyst', label: '新闻社媒' },
+            { name: 'fundamental_analyst', label: '基本面' },
+            { name: 'micro_event_agent', label: '微观事件' },
+            { name: 'strategy_generator', label: '多空研究员' },
+            { name: 'risk_manager', label: '风控' },
+            { name: 'trade_executor', label: '交易执行' },
+        ],
+        agentConfigs: [],
         testing: { openai: false, anthropic: false, tushare: false },
         testResults: { openai: null, anthropic: null, tushare: null },
         saving: false,
@@ -516,10 +534,77 @@ function configPage() {
                     if (d.data) Object.assign(this.config.data, d.data);
                     if (d.risk) Object.assign(this.config.risk, d.risk);
                     if (d.backtest) Object.assign(this.config.backtest, d.backtest);
+
+                    // 初始化 Agent 配置表单
+                    const savedAgents = d.agents || {};
+                    this.agentConfigs = this.agentDefs.map(def => {
+                        const saved = savedAgents[def.name] || {};
+                        return {
+                            name: def.name,
+                            label: def.label,
+                            provider: saved.provider || '',
+                            openai_api_key: saved.openai_api_key || '',
+                            openai_base_url: saved.openai_base_url || '',
+                            model: saved.model || '',
+                            followGlobal: !(saved.provider || saved.openai_api_key || saved.openai_base_url || saved.model),
+                        };
+                    });
                 }
             } catch (e) {
                 console.error('加载配置失败:', e);
             }
+        },
+
+        // 选择预置服务商时自动填充 base_url 与默认 model
+        applyProviderPreset(scope, agentCfg = null) {
+            const presets = this.PROVIDER_PRESETS;
+            const target = scope === 'llm' ? this.config.llm : (agentCfg || null);
+            if (!target) return;
+            if (presets[target.provider]) {
+                const p = presets[target.provider];
+                target.openai_base_url = p.base_url;
+                if (!target.model) target.model = p.default_model;
+            }
+            // 更新跟随全局状态
+            if (agentCfg) {
+                agentCfg.followGlobal = !(agentCfg.provider || agentCfg.openai_api_key || agentCfg.openai_base_url || agentCfg.model);
+            }
+        },
+
+        // 勾选"跟随全局"时清空该 Agent 覆盖字段
+        syncFollowGlobal(agentCfg) {
+            if (agentCfg.followGlobal) {
+                agentCfg.provider = '';
+                agentCfg.openai_api_key = '';
+                agentCfg.openai_base_url = '';
+                agentCfg.model = '';
+            }
+        },
+
+        // 清除单 Agent 覆盖
+        clearAgentOverride(agentCfg) {
+            agentCfg.provider = '';
+            agentCfg.openai_api_key = '';
+            agentCfg.openai_base_url = '';
+            agentCfg.model = '';
+            agentCfg.followGlobal = true;
+        },
+
+        // 构建 agents 段 payload（只含非空覆盖字段）
+        buildAgentsPayload() {
+            const agents = {};
+            for (const a of this.agentConfigs) {
+                const cfg = {};
+                if (a.provider) cfg.provider = a.provider;
+                if (a.openai_api_key) cfg.openai_api_key = a.openai_api_key;
+                if (a.openai_base_url) cfg.openai_base_url = a.openai_base_url;
+                if (a.model) cfg.model = a.model;
+                // 有覆盖才提交
+                if (Object.keys(cfg).length > 0) {
+                    agents[a.name] = cfg;
+                }
+            }
+            return agents;
         },
 
         togglePassword(event) {
@@ -561,16 +646,18 @@ function configPage() {
         async saveConfig() {
             this.saving = true;
             try {
-                // 先更新配置
+                // 先更新配置（含 per-Agent 覆盖）
                 await API.updateConfig({
                     llm: this.config.llm,
                     data: this.config.data,
                     risk: this.config.risk,
                     execution: this.config.backtest,
+                    agents: this.buildAgentsPayload(),
                 });
-                // 再保存到文件
-                await API.saveConfig();
-                window.__alpineApp.showToast('配置已保存', 'success');
+                // 再保存到文件（后端保存后自动重建 Agent 系统）
+                const saveResp = await API.saveConfig();
+                const msg = saveResp && saveResp.message ? saveResp.message : '配置已保存';
+                window.__alpineApp.showToast(msg, 'success');
             } catch (e) {
                 window.__alpineApp.showToast('保存失败: ' + e.message, 'error');
             } finally {

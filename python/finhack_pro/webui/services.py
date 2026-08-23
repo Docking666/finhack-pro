@@ -60,25 +60,44 @@ class ConfigService:
 
     def get_full_config(self) -> Dict[str, Any]:
         """获取完整配置(包含敏感字段，用于编辑)"""
-        return self._config.model_dump()
+        return self._config.model_dump(exclude_none=True)
 
     def update_config(self, updates: Dict[str, Any]) -> Dict[str, Any]:
         """更新配置
 
         Args:
-            updates: 配置更新字典，支持 llm/data/risk/execution 子配置
+            updates: 配置更新字典，支持 llm/data/risk/execution/agents 子配置
 
         Returns:
             更新后的配置
         """
         config_dict = self._config.model_dump()
 
+        # agents 段优先处理：per-Agent LLM 配置覆盖（dict 整体替换/合并）
+        if isinstance(updates.get("agents"), dict):
+            agents = config_dict.get("agents") or {}
+            for agent_name, agent_cfg in updates["agents"].items():
+                if not isinstance(agent_cfg, dict) or not agent_cfg:
+                    # 空配置 = 清除该 Agent 的覆盖（跟随全局）
+                    agents.pop(agent_name, None)
+                    continue
+                merged = dict(agents.get(agent_name) or {})
+                for k, v in agent_cfg.items():
+                    if v is not None and v != "":
+                        merged[k] = v
+                agents[agent_name] = merged
+            config_dict["agents"] = agents
+
         for section, values in updates.items():
-            if values and section in config_dict:
-                if isinstance(config_dict[section], dict):
+            if section == "agents":
+                continue
+            # 兼容前端字段名：execution → backtest（后端顶层段名）
+            target_section = "backtest" if section == "execution" else section
+            if values and target_section in config_dict:
+                if isinstance(config_dict[target_section], dict):
                     for key, value in values.items():
                         if value is not None:
-                            config_dict[section][key] = value
+                            config_dict[target_section][key] = value
 
         # 重新创建配置对象
         # 注意：reset_config() 会清空全局单例，但这里必须把新配置同步回全局单例，

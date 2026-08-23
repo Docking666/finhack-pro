@@ -7,6 +7,21 @@
             LLM配置
         </h3>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <!-- 服务商选择 -->
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">服务商</label>
+                <div class="flex gap-2">
+                    <select x-model="config.llm.provider" @change="applyProviderPreset('llm')"
+                            class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                        <template x-for="(p, key) in PROVIDER_PRESETS" :key="key">
+                            <option :value="key" x-text="p.label"></option>
+                        </template>
+                        <option value="custom">自定义...</option>
+                    </select>
+                </div>
+                <p class="mt-1 text-xs text-gray-500">选择预置服务商自动填充 Base URL；选"自定义"可手动填写任意兼容地址</p>
+            </div>
+
             <!-- API Key（统一） -->
             <div>
                 <label class="block text-xs text-gray-400 mb-1">API Key</label>
@@ -17,7 +32,7 @@
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
                     </button>
                 </div>
-                <p class="mt-1 text-xs text-gray-500">兼容 OpenAI 格式的所有服务商（DeepSeek、通义千问、智谱等）</p>
+                <p class="mt-1 text-xs text-gray-500">兼容 OpenAI 格式的所有服务商（DeepSeek、通义千问、智谱、OrcaRouter 等）</p>
             </div>
 
             <!-- API Base URL -->
@@ -25,7 +40,7 @@
                 <label class="block text-xs text-gray-400 mb-1">API 基础地址 (Base URL)</label>
                 <input type="text" x-model="config.llm.openai_base_url" placeholder="https://api.openai.com/v1"
                        class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
-                <p class="mt-1 text-xs text-gray-500">国内常用: DeepSeek → https://api.deepseek.com/v1 | 智谱 → https://open.bigmodel.cn/api/paas/v4</p>
+                <p class="mt-1 text-xs text-gray-500">OrcaRouter: https://api.orcarouter.ai/v1（一个 Key 切换所有模型）</p>
                 <button @click="testConnection('openai')" :disabled="testing.openai"
                         class="mt-1.5 text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
                     <template x-if="!testing.openai"><span>测试连接</span></template>
@@ -37,7 +52,7 @@
             <!-- 模型名称 -->
             <div>
                 <label class="block text-xs text-gray-400 mb-1">模型名称</label>
-                <input type="text" x-model="config.llm.model" placeholder="例如: gpt-4o、deepseek-chat、glm-4-flash"
+                <input type="text" x-model="config.llm.model" placeholder="例如: gpt-4o、deepseek-chat、glm-4-flash、orcarouter/auto"
                        class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
                 <p class="mt-1 text-xs text-gray-500">支持任意符合 OpenAI 格式的模型</p>
             </div>
@@ -59,9 +74,74 @@
                 <input type="number" x-model.number="config.llm.max_tokens" min="1" max="128000"
                        class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
             </div>
+        </div>
+    </div>
 
-            <!-- Provider（隐藏，保持兼容） -->
-            <input type="hidden" x-model="config.llm.provider" value="openai">
+    <!-- Agent 独立 LLM 配置 -->
+    <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+        <h3 class="text-sm font-medium text-white mb-1 flex items-center gap-2">
+            <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+            Agent 独立模型配置
+        </h3>
+        <p class="text-xs text-gray-500 mb-4">每个 Agent 可单独设置模型 / API Key / Base URL，留空则跟随全局 LLM 配置。多 Agent 可多模型、多 API 来源。</p>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <template x-for="agentCfg in agentConfigs" :key="agentCfg.name">
+                <div class="bg-[#0f172a] rounded-lg p-3 border border-[#334155]/60">
+                    <div class="flex items-center justify-between mb-2">
+                        <div class="flex items-center gap-2">
+                            <div class="w-5 h-5 rounded flex items-center justify-center text-xs font-bold"
+                                 :style="'background: ' + getAgentColor(agentCfg.name) + '30; color: ' + getAgentColor(agentCfg.name)"
+                                 x-text="agentCfg.name.charAt(0).toUpperCase()"></div>
+                            <span class="text-sm font-medium text-gray-200" x-text="agentCfg.label"></span>
+                        </div>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded"
+                              :class="agentCfg.followGlobal ? 'bg-gray-800 text-gray-400' : 'bg-purple-900/50 text-purple-300'"
+                              x-text="agentCfg.followGlobal ? '跟随全局' : '独立配置'"></span>
+                    </div>
+
+                    <!-- 服务商 -->
+                    <div class="grid grid-cols-2 gap-2 mb-2">
+                        <div>
+                            <label class="block text-[10px] text-gray-500 mb-0.5">服务商</label>
+                            <select x-model="agentCfg.provider" @change="applyProviderPreset('agent', agentCfg)"
+                                    class="w-full bg-[#1e293b] border border-[#334155] rounded px-2 py-1 text-xs text-white focus:border-purple-500 focus:outline-none">
+                                <option value="">跟随全局</option>
+                                <template x-for="(p, key) in PROVIDER_PRESETS" :key="key">
+                                    <option :value="key" x-text="p.label"></option>
+                                </template>
+                                <option value="custom">自定义...</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] text-gray-500 mb-0.5">模型名称</label>
+                            <input type="text" x-model="agentCfg.model" placeholder="跟随全局"
+                                   class="w-full bg-[#1e293b] border border-[#334155] rounded px-2 py-1 text-xs text-white focus:border-purple-500 focus:outline-none">
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2 mb-2">
+                        <div>
+                            <label class="block text-[10px] text-gray-500 mb-0.5">API Key</label>
+                            <input type="password" x-model="agentCfg.openai_api_key" placeholder="跟随全局"
+                                   class="w-full bg-[#1e293b] border border-[#334155] rounded px-2 py-1 text-xs text-white focus:border-purple-500 focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] text-gray-500 mb-0.5">Base URL</label>
+                            <input type="text" x-model="agentCfg.openai_base_url" placeholder="跟随全局"
+                                   class="w-full bg-[#1e293b] border border-[#334155] rounded px-2 py-1 text-xs text-white focus:border-purple-500 focus:outline-none">
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-3">
+                        <label class="flex items-center gap-1.5 text-[10px] text-gray-500 cursor-pointer">
+                            <input type="checkbox" x-model="agentCfg.followGlobal" @change="syncFollowGlobal(agentCfg)"
+                                   class="accent-purple-500 w-3 h-3"> 跟随全局
+                        </label>
+                        <button @click="clearAgentOverride(agentCfg)" class="text-[10px] text-gray-600 hover:text-gray-400">清除覆盖</button>
+                    </div>
+                </div>
+            </template>
         </div>
     </div>
 

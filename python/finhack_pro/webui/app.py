@@ -190,6 +190,42 @@ def create_app(config_path: Optional[str] = None) -> FastAPI:
 app = create_app()
 
 
+async def reload_agent_system(app: FastAPI) -> bool:
+    """重建 Agent 系统（配置变更后使 per-Agent 配置生效）
+
+    停止旧 coordinator → 按当前配置重建 → 启动。
+
+    Returns:
+        是否重建成功
+    """
+    logger.info("正在重建 Agent 系统...")
+    try:
+        from finhack_pro.agents.coordinator import AgentCoordinator
+
+        # 停止旧的 coordinator
+        agent_svc = app.state.agent_service
+        if agent_svc._coordinator:
+            try:
+                await agent_svc._coordinator.stop()
+                logger.info("旧 Agent 系统已停止")
+            except Exception as e:
+                logger.warning(f"停止旧 Agent 系统失败: {e}")
+
+        # 按当前配置重建
+        config_data = app.state.config_service.get_full_config()
+        coordinator = AgentCoordinator(config_data)
+        await coordinator.start()
+        agent_svc.set_coordinator(coordinator)
+        app.state.memory_service.set_shared_memory(coordinator.shared_memory)
+        logger.info("Agent 系统重建成功")
+        return True
+    except Exception as e:
+        import traceback
+        logger.error(f"Agent 系统重建失败: {e}")
+        logger.error(f"详细错误信息:\n{traceback.format_exc()}")
+        return False
+
+
 if __name__ == "__main__":
     uvicorn.run(
         "finhack_pro.webui.app:app",

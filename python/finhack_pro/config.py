@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 
 import yaml
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,6 +27,65 @@ class LLMConfig(BaseModel):
     max_tokens: int = 4096
     timeout: int = 60
     max_retries: int = 3
+
+
+class AgentLLMConfig(BaseModel):
+    """单 Agent 的 LLM 配置覆盖项
+
+    所有字段可选；留空(None/空串)表示跟随全局 LLM 配置。
+    使用 model_dump(exclude_none=True) 序列化后仅保留用户覆盖字段，
+    避免默认值冲掉全局配置。
+    """
+    model_config = {"extra": "ignore"}
+
+    provider: Optional[str] = None
+    openai_api_key: Optional[str] = None
+    openai_base_url: Optional[str] = None
+    anthropic_api_key: Optional[str] = None
+    model: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    timeout: Optional[int] = None
+    max_retries: Optional[int] = None
+
+    @field_validator(
+        "provider", "openai_api_key", "openai_base_url",
+        "anthropic_api_key", "model",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_empty_str(cls, v: Any) -> Any:
+        """空串归一为 None（字段级别，序列化/校验均生效）"""
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
+
+
+# 服务商预置表：选中后自动填充 base_url 与推荐模型
+# key 为 provider 标识（OpenAI 兼容服务商在 LLM 调用层统一按 openai 处理，
+# 预置表仅负责 base_url 与 model 建议）
+PROVIDER_PRESETS: Dict[str, Dict[str, str]] = {
+    "orca": {
+        "label": "OrcaRouter",
+        "base_url": "https://api.orcarouter.ai/v1",
+        "default_model": "orcarouter/auto",
+    },
+    "deepseek": {
+        "label": "DeepSeek",
+        "base_url": "https://api.deepseek.com/v1",
+        "default_model": "deepseek-chat",
+    },
+    "openai": {
+        "label": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "default_model": "gpt-4o",
+    },
+    "zhipu": {
+        "label": "智谱AI",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "default_model": "glm-4-plus",
+    },
+}
 
 
 class DataConfig(BaseModel):
@@ -103,6 +162,14 @@ class FinhackProConfig(BaseSettings):
     risk: RiskConfig = Field(default_factory=RiskConfig)
     rust_core: RustCoreConfig = Field(default_factory=RustCoreConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    # per-Agent LLM 配置覆盖（coordinator 读取 config["agents"]，键名必须一致）
+    # 示例:
+    #   agents:
+    #     market_analyzer:
+    #       model: "deepseek-chat"
+    #       openai_api_key: "sk-xxx"
+    #       openai_base_url: "https://api.deepseek.com/v1"
+    agents: Dict[str, AgentLLMConfig] = Field(default_factory=dict)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "FinhackProConfig":
@@ -127,7 +194,12 @@ class FinhackProConfig(BaseSettings):
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
-            yaml.dump(self.model_dump(), f, default_flow_style=False, allow_unicode=True)
+            yaml.dump(
+                self.model_dump(exclude_none=True),
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+            )
 
 
 # 全局配置单例
