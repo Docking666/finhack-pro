@@ -1,0 +1,161 @@
+"""
+思维链（CoT）跨 Agent 传递测试
+
+覆盖:
+- thinking 字段默认空（向后兼容）
+- thinking 序列化往返
+- debate context 渲染 thinking
+- coordinator 透传 thinking
+"""
+
+import json
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from finhack_pro.agents.market_analyzer import (
+    MarketAnalysisReport,
+    MarketState,
+    RiskLevel,
+    TrendDirection,
+)
+from finhack_pro.agents.strategy_generator import StrategyGeneratorAgent
+
+
+def _make_market_report(thinking="均线纠缠，量能不足，判断震荡"):
+    return MarketAnalysisReport(
+        symbol="600519.SH",
+        market_state=MarketState.SIDEWAYS,
+        trend_direction=TrendDirection.FLAT,
+        confidence=0.6,
+        risk_level=RiskLevel.MEDIUM,
+        thinking=thinking,
+    )
+
+
+class TestThinkingField:
+    def test_thinking_default_empty(self):
+        """不传 thinking → 默认空串（向后兼容）"""
+        from finhack_pro.agents.fundamental_analyst import FundamentalAnalysisReport
+        from finhack_pro.agents.micro_event_agent import MicroEventReport
+        from finhack_pro.agents.news_analyst import NewsAnalysisReport
+
+        r = MarketAnalysisReport(
+            symbol="x", market_state=MarketState.SIDEWAYS,
+            trend_direction=TrendDirection.FLAT, confidence=0.5, risk_level=RiskLevel.MEDIUM,
+        )
+        assert r.thinking == ""
+        assert NewsAnalysisReport(symbol="x").thinking == ""
+        assert FundamentalAnalysisReport(symbol="x").thinking == ""
+        assert MicroEventReport(symbol="x").thinking == ""
+
+    def test_thinking_roundtrip(self):
+        """thinking 序列化/反序列化往返保留"""
+        report = _make_market_report()
+        data = report.model_dump()
+        assert data["thinking"] == "均线纠缠，量能不足，判断震荡"
+        restored = MarketAnalysisReport.model_validate(data)
+        assert restored.thinking == report.thinking
+
+
+class TestDebateContextThinking:
+    def test_build_debate_context_includes_thinking(self):
+        """_build_debate_context 渲染 analysis_report 的 thinking"""
+        agent = StrategyGeneratorAgent(config={"model": "test"})
+        report = _make_market_report()
+        ctx = agent._build_debate_context(report)
+        assert "分析推理" in ctx
+        assert "均线纠缠" in ctx
+
+    def test_build_debate_context_no_thinking_no_error(self):
+        """无 thinking 的报告用 getattr 不抛错"""
+        agent = StrategyGeneratorAgent(config={"model": "test"})
+        report = _make_market_report(thinking="")
+        ctx = agent._build_debate_context(report)
+        assert "分析推理" not in ctx  # 空 thinking 不渲染
+
+    @pytest.mark.asyncio
+    async def test_debate_prompt_contains_thinking(self):
+        """debate 三轮 prompt 都包含上游 thinking"""
+        from finhack_pro.agents.fundamental_analyst import FundamentalAnalysisReport
+        from finhack_pro.agents.micro_event_agent import MicroEventReport
+        from finhack_pro.agents.news_analyst import NewsAnalysisReport
+
+        agent = StrategyGeneratorAgent(config={"model": "test", "api_key": "sk-test"})
+        llm = MagicMock()
+        judge_json = json.dumps({
+            "bull_arguments": ["a"], "bear_arguments": ["b"],
+            "bull_strength": 0.6, "bear_strength": 0.4,
+            "consensus": "bullish", "confidence": 0.7,
+            "key_debates": ["x"], "conclusion": "看多",
+        })
+        # 用真实 async 函数记录调用（side_effect 列表模式下 call_args 不记录）
+        captured = []
+
+        async def _fake_chat(message, **kwargs):
+            captured.append(message)
+            return "多头论点" if len(captured) == 1 else ("空头论点" if len(captured) == 2 else judge_json)
+
+        llm.chat = AsyncMock(side_effect=_fake_chat)
+        llm._extract_json = MagicMock(side_effect=lambda t: json.loads(t))
+        agent._llm = llm
+
+        report = _make_market_report()
+        news = NewsAnalysisReport(symbol="600519.SH", thinking="新闻情绪偏中性")
+        fund = FundamentalAnalysisReport(symbol="600519.SH", thinking="估值合理")
+        micro = MicroEventReport(symbol="600519.SH", thinking="有并购事件")
+
+        await agent.debate(
+            analysis_report=report,
+            news_report=news,
+            fundamental_report=fund,
+            micro_event_report=micro,
+        )
+        # 三轮 prompt 都应包含 thinking
+        assert len(captured) == 3, f"chat 应调用3次，实际{len(captured)}"
+        for prompt in captured:
+            has_thinking = any(
+                t in prompt for t in ("均线纠缠", "新闻情绪", "估值合理", "并购事件")
+            )
+            assert has_thinking, f"prompt 缺少 thinking: {prompt[:100]}"
+
+
+class TestCoordinatorThinkingPassthrough:
+    @pytest.mark.asyncio
+    async def test_coordinator_passthrough_thinking(self, tmp_path):
+        """coordinator 流水线中报告 thinking 传递给下游 debate"""
+        from finhack_pro.agents.coordinator import AgentCoordinator
+        from finhack_pro.agents.fundamental_analyst import FundamentalAnalysisReport
+        from finhack_pro.agents.micro_event_agent import MicroEventReport
+        from finhack_pro.agents.news_analyst import NewsAnalysisReport
+        from finhack_pro.agents.risk_manager import RiskDecision
+        from finhack_pro.agents.strategy_generator import SignalDirection, StrategySignal
+        from finhack_pro.agents.trade_executor import ExecutionReport, OrderSide
+
+        config = {
+            "llm": {"provider": "openai", "openai_api_key": "sk-test", "model": "test"},
+            "pipeline": {"output_dir": str(tmp_path / "pipeline")},
+        }
+        coord = AgentCoordinator(config)
+
+        coord.market_analyzer.analyze = AsyncMock(return_value=_make_market_report("市场看多"))
+        coord.news_analyst.analyze = AsyncMock(return_value=NewsAnalysisReport(symbol="600519.SH", thinking="新闻偏多"))
+        coord.fundamental_analyst.analyze = AsyncMock(return_value=FundamentalAnalysisReport(symbol="600519.SH", thinking="基本面强"))
+        coord.micro_event_agent.scan_events = AsyncMock(return_value=MicroEventReport(symbol="600519.SH", thinking="事件利好"))
+        coord.strategy_generator.debate = AsyncMock(return_value=StrategySignal(
+            symbol="600519.SH", direction=SignalDirection.BUY, confidence=0.8,
+        ))
+        coord.risk_manager.evaluate_risk = AsyncMock(return_value=RiskDecision(symbol="600519.SH", approved=True))
+        coord.trade_executor.execute = AsyncMock(return_value=ExecutionReport(
+            order_id="test-order", symbol="600519.SH", side=OrderSide.BUY,
+            price=1500.0, volume=100, status="filled", filled_volume=100,
+        ))
+
+        await coord.run_analysis_pipeline("600519.SH", run_id="thinking_test_1", resume=True)
+
+        # 断言 debate 收到的报告对象带 thinking
+        call_kwargs = coord.strategy_generator.debate.await_args.kwargs
+        assert call_kwargs["analysis_report"].thinking == "市场看多"
+        assert call_kwargs["news_report"].thinking == "新闻偏多"
+        assert call_kwargs["fundamental_report"].thinking == "基本面强"
+        assert call_kwargs["micro_event_report"].thinking == "事件利好"

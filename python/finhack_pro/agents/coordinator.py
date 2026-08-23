@@ -31,18 +31,45 @@ from loguru import logger
 
 from finhack_pro.agents.alternative_data_tools import register_alternative_data_tools
 from finhack_pro.agents.base import AgentMessage, BaseAgent
-from finhack_pro.agents.fundamental_analyst import FundamentalAnalystAgent
-from finhack_pro.agents.market_analyzer import MarketAnalyzerAgent
-from finhack_pro.agents.micro_event_agent import MicroEventAgent
-from finhack_pro.agents.news_analyst import NewsAnalystAgent
-from finhack_pro.agents.risk_manager import RiskManagerAgent
+from finhack_pro.agents.fundamental_analyst import (
+    FundamentalAnalysisReport,
+    FundamentalAnalystAgent,
+)
+from finhack_pro.agents.market_analyzer import MarketAnalysisReport, MarketAnalyzerAgent
+from finhack_pro.agents.micro_event_agent import MicroEventAgent, MicroEventReport
+from finhack_pro.agents.news_analyst import NewsAnalysisReport, NewsAnalystAgent
+from finhack_pro.agents.risk_manager import RiskDecision, RiskManagerAgent
 from finhack_pro.agents.shared_memory import SharedMemory
-from finhack_pro.agents.strategy_generator import StrategyGeneratorAgent
+from finhack_pro.agents.strategy_generator import StrategyGeneratorAgent, StrategySignal
 from finhack_pro.agents.tool_registry import ToolRegistry, create_default_toolkit
-from finhack_pro.agents.trade_executor import TradeExecutorAgent
+from finhack_pro.agents.trade_executor import ExecutionReport, TradeExecutorAgent
 from finhack_pro.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class PipelineResumeError(RuntimeError):
+    """流水线恢复相关错误基类"""
+
+
+class EnvironmentDriftError(PipelineResumeError):
+    """环境指纹漂移：模型/温度/prompt 变更后拒绝恢复"""
+
+
+class RunIdConflictError(PipelineResumeError):
+    """run_id 已存在但 resume=False，拒绝覆盖冻结产物"""
+
+
+# 步骤 → (报告名称, Pydantic 模型) 映射，用于 JSON 落盘与恢复重建
+_STEP_MODELS = {
+    1: ("market_analysis", MarketAnalysisReport),
+    2: ("news_analysis", NewsAnalysisReport),
+    3: ("fundamental_analysis", FundamentalAnalysisReport),
+    4: ("micro_event_analysis", MicroEventReport),
+    5: ("strategy_signal", StrategySignal),
+    6: ("risk_decision", RiskDecision),
+    7: ("execution_report", ExecutionReport),
+}
 
 
 class AgentHealthStatus(str, Enum):
@@ -396,12 +423,309 @@ class AgentCoordinator:
             self._logger.warning(f"[Pipeline {run_id}] 报告落盘失败 ({name}): {e}")
             return ""
 
+    # ============================================================
+    # 断点恢复辅助方法（步骤级）
+    # ============================================================
+
+    def _atomic_write_json(self, path: str, data: Any) -> None:
+        """原子写 JSON：tempfile 同目录临时文件 + os.replace"""
+        import json as _json
+        import tempfile
+
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                _json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+            os.replace(tmp_path, path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+            raise
+
+    def _write_report_json(self, run_id: str, step: int, name: str, report: Any) -> str:
+        """写 step{N}_{name}.json（可重建 Pydantic 报告），返回路径；失败返回 ''"""
+        try:
+            run_dir = self._get_pipeline_dir(run_id)
+            path = os.path.join(run_dir, f"step{step}_{name}.json")
+            data = report.model_dump() if hasattr(report, "model_dump") else (
+                dict(report) if isinstance(report, dict) else {"value": str(report)}
+            )
+            self._atomic_write_json(path, data)
+            return path
+        except Exception as e:
+            self._logger.warning(f"[Pipeline {run_id}] 报告 JSON 落盘失败 ({name}): {e}")
+            return ""
+
+    def _save_input_snapshot(
+        self,
+        run_id: str,
+        symbol: str,
+        market_data: Optional[Dict[str, Any]],
+        indicators: Optional[Dict[str, Any]],
+        current_price: Optional[float],
+    ) -> None:
+        """写 input_snapshot.json（point-in-time 数据快照，恢复时复用，禁止重拉）"""
+        run_dir = self._get_pipeline_dir(run_id)
+        self._atomic_write_json(os.path.join(run_dir, "input_snapshot.json"), {
+            "symbol": symbol,
+            "market_data": market_data,
+            "indicators": indicators,
+            "current_price": current_price,
+            "created_at": time.time(),
+        })
+
+    def _load_input_snapshot(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """读 input_snapshot.json；不存在返回 None"""
+        import json as _json
+
+        run_dir = self._get_pipeline_dir(run_id)
+        path = os.path.join(run_dir, "input_snapshot.json")
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return _json.load(f)
+        except Exception as e:
+            self._logger.warning(f"[Pipeline {run_id}] 读取输入快照失败: {e}")
+            return None
+
+    def _is_step_done(self, run_id: str, step: int) -> bool:
+        """step{N}.done 标记是否存在"""
+        run_dir = self._get_pipeline_dir(run_id)
+        return os.path.exists(os.path.join(run_dir, f"step{step}.done"))
+
+    def _mark_step_done(self, run_id: str, step: int, name: str) -> None:
+        """原子写 step{step}.done（提交点：JSON+MD 已写入后才标记）"""
+        run_dir = self._get_pipeline_dir(run_id)
+        self._atomic_write_json(os.path.join(run_dir, f"step{step}.done"), {
+            "step": step,
+            "name": name,
+            "run_id": run_id,
+            "completed_at": time.time(),
+        })
+
+    def _load_step_report(self, run_id: str, step: int) -> Optional[Any]:
+        """从 step{N}_{name}.json 重建 Pydantic 报告对象"""
+        import json as _json
+
+        name, model = _STEP_MODELS.get(step, (None, None))
+        if not name or not model:
+            return None
+        run_dir = self._get_pipeline_dir(run_id)
+        path = os.path.join(run_dir, f"step{step}_{name}.json")
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = _json.load(f)
+            return model.model_validate(data)
+        except Exception as e:
+            self._logger.warning(f"[Pipeline {run_id}] 重建 Step {step} 报告失败: {e}")
+            return None
+
+    def _save_pipeline_state(self, run_id: str, status: str, terminal: Optional[str] = None) -> None:
+        """写 pipeline_state.json（记录终态：hold/risk_rejected/executed）"""
+        run_dir = self._get_pipeline_dir(run_id)
+        self._atomic_write_json(os.path.join(run_dir, "pipeline_state.json"), {
+            "status": status,
+            "terminal": terminal,
+            "updated_at": time.time(),
+        })
+
+    def _load_pipeline_state(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """读 pipeline_state.json"""
+        import json as _json
+
+        run_dir = self._get_pipeline_dir(run_id)
+        path = os.path.join(run_dir, "pipeline_state.json")
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return _json.load(f)
+        except Exception as e:
+            self._logger.warning(f"[Pipeline {run_id}] 读取流水线状态失败: {e}")
+            return None
+
+    def _compute_env_fingerprint(self) -> Dict[str, Any]:
+        """收集每个 Agent 的环境指纹（模型/温度/provider/base_url + prompt sha256）
+
+        Returns:
+            {"version": 1, "agents": {...}, "prompts": {...}}
+        """
+        import hashlib as _hashlib
+
+        agents_fp: Dict[str, Dict[str, Any]] = {}
+        prompts_fp: Dict[str, str] = {}
+
+        for name, agent in self._agents.items():
+            cfg = agent.config
+            agents_fp[name] = {
+                "model": cfg.get("model", ""),
+                "temperature": cfg.get("temperature", 0.3),
+                "provider": cfg.get("provider", ""),
+                "base_url": cfg.get("base_url") or cfg.get("openai_base_url", ""),
+            }
+            # 各 agent 的 system prompt（模块级常量）hash
+            mod = getattr(agent, "__class__", None)
+            if mod is not None:
+                mod = mod.__module__
+            prompts_fp[name] = ""
+
+        # 从模块级常量收集 prompt（尽力而为，缺失不影响核心指纹）
+        try:
+            from finhack_pro.agents import fundamental_analyst as _fa
+            from finhack_pro.agents import market_analyzer as _ma
+            from finhack_pro.agents import micro_event_agent as _me
+            from finhack_pro.agents import news_analyst as _na
+            from finhack_pro.agents import strategy_generator as _sg
+
+            prompt_map = {
+                "market_analyzer": getattr(_ma, "MARKET_ANALYZER_SYSTEM_PROMPT", ""),
+                "news_analyst": getattr(_na, "NEWS_ANALYST_SYSTEM_PROMPT", ""),
+                "fundamental_analyst": getattr(_fa, "FUNDAMENTAL_ANALYST_SYSTEM_PROMPT", ""),
+                "micro_event_agent": getattr(_me, "MICRO_EVENT_SYSTEM_PROMPT", ""),
+                "strategy_generator_bull": getattr(_sg, "BULL_ANALYST_SYSTEM_PROMPT", ""),
+                "strategy_generator_bear": getattr(_sg, "BEAR_ANALYST_SYSTEM_PROMPT", ""),
+                "strategy_generator_judge": getattr(_sg, "DEBATE_JUDGE_SYSTEM_PROMPT", ""),
+                "strategy_generator_final": getattr(_sg, "STRATEGY_GENERATOR_SYSTEM_PROMPT", ""),
+            }
+            prompts_fp = {k: _hashlib.sha256(v.encode()).hexdigest() for k, v in prompt_map.items()}
+        except Exception as e:
+            self._logger.warning(f"收集 prompt 指纹失败: {e}")
+
+        return {"version": 1, "agents": agents_fp, "prompts": prompts_fp}
+
+    def _save_env_fingerprint(self, run_id: str) -> None:
+        """写 env_fingerprint.json"""
+        run_dir = self._get_pipeline_dir(run_id)
+        fp = self._compute_env_fingerprint()
+        fp["created_at"] = time.time()
+        self._atomic_write_json(os.path.join(run_dir, "env_fingerprint.json"), fp)
+
+    def _check_env_fingerprint(self, run_id: str) -> bool:
+        """与已存指纹比对（忽略 created_at），一致返回 True"""
+        import json as _json
+
+        run_dir = self._get_pipeline_dir(run_id)
+        path = os.path.join(run_dir, "env_fingerprint.json")
+        if not os.path.exists(path):
+            return True  # 无指纹可查 → 视为一致
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                saved = _json.load(f)
+            current = self._compute_env_fingerprint()
+            # 仅比较 agents 与 prompts，忽略 created_at/version 差异
+            return saved.get("agents") == current.get("agents") and \
+                saved.get("prompts") == current.get("prompts")
+        except Exception as e:
+            self._logger.warning(f"[Pipeline {run_id}] 环境指纹校验失败: {e}")
+            return False
+
+    def _get_resume_plan(self, run_id: str) -> Dict[str, Any]:
+        """扫描 run 目录，返回 {input_snapshot, done_steps, pending_steps, state}"""
+        run_dir = self._get_pipeline_dir(run_id)
+        done_steps: Set[int] = {s for s in _STEP_MODELS if self._is_step_done(run_id, s)}
+        return {
+            "run_dir": run_dir,
+            "input_snapshot": self._load_input_snapshot(run_id),
+            "done_steps": done_steps,
+            "pending_steps": sorted(set(_STEP_MODELS.keys()) - done_steps),
+            "state": self._load_pipeline_state(run_id),
+        }
+
+    async def _run_step(
+        self,
+        run_id: str,
+        step: int,
+        name: str,
+        runner: Any,
+    ) -> Any:
+        """执行单个步骤（原子单元）
+
+        已 done → 从 JSON 重建返回；否则执行 runner()，成功后写
+        json → md → done（done 是提交点）。步内异常上抛，不写 done。
+        """
+        if self._is_step_done(run_id, step):
+            report = self._load_step_report(run_id, step)
+            if report is not None:
+                self._logger.info(f"[Pipeline {run_id}] 跳过已完成 Step {step}（恢复）")
+                return report
+            self._logger.warning(f"[Pipeline {run_id}] Step {step} done 标记存在但 JSON 损坏，整步重跑")
+
+        report = await runner()
+        if report is not None:
+            self._write_report_json(run_id, step, name, report)
+            self._write_report_md(run_id, step, name, report)
+            self._mark_step_done(run_id, step, name)
+            self._logger.info(f"[Pipeline {run_id}] Step {step} 完成并落盘 ({name})")
+        return report
+
+    def _rebuild_completed_result(self, run_id: str, symbol: str, state: Dict[str, Any]) -> Dict[str, Any]:
+        """终态恢复：从 JSON 重建完整 result（已全部完成的 run 直接返回）"""
+        result: Dict[str, Any] = {
+            "symbol": symbol,
+            "run_id": run_id,
+            "report_dir": self._get_pipeline_dir(run_id),
+            "resumed_from_checkpoint": True,
+        }
+        terminal = state.get("terminal")
+
+        report1 = self._load_step_report(run_id, 1)
+        report2 = self._load_step_report(run_id, 2)
+        report3 = self._load_step_report(run_id, 3)
+        report4 = self._load_step_report(run_id, 4)
+        report5 = self._load_step_report(run_id, 5)
+        report6 = self._load_step_report(run_id, 6)
+        report7 = self._load_step_report(run_id, 7)
+
+        if report1:
+            result["analysis"] = report1.model_dump()
+            p = os.path.join(self._get_pipeline_dir(run_id), "step1_market_analysis.md")
+            if os.path.exists(p):
+                result["analysis_report_path"] = p
+        if report2:
+            result["news_analysis"] = report2.model_dump()
+            p = os.path.join(self._get_pipeline_dir(run_id), "step2_news_analysis.md")
+            if os.path.exists(p):
+                result["news_report_path"] = p
+        if report3:
+            result["fundamental_analysis"] = report3.model_dump()
+            p = os.path.join(self._get_pipeline_dir(run_id), "step3_fundamental_analysis.md")
+            if os.path.exists(p):
+                result["fundamental_report_path"] = p
+        if report4:
+            result["micro_event_analysis"] = report4.model_dump()
+            p = os.path.join(self._get_pipeline_dir(run_id), "step4_micro_event_analysis.md")
+            if os.path.exists(p):
+                result["micro_event_report_path"] = p
+        if report5:
+            result["signal"] = report5.model_dump()
+        if report6:
+            result["risk_decision"] = report6.model_dump()
+        if report7:
+            result["execution"] = report7.model_dump()
+
+        if terminal == "hold":
+            result.setdefault("risk_decision", None)
+            result.setdefault("execution", None)
+        elif terminal == "risk_rejected":
+            result.setdefault("execution", None)
+
+        return result
+
     async def run_analysis_pipeline(
         self,
         symbol: str,
         market_data: Optional[Dict[str, Any]] = None,
         indicators: Optional[Dict[str, Any]] = None,
         current_price: Optional[float] = None,
+        run_id: Optional[str] = None,
+        resume: bool = True,
     ) -> Dict[str, Any]:
         """运行完整的分析流水线
 
@@ -414,24 +738,83 @@ class AgentCoordinator:
         6. 风险管理Agent -> 风控决策
         7. 交易执行Agent -> 执行报告
 
-        每一步的输出都存储到共享记忆中。
+        每一步的输出都存储到共享记忆中，并落盘为 JSON/MD（断点恢复）。
 
         Args:
             symbol: 标的代码
             market_data: 市场数据
             indicators: 技术指标
             current_price: 当前价格
+            run_id: 显式运行ID。为 None 生成新 run（旧行为）；
+                已存在目录 + resume=True + 环境指纹一致 → 恢复（跳过已完成步骤）
+            resume: run_id 已存在时是否允许恢复。False 且 run_id 已存在 → RunIdConflictError
 
         Returns:
             包含各阶段结果的字典
+
+        Raises:
+            EnvironmentDriftError: 环境指纹漂移且不允许恢复
+            RunIdConflictError: run_id 已存在且 resume=False
+            PipelineResumeError: 快照 symbol 不一致等恢复错误
         """
         self._logger.info(f"========== 开始分析流水线: {symbol} ==========")
         result: Dict[str, Any] = {"symbol": symbol}
 
-        # 生成 run_id 并初始化流水线产物目录（md 落盘）
-        run_id = hashlib.md5(f"{symbol}:{time.time()}".encode()).hexdigest()[:12]
+        # ---- run_id 解析与断点恢复 ----
+        if run_id is None:
+            # 新 run（沿用 md5 生成，向后兼容）
+            run_id = hashlib.md5(f"{symbol}:{time.time()}".encode()).hexdigest()[:12]
+            is_resume = False
+        else:
+            run_dir = self._get_pipeline_dir(run_id)
+            run_exists = os.path.isdir(run_dir) and os.listdir(run_dir) != []
+            if run_exists:
+                if not resume:
+                    raise RunIdConflictError(
+                        f"run_id '{run_id}' 已存在且 resume=False，拒绝覆盖冻结产物；"
+                        f"如需续跑请传 resume=True"
+                    )
+                # 环境指纹校验：漂移则拒绝恢复（除非配置 resume_on_drift）
+                if not self._check_env_fingerprint(run_id):
+                    resume_on_drift = self.config.get("pipeline", {}).get("resume_on_drift", False)
+                    if not resume_on_drift:
+                        raise EnvironmentDriftError(
+                            f"run_id '{run_id}' 环境指纹漂移（模型/温度/prompt 变更），"
+                            f"无法安全续跑；请改用新 run_id 或设置 pipeline.resume_on_drift=true"
+                        )
+                    self._logger.warning(f"[Pipeline {run_id}] 环境指纹漂移，resume_on_drift=true，降级继续")
+                    result["resume_drift_warning"] = "环境指纹漂移，已按 resume_on_drift 配置继续"
+                is_resume = True
+            else:
+                is_resume = False
+
         result["run_id"] = run_id
         result["report_dir"] = self._get_pipeline_dir(run_id)
+
+        # ---- 终态恢复：若已全部完成，直接重建结果返回 ----
+        state = self._load_pipeline_state(run_id)
+        if state and state.get("status") == "completed" and state.get("terminal"):
+            self._logger.info(f"[Pipeline {run_id}] 流水线已完成 (terminal={state.get('terminal')})，直接返回重建结果")
+            return self._rebuild_completed_result(run_id, symbol, state)
+
+        # ---- 新 run：写输入快照 + 环境指纹 ----
+        if not is_resume:
+            self._save_input_snapshot(run_id, symbol, market_data, indicators, current_price)
+            self._save_env_fingerprint(run_id)
+            self._save_pipeline_state(run_id, "running")
+        else:
+            # 恢复：复用快照数据（point-in-time，禁止重拉），校验 symbol
+            snapshot = self._load_input_snapshot(run_id)
+            if snapshot is not None:
+                snap_symbol = snapshot.get("symbol")
+                if snap_symbol != symbol:
+                    raise PipelineResumeError(
+                        f"run_id '{run_id}' 快照标的 '{snap_symbol}' 与请求 '{symbol}' 不一致，拒绝恢复"
+                    )
+                market_data = snapshot.get("market_data")
+                indicators = snapshot.get("indicators")
+                current_price = snapshot.get("current_price")
+                self._logger.info(f"[Pipeline {run_id}] 恢复：复用输入快照（point-in-time）")
 
         try:
             # ---- 第1阶段: 并行执行 Step 1-4 (市场/新闻/基本面/微观事件) ----
@@ -495,12 +878,32 @@ class AgentCoordinator:
                 )
                 return report
 
-            # 并行执行4个分析任务 (SharedMemory内部有asyncio.Lock保护并发写入)
+            # 并行执行4个分析任务（仅未完成步骤；已完成步骤恢复时从 JSON 重建）
+            async def _run_market_analysis():
+                return await self._run_step(run_id, 1, "market_analysis", lambda: self.market_analyzer.analyze(
+                    symbol=symbol, market_data=market_data, indicators=indicators,
+                ))
+
+            async def _run_news_analysis():
+                return await self._run_step(run_id, 2, "news_analysis", lambda: self.news_analyst.analyze(symbol=symbol))
+
+            async def _run_fundamental_analysis():
+                return await self._run_step(run_id, 3, "fundamental_analysis", lambda: self.fundamental_analyst.analyze(symbol=symbol))
+
+            async def _run_micro_event_analysis():
+                return await self._run_step(run_id, 4, "micro_event_analysis", lambda: self.micro_event_agent.scan_events(symbol=symbol, days=7))
+
+            # 只对未完成步骤创建 task（断点恢复核心：跳过已 done 步骤）
+            _PENDING = [s for s in (1, 2, 3, 4) if not self._is_step_done(run_id, s)]
+            _STEP_RUNNERS = {
+                1: ("market", _run_market_analysis),
+                2: ("news", _run_news_analysis),
+                3: ("fundamental", _run_fundamental_analysis),
+                4: ("micro_event", _run_micro_event_analysis),
+            }
             analysis_tasks = [
-                asyncio.create_task(_run_market_analysis(), name="market"),
-                asyncio.create_task(_run_news_analysis(), name="news"),
-                asyncio.create_task(_run_fundamental_analysis(), name="fundamental"),
-                asyncio.create_task(_run_micro_event_analysis(), name="micro_event"),
+                asyncio.create_task(_STEP_RUNNERS[s][1](), name=_STEP_RUNNERS[s][0])
+                for s in _PENDING
             ]
 
             # 收集结果，单个任务失败不影响其他
@@ -513,17 +916,30 @@ class AgentCoordinator:
                     self._logger.error(f"分析任务 [{task.get_name()}] 失败: {e}")
                     analysis_results[task.get_name()] = None
 
+            # 已完成步骤（恢复）从 JSON 重建，未完成的用本次结果
             analysis_report = analysis_results.get("market")
             news_report = analysis_results.get("news")
             fundamental_report = analysis_results.get("fundamental")
             micro_event_report = analysis_results.get("micro_event")
 
-            # 记录结果
+            # 恢复场景：已 done 的步骤用 JSON 重建报告（不重复调用 LLM）
+            def _resolved(name_key, step):
+                if name_key in analysis_results and analysis_results[name_key] is not None:
+                    return analysis_results[name_key]
+                if self._is_step_done(run_id, step):
+                    return self._load_step_report(run_id, step)
+                return None
+
+            analysis_report = _resolved("market", 1)
+            news_report = _resolved("news", 2)
+            fundamental_report = _resolved("fundamental", 3)
+            micro_event_report = _resolved("micro_event", 4)
+
+            # 记录结果（md/json/done 已由 _run_step 落盘）
             if analysis_report:
                 result["analysis"] = analysis_report.model_dump()
-                # 三层架构第2层：完整报告落盘为 md
-                report_path = self._write_report_md(run_id, 1, "market_analysis", analysis_report)
-                if report_path:
+                report_path = self._get_pipeline_dir(run_id) + os.sep + "step1_market_analysis.md"
+                if os.path.exists(report_path):
                     result["analysis_report_path"] = report_path
                 self._logger.info(
                     f"[Step 1/7] 市场分析完成: 状态={analysis_report.market_state.value}, "
@@ -535,8 +951,8 @@ class AgentCoordinator:
 
             if news_report:
                 result["news_analysis"] = news_report.model_dump()
-                report_path = self._write_report_md(run_id, 2, "news_analysis", news_report)
-                if report_path:
+                report_path = self._get_pipeline_dir(run_id) + os.sep + "step2_news_analysis.md"
+                if os.path.exists(report_path):
                     result["news_report_path"] = report_path
                 self._logger.info(
                     f"[Step 2/7] 新闻分析完成: 情感={news_report.overall_sentiment}, "
@@ -548,8 +964,8 @@ class AgentCoordinator:
 
             if fundamental_report:
                 result["fundamental_analysis"] = fundamental_report.model_dump()
-                report_path = self._write_report_md(run_id, 3, "fundamental_analysis", fundamental_report)
-                if report_path:
+                report_path = self._get_pipeline_dir(run_id) + os.sep + "step3_fundamental_analysis.md"
+                if os.path.exists(report_path):
                     result["fundamental_report_path"] = report_path
                 self._logger.info(
                     f"[Step 3/7] 基本面分析完成: 评级={fundamental_report.overall_rating}, "
@@ -561,8 +977,8 @@ class AgentCoordinator:
 
             if micro_event_report:
                 result["micro_event_analysis"] = micro_event_report.model_dump()
-                report_path = self._write_report_md(run_id, 4, "micro_event_analysis", micro_event_report)
-                if report_path:
+                report_path = self._get_pipeline_dir(run_id) + os.sep + "step4_micro_event_analysis.md"
+                if os.path.exists(report_path):
                     result["micro_event_report_path"] = report_path
                 self._logger.info(
                     f"[Step 4/7] 微观事件分析完成: 发现{micro_event_report.events_count}个事件, "
@@ -608,15 +1024,19 @@ class AgentCoordinator:
                     "micro_event": result.get("micro_event_report_path"),
                 }.items() if v
             }
-            strategy_signal = await self._generate_strategy_with_debate(
-                symbol=symbol,
-                analysis_report=analysis_report,
-                news_report=news_report,
-                fundamental_report=fundamental_report,
-                micro_event_report=micro_event_report,
-                current_price=current_price,
-                report_paths=report_paths,
-            )
+
+            async def _run_strategy():
+                return await self._generate_strategy_with_debate(
+                    symbol=symbol,
+                    analysis_report=analysis_report,
+                    news_report=news_report,
+                    fundamental_report=fundamental_report,
+                    micro_event_report=micro_event_report,
+                    current_price=current_price,
+                    report_paths=report_paths,
+                )
+
+            strategy_signal = await self._run_step(run_id, 5, "strategy_signal", _run_strategy)
             result["signal"] = strategy_signal.model_dump()
             self._logger.info(
                 f"策略生成完成: 方向={strategy_signal.direction.value}, "
@@ -634,18 +1054,21 @@ class AgentCoordinator:
                 tags=[symbol, "strategy", strategy_signal.direction.value],
             )
 
-            # 如果方向是HOLD，直接结束
+            # 如果方向是HOLD，直接结束（记录终态）
             if strategy_signal.direction.value == "hold":
                 self._logger.info("策略信号为HOLD，流水线结束")
                 result["risk_decision"] = None
                 result["execution"] = None
+                self._save_pipeline_state(run_id, "completed", terminal="hold")
                 return result
 
             # ---- 第6步: 风控审批 ----
             self._logger.info("[Step 6/7] 风控审批...")
-            risk_decision = await self.risk_manager.evaluate_risk(
-                signal=strategy_signal,
-            )
+
+            async def _run_risk():
+                return await self.risk_manager.evaluate_risk(signal=strategy_signal)
+
+            risk_decision = await self._run_step(run_id, 6, "risk_decision", _run_risk)
             result["risk_decision"] = risk_decision.model_dump()
             self._logger.info(
                 f"风控审批完成: {'通过' if risk_decision.approved else '拒绝'}"
@@ -665,15 +1088,20 @@ class AgentCoordinator:
             if not risk_decision.approved:
                 self._logger.warning(f"信号被风控拒绝: {risk_decision.reasoning}")
                 result["execution"] = None
+                self._save_pipeline_state(run_id, "completed", terminal="risk_rejected")
                 return result
 
             # ---- 第7步: 交易执行 ----
             self._logger.info("[Step 7/7] 交易执行...")
-            execution_report = await self.trade_executor.execute(
-                signal=strategy_signal,
-                decision=risk_decision,
-                current_price=current_price,
-            )
+
+            async def _run_execution():
+                return await self.trade_executor.execute(
+                    signal=strategy_signal,
+                    decision=risk_decision,
+                    current_price=current_price,
+                )
+
+            execution_report = await self._run_step(run_id, 7, "execution_report", _run_execution)
             result["execution"] = execution_report.model_dump()
             self._logger.info(
                 f"交易执行完成: 状态={execution_report.status}, "
@@ -690,6 +1118,8 @@ class AgentCoordinator:
                 importance=self.shared_memory.MemoryImportance.CRITICAL,
                 tags=[symbol, "execution", execution_report.status],
             )
+
+            self._save_pipeline_state(run_id, "completed", terminal="executed")
 
         except Exception as e:
             self._logger.error(f"分析流水线异常: {e}", exc_info=True)

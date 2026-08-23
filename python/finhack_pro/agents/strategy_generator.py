@@ -349,6 +349,9 @@ class StrategyGeneratorAgent(BaseAgent):
                     parts.append(f"- {f}")
             if getattr(analysis_report, 'suggestion', None):
                 parts.append(f"**建议**: {analysis_report.suggestion}")
+            # 思维链：推理过程摘要（三层架构补充，供下游参考）
+            if getattr(analysis_report, 'thinking', None):
+                parts.append(f"**分析推理**: {analysis_report.thinking}")
 
         if fundamental_report is not None:
             parts.append("\n## 基本面分析\n")
@@ -358,6 +361,8 @@ class StrategyGeneratorAgent(BaseAgent):
                 parts.append(f"**关键指标**: {fundamental_report.key_metrics}")
             if getattr(fundamental_report, 'summary', None):
                 parts.append(f"**摘要**: {fundamental_report.summary}")
+            if getattr(fundamental_report, 'thinking', None):
+                parts.append(f"**分析推理**: {fundamental_report.thinking}")
 
         if news_report is not None:
             parts.append("\n## 新闻社媒分析\n")
@@ -370,6 +375,8 @@ class StrategyGeneratorAgent(BaseAgent):
                         parts.append(f"- {n.get('title', n)}")
                     else:
                         parts.append(f"- {n}")
+            if getattr(news_report, 'thinking', None):
+                parts.append(f"**分析推理**: {news_report.thinking}")
 
         if micro_event_report is not None:
             parts.append("\n## 微观事件分析\n")
@@ -381,6 +388,8 @@ class StrategyGeneratorAgent(BaseAgent):
                     parts.append(f"- {i}")
             if getattr(micro_event_report, 'summary', None):
                 parts.append(f"**摘要**: {micro_event_report.summary}")
+            if getattr(micro_event_report, 'thinking', None):
+                parts.append(f"**分析推理**: {micro_event_report.thinking}")
 
         # 完整报告 md 文件引用（三层架构第2层）：LLM 可按需读取全文
         if report_paths:

@@ -68,6 +68,7 @@ class MarketAnalysisReport(BaseModel):
     support_levels: List[float] = Field(default_factory=list)
     resistance_levels: List[float] = Field(default_factory=list)
     volume_analysis: str = ""
+    thinking: str = Field(default="", description="分析推理过程摘要（供下游 agent 参考）")
 
 
 # 市场分析Agent的系统提示词
@@ -254,6 +255,8 @@ class MarketAnalyzerAgent(BaseAgent):
         parts.append(
             "\n请基于以上数据进行全面的市场分析，"
             "输出JSON格式的分析报告。"
+            "在 thinking 字段中用不超过300字说明你的推理过程"
+            "（证据权衡、关键信号、结论依据）。"
         )
 
         return "\n".join(parts)

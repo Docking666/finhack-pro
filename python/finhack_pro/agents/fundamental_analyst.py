@@ -110,6 +110,7 @@ class FundamentalAnalysisReport(BaseModel):
     valuation_assessment: str = ""  # 估值评估(高估/合理/低估)
     summary: str = ""
     recommendation: str = ""  # 投资建议
+    thinking: str = Field(default="", description="分析推理过程摘要（供下游 agent 参考）")
 
 
 # 基本面分析Agent的系统提示词
@@ -257,6 +258,7 @@ class FundamentalAnalystAgent(BaseAgent):
 - key_strengths: 核心优势列表
 - key_risks: 主要风险列表
 - financial_health: 财务健康度(strong/moderate/weak)
+- thinking: 推理过程摘要(300字以内，说明证据权衡与结论依据)
 """
 
         try:

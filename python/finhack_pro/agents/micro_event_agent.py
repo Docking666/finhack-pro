@@ -79,6 +79,7 @@ class MicroEventReport(BaseModel):
     risk_alerts: List[str] = Field(default_factory=list)
     opportunity_signals: List[str] = Field(default_factory=list)
     summary: str = ""
+    thinking: str = Field(default="", description="分析推理过程摘要（供下游 agent 参考）")
 
 
 # 微观事件Agent系统提示词
@@ -449,6 +450,7 @@ class MicroEventAgent(BaseAgent):
 4. risk_alerts: 风险警示列表
 5. opportunity_signals: 机会信号列表
 6. summary: 综合摘要(100字内)
+7. thinking: 推理过程摘要(300字以内，说明证据权衡与结论依据)
 """
         
         try:

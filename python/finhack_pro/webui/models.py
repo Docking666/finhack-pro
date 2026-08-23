@@ -228,6 +228,8 @@ class PipelineRunRequest(BaseModel):
     market_data: Optional[Dict[str, Any]] = None
     indicators: Optional[Dict[str, Any]] = None
     current_price: Optional[float] = None
+    run_id: Optional[str] = Field(None, description="流水线运行ID（复用则续跑；为空生成新ID）")
+    resume: bool = Field(True, description="run_id 已存在时是否允许恢复")
 
 
 class PipelineStepResult(BaseModel):

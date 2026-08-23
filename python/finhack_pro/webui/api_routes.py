@@ -298,14 +298,8 @@ async def run_pipeline(request: Request, req: PipelineRunRequest):
     agent_svc = _get_agent_service(request)
     stream_svc = _get_stream_service(request)
 
-    # 在后台执行流水线
-    async def _run_with_stream():
-        async def _stream_callback(msg: Dict[str, Any]):
-            await stream_svc.broadcast("agents", msg)
-        await agent_svc.run_pipeline(req, stream_callback=_stream_callback)
-
-    # 先返回run_id
-    run_id = f"pipeline_{int(time.time())}"
+    # 先返回run_id（调用方显式传入则复用，否则生成）
+    run_id = req.run_id or f"pipeline_{int(time.time())}"
 
     async def _run_and_store():
         async def _stream_callback(msg: Dict[str, Any]):

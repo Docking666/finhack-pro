@@ -676,7 +676,8 @@ class AgentService:
         """
         import json as _json
 
-        run_id = uuid.uuid4().hex[:12]
+        # run_id 语义：调用方显式传入则复用（续跑/幂等重试），否则生成新 ID
+        run_id = request.run_id or uuid.uuid4().hex[:12]
         result = PipelineRunResult(
             run_id=run_id,
             symbol=request.symbol,
@@ -697,9 +698,14 @@ class AgentService:
             try:
                 logger.info(f"[Pipeline {run_id}] 开始执行真实分析流水线: {request.symbol}")
 
-                # 真正调用coordinator的分析流水线
+                # 真正调用coordinator的分析流水线（透传市场数据与 run_id/resume）
                 pipeline_result = await self._coordinator.run_analysis_pipeline(
                     symbol=request.symbol,
+                    market_data=request.market_data,
+                    indicators=request.indicators,
+                    current_price=request.current_price,
+                    run_id=request.run_id,
+                    resume=request.resume,
                 )
 
                 logger.info(f"[Pipeline {run_id}] Coordinator流水线完成")

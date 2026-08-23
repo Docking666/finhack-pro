@@ -79,6 +79,7 @@ class NewsAnalysisReport(BaseModel):
     opportunity_events: List[str] = Field(default_factory=list)  # 机会事件
     summary: str = ""
     market_impact_assessment: str = ""  # 市场影响评估
+    thinking: str = Field(default="", description="分析推理过程摘要（供下游 agent 参考）")
 
 
 # 新闻分析Agent的系统提示词
@@ -231,6 +232,7 @@ class NewsAnalystAgent(BaseAgent):
 - risk_events: 风险事件列表
 - opportunity_events: 机会事件列表
 - hot_topics: 热门话题列表
+- thinking: 推理过程摘要(300字以内，说明证据权衡与结论依据)
 """
 
         try:
