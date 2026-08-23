@@ -106,10 +106,6 @@ jobs:
           cd desktop
           npm install
 
-      - name: Generate preset data
-        working-directory: scripts
-        run: python generate_preset_data.py
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
