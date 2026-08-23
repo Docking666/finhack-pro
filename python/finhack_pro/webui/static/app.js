@@ -1332,6 +1332,11 @@ function workshopPage() {
         strategyGenerating: false,
         strategyResult: null,
 
+        // 快速测试（真实回测）状态
+        testRunning: false,
+        testResult: null,
+        testError: '',
+
         // AI因子生成状态
         factorForm: {
             description: '',
@@ -2020,6 +2025,9 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
                 window.__alpineApp.showToast('没有可测试的策略代码', 'warning');
                 return;
             }
+            this.testRunning = true;
+            this.testError = '';
+            this.testResult = null;
             try {
                 const resp = await API.post('/api/strategy/test', {
                     code,
@@ -2028,12 +2036,71 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
                     end_date: '2024-06-30',
                     initial_capital: 100000,
                 });
-                if (resp.success) {
-                    window.__alpineApp.showToast('快速测试完成', 'success');
+                if (resp.success && resp.data) {
+                    if (resp.data.valid === false) {
+                        // 数据获取失败/安全扫描拒绝
+                        this.testError = resp.data.message || '测试未通过';
+                        window.__alpineApp.showToast(this.testError, 'error');
+                    } else {
+                        this.testResult = resp.data;
+                        window.__alpineApp.showToast(resp.data.message || '快速测试完成', 'success');
+                        // 渲染权益曲线
+                        this.$nextTick(() => this.renderTestChart());
+                    }
+                } else {
+                    this.testError = resp.message || '测试失败';
+                    window.__alpineApp.showToast(this.testError, 'error');
                 }
             } catch (e) {
+                this.testError = e.message;
                 window.__alpineApp.showToast('测试失败: ' + e.message, 'error');
+            } finally {
+                this.testRunning = false;
             }
+        },
+
+        renderTestChart() {
+            const canvas = document.getElementById('test-equity-chart');
+            if (!canvas || !this.testResult || !this.testResult.equity_curve || this.testResult.equity_curve.length === 0) return;
+            const ctx = canvas.getContext('2d');
+            if (window.__testChart) {
+                window.__testChart.destroy();
+            }
+            const labels = this.testResult.equity_curve.map(p => p.date);
+            const data = this.testResult.equity_curve.map(p => p.equity);
+            window.__testChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: '策略权益',
+                        data,
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59,130,246,0.1)',
+                        fill: true,
+                        pointRadius: 0,
+                        tension: 0.2,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { ticks: { color: '#94a3b8', maxTicksLimit: 8 }, grid: { color: 'rgba(51,65,85,0.4)' } },
+                        y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,0.4)' } },
+                    },
+                    plugins: { legend: { labels: { color: '#e2e8f0' } } },
+                },
+            });
+        },
+
+        formatTestPct(v) {
+            if (v === null || v === undefined || isNaN(v)) return '--';
+            return v.toFixed(2) + '%';
+        },
+        formatTestNum(v) {
+            if (v === null || v === undefined || isNaN(v)) return '--';
+            return Number(v).toFixed(2);
         },
     };
 }

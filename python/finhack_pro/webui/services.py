@@ -392,36 +392,17 @@ class BacktestService:
                     "message": f"正在获取 {symbol} 历史数据...",
                 })
 
-            # 获取数据
-            try:
-                data = fetcher.get_daily(
-                    symbol=symbol,
-                    start_date=request.start_date,
-                    end_date=request.end_date,
+            # 获取数据（失败即抛错，由外层 except 统一处理为任务失败）
+            data = fetcher.get_daily(
+                symbol=symbol,
+                start_date=request.start_date,
+                end_date=request.end_date,
+            )
+            if data is None or data.empty:
+                raise ValueError(
+                    f"无法获取 {symbol} 的数据：请检查网络连接、数据源可用性、"
+                    f"标的代码是否正确（如 600519.SH）、日期区间是否有交易日"
                 )
-                if data is None or data.empty:
-                    raise ValueError(f"无法获取 {symbol} 的数据")
-            except Exception as e:
-                logger.error(f"[Backtest {task_id}] 数据获取失败: {e}")
-                # 使用模拟数据作为fallback
-                import numpy as np
-                import pandas as pd
-                dates = pd.date_range(start=request.start_date, end=request.end_date, freq='B')
-                np.random.seed(42)
-                base_price = 100.0
-                prices = [base_price]
-                for _ in range(1, len(dates)):
-                    prices.append(prices[-1] * (1 + np.random.normal(0.0005, 0.02)))
-                
-                data = pd.DataFrame({
-                    'date': dates,
-                    'open': prices,
-                    'high': [p * (1 + abs(np.random.normal(0, 0.01))) for p in prices],
-                    'low': [p * (1 - abs(np.random.normal(0, 0.01))) for p in prices],
-                    'close': [p * (1 + np.random.normal(0, 0.005)) for p in prices],
-                    'volume': np.random.randint(1000000, 10000000, len(dates)),
-                })
-                logger.info(f"[Backtest {task_id}] 使用模拟数据进行回测")
 
             if stream_callback:
                 await stream_callback({

@@ -18,7 +18,6 @@ Usage:
 """
 
 from finhack_pro.workshop.cloud import (
-    DEFAULT_CLOUD_API,
     WorkshopCloud,
     WorkshopCloudError,
 )
@@ -46,5 +45,4 @@ __all__ = [
     "SecurityIssue",
     "WorkshopCloud",
     "WorkshopCloudError",
-    "DEFAULT_CLOUD_API",
 ]

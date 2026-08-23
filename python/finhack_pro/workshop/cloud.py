@@ -9,9 +9,7 @@
 Usage:
     from finhack_pro.workshop.cloud import WorkshopCloud
 
-    cloud = WorkshopCloud(
-        base_url="https://ad-to-earn-xxx.ap-shanghai.app.tcloudbase.com/api/workshop/api",
-    )
+    cloud = WorkshopCloud()   # base_url 从配置读取（workshop.base_url 或环境变量）
     # 浏览
     page = cloud.list_packages(keyword="动量")
     # 下载并安装
@@ -35,12 +33,6 @@ from finhack_pro.workshop.packager import PackageManager
 
 logger = get_logger(__name__)
 
-# 默认云端 API 地址（CloudBase 环境 ad-to-earn，网关 /api/workshop 路由）
-DEFAULT_CLOUD_API = (
-    "https://ad-to-earn-d8goxvb2q25d96fc2-1463991490."
-    "ap-shanghai.app.tcloudbase.com/api/workshop/api"
-)
-
 
 class WorkshopCloudError(RuntimeError):
     """云端工坊错误"""
@@ -51,11 +43,32 @@ class WorkshopCloud:
 
     def __init__(
         self,
-        base_url: str = DEFAULT_CLOUD_API,
+        base_url: str = "",
         timeout: int = 30,
         workshop_dir: str = "data/workshop",
         strategies_dir: str = "finhack_pro/strategies",
     ):
+        """初始化云端客户端
+
+        Args:
+            base_url: 云端 API 地址。为空时从配置读取
+                （FINHACK_WORKSHOP__BASE_URL 环境变量或 workshop.base_url YAML）；
+                两者皆空则抛出 WorkshopCloudError。
+            timeout: 请求超时秒数
+            workshop_dir: 本地工作坊目录
+            strategies_dir: 策略目录
+        """
+        if not base_url:
+            try:
+                from finhack_pro.config import get_config
+                base_url = get_config(force_reload=True).workshop.base_url
+            except Exception as e:
+                logger.warning(f"读取云端工坊配置失败: {e}")
+        if not base_url:
+            raise WorkshopCloudError(
+                "未配置云端工坊地址：请设置环境变量 FINHACK_WORKSHOP__BASE_URL "
+                "或配置文件中的 workshop.base_url"
+            )
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._local = PackageManager(

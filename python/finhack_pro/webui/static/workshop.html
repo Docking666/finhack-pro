@@ -163,6 +163,56 @@
                             </div>
                             <pre class="p-4 overflow-auto max-h-96 text-sm"><code class="text-green-400 font-mono whitespace-pre" x-text="strategyResult.code"></code></pre>
                         </div>
+
+                        <!-- 快速测试结果（真实回测） -->
+                        <div x-show="testRunning" class="bg-[#1e293b] rounded-lg border border-[#334155] p-4">
+                            <div class="flex items-center gap-2 text-gray-400 text-sm">
+                                <span class="spinner !w-4 !h-4 !border-2"></span>
+                                正在使用真实行情回测，请稍候...
+                            </div>
+                        </div>
+
+                        <div x-show="testError" class="bg-red-950/50 border border-red-800 rounded-lg p-4">
+                            <p class="text-sm text-red-300" x-text="testError"></p>
+                        </div>
+
+                        <div x-show="testResult" class="bg-[#1e293b] rounded-lg border border-[#334155]">
+                            <div class="px-4 py-2 border-b border-[#334155] flex items-center justify-between">
+                                <span class="text-xs font-medium text-gray-300">回测结果（真实行情 600519.SH）</span>
+                                <span class="text-[10px] text-gray-500">2024-01-01 ~ 2024-06-30</span>
+                            </div>
+                            <div class="p-4">
+                                <div class="grid grid-cols-3 md:grid-cols-3 gap-3 mb-4">
+                                    <div class="bg-[#0f172a] rounded-lg p-3">
+                                        <p class="text-[10px] text-gray-500">总收益率</p>
+                                        <p class="text-lg font-medium mt-1" :class="testResult.metrics.total_return >= 0 ? 'text-red-400' : 'text-green-400'" x-text="formatTestPct(testResult.metrics.total_return)"></p>
+                                    </div>
+                                    <div class="bg-[#0f172a] rounded-lg p-3">
+                                        <p class="text-[10px] text-gray-500">夏普比率</p>
+                                        <p class="text-lg font-medium mt-1 text-gray-200" x-text="formatTestNum(testResult.metrics.sharpe_ratio)"></p>
+                                    </div>
+                                    <div class="bg-[#0f172a] rounded-lg p-3">
+                                        <p class="text-[10px] text-gray-500">最大回撤</p>
+                                        <p class="text-lg font-medium mt-1 text-amber-400" x-text="formatTestPct(testResult.metrics.max_drawdown)"></p>
+                                    </div>
+                                    <div class="bg-[#0f172a] rounded-lg p-3">
+                                        <p class="text-[10px] text-gray-500">胜率</p>
+                                        <p class="text-lg font-medium mt-1 text-gray-200" x-text="formatTestPct(testResult.metrics.win_rate)"></p>
+                                    </div>
+                                    <div class="bg-[#0f172a] rounded-lg p-3">
+                                        <p class="text-[10px] text-gray-500">交易次数</p>
+                                        <p class="text-lg font-medium mt-1 text-gray-200" x-text="testResult.metrics.total_trades"></p>
+                                    </div>
+                                    <div class="bg-[#0f172a] rounded-lg p-3">
+                                        <p class="text-[10px] text-gray-500">最终权益</p>
+                                        <p class="text-lg font-medium mt-1 text-gray-200" x-text="formatMoney(testResult.metrics.final_equity)"></p>
+                                    </div>
+                                </div>
+                                <div class="h-48">
+                                    <canvas id="test-equity-chart"></canvas>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </template>
             </div>

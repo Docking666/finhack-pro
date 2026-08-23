@@ -162,23 +162,12 @@ def main() -> None:
     )
 
     df = fetcher.get_daily(args.symbol, args.start, args.end)
-    if df.empty:
-        logger.error(f"获取数据失败: {args.symbol}")
-        logger.info("使用模拟数据进行回测演示...")
-        # 生成模拟数据
-        import numpy as np
-        np.random.seed(42)
-        n = 200
-        dates = pd.date_range(args.start, periods=n, freq="B")
-        prices = 100 + np.cumsum(np.random.randn(n) * 2)
-        df = pd.DataFrame({
-            "date": dates,
-            "open": prices * (1 + np.random.randn(n) * 0.005),
-            "high": prices * (1 + np.abs(np.random.randn(n) * 0.01)),
-            "low": prices * (1 - np.abs(np.random.randn(n) * 0.01)),
-            "close": prices,
-            "volume": np.random.randint(100000, 1000000, n).astype(float),
-        })
+    if df is None or df.empty:
+        logger.error(
+            f"获取数据失败: {args.symbol}（请检查网络连接、数据源可用性、"
+            f"标的代码是否正确、日期区间是否有交易日）"
+        )
+        sys.exit(1)
 
     # 添加技术指标
     ti = TechnicalIndicator()

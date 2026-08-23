@@ -37,21 +37,16 @@ git clone https://github.com/Docking666/finhack-pro.git
 cd finhack-pro
 ```
 
-### 2. 生成预置数据
+### 2. 准备数据（可选）
+
+桌面版回测走 akshare/tushare 实时拉取，无需预置数据。
+
+如需离线回测，可预先拉取真实行情写入缓存（`DataFetcher` 缓存命中后无需联网）：
 
 ```bash
-# 安装 Python 依赖
-pip install pandas numpy
-
-# 生成预置的A股示例数据
-python scripts/generate_preset_data.py
+cd python
+python scripts/fetch_data.py --symbols 600519.SH,000001.SZ --start 2024-01-01 --end 2024-12-31
 ```
-
-这将生成以下数据文件：
-- `data/preset/600519.SH.csv` - 贵州茅台
-- `data/preset/000001.SZ.csv` - 平安银行
-- `data/preset/300750.SZ.csv` - 宁德时代
-- `data/preset/00700.HK.csv` - 腾讯控股
 
 ### 3. 构建Python后端
 
@@ -93,7 +88,6 @@ desktop/dist/FinHack Pro Setup 1.0.0.exe
 文件大小约 **200MB**，包含：
 - Electron 桌面应用框架
 - Python 后端引擎
-- 预置示例数据
 - 所有依赖库
 
 ---
@@ -107,14 +101,7 @@ git clone https://github.com/Docking666/finhack-pro.git
 cd finhack-pro
 ```
 
-### 2. 生成预置数据
-
-```bash
-pip install pandas numpy
-python scripts/generate_preset_data.py
-```
-
-### 3. 构建Python后端
+### 2. 构建Python后端
 
 ```bash
 cd python
@@ -123,7 +110,7 @@ pip install -r requirements-build.txt
 pyinstaller pyinstaller.spec --clean
 ```
 
-### 4. 构建桌面应用
+### 3. 构建桌面应用
 
 ```bash
 cd ../desktop
@@ -131,7 +118,7 @@ npm install
 npm run build:mac
 ```
 
-### 5. 输出文件
+### 4. 输出文件
 
 构建完成后，安装包位于：
 
@@ -313,10 +300,10 @@ extraResources:
     to: python
     filter:
       - "**/*"
-  - from: ../data/preset
-    to: data/preset
+  - from: ../desktop/assets
+    to: assets
     filter:
-      - "**/*.csv"
+      - "**/*"
 ```
 
 ### 减小安装包体积

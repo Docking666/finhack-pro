@@ -43,3 +43,7 @@ rust_core:
   api_url: http://localhost:8080
   timeout: 30
   ws_url: ws://localhost:8081
+workshop:
+  base_url: ''
+  timeout: 30
+  workshop_dir: data/workshop

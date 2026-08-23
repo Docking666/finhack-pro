@@ -839,50 +839,95 @@ async def create_visual_factor(request: VisualFactorCreateRequest):
 
 @router.post("/test", response_model=APIResponse)
 async def test_strategy(request: StrategyTestRequest):
-    """快速测试策略(模拟回测)"""
+    """快速测试策略（真实回测：真实行情 + 回测引擎）"""
     try:
-        # 验证代码
+        # 1. 结构校验（现有）
         valid, msg = _validate_strategy_code(request.code)
         if not valid:
             return APIResponse(data={"valid": False, "message": msg, "metrics": None})
 
-        # 模拟简单回测
-        import random
-        random.seed(hash(request.code[:100]))
+        symbol = request.symbol or "600519.SH"
+        start_date = request.start_date or "2024-01-01"
+        end_date = request.end_date or "2024-12-31"
+        initial_capital = request.initial_capital or 100000.0
 
-        total_days = 242
-        equity = request.initial_capital
-        equity_curve = []
-        trades = []
+        # 2. 真实数据获取（异步放线程池，避免阻塞事件循环）
+        import asyncio
 
-        for i in range(total_days):
-            daily_return = random.gauss(0.0005, 0.018)
-            equity *= (1 + daily_return)
-            equity_curve.append({
-                "date": f"2024-{(i // 22 + 1):02d}-{(i % 22 + 1):02d}",
-                "equity": round(equity, 2),
+        def _fetch():
+            from finhack_pro.data.fetcher import DataFetcher
+            fetcher = DataFetcher()
+            df = fetcher.get_daily(symbol=symbol, start_date=start_date, end_date=end_date)
+            return df
+
+        try:
+            data = await asyncio.get_event_loop().run_in_executor(None, _fetch)
+        except Exception as e:
+            return APIResponse(data={
+                "valid": False,
+                "message": f"数据获取失败: {e}（请检查网络/标的代码/日期区间）",
+                "metrics": None,
             })
-            if random.random() < 0.04:
-                trades.append({
-                    "date": f"2024-{(i // 22 + 1):02d}-{(i % 22 + 1):02d}",
-                    "direction": "buy" if random.random() > 0.5 else "sell",
-                    "price": round(equity / 1000 * random.uniform(0.95, 1.05), 2),
-                    "volume": random.randint(100, 500),
-                })
+        if data is None or data.empty:
+            return APIResponse(data={
+                "valid": False,
+                "message": f"无法获取 {symbol} 的数据（请检查网络/标的代码/日期区间）",
+                "metrics": None,
+            })
 
-        total_return = (equity - request.initial_capital) / request.initial_capital
+        # 3. 适配器（内部含 AST 安全扫描，危险代码抛 StrategySecurityError）
+        from finhack_pro.workshop.strategy_adapter import (
+            StrategySecurityError,
+            WorkshopStrategyAdapter,
+        )
+
+        try:
+            adapter = WorkshopStrategyAdapter(request.code, symbol=symbol)
+            # 预加载触发安全扫描（提前拒绝，避免进回测）
+            adapter._load()
+        except StrategySecurityError as e:
+            return APIResponse(data={"valid": False, "message": str(e), "metrics": None})
+
+        # 4. 真实回测
+        from finhack_pro.backtest.runner import BacktestRunner
+
+        def _run():
+            runner = BacktestRunner()
+            return runner.run(
+                strategy=adapter,
+                symbol=symbol,
+                data=data,
+                initial_capital=initial_capital,
+                commission_rate=0.0003,
+                stamp_tax_rate=0.001,
+                slippage=0.001,
+                params=request.params if hasattr(request, "params") else None,
+            )
+
+        try:
+            result = await asyncio.get_event_loop().run_in_executor(None, _run)
+        except Exception as e:
+            return APIResponse(data={
+                "valid": False,
+                "message": f"回测执行失败: {e}",
+                "metrics": None,
+            })
+
+        # 5. 组装响应（与旧结构兼容，数值转 Python 原生类型防 JSON 序列化失败）
         metrics = {
-            "total_return": round(total_return * 100, 2),
-            "sharpe_ratio": round(random.uniform(0.5, 2.5), 2),
-            "max_drawdown": round(random.uniform(3, 18), 2),
-            "win_rate": round(random.uniform(40, 65), 2),
-            "total_trades": len(trades),
-            "final_equity": round(equity, 2),
+            "total_return": float(round(result.total_return * 100, 2)) if result.total_return else 0.0,
+            "sharpe_ratio": float(round(result.sharpe_ratio, 2)) if result.sharpe_ratio else 0.0,
+            "max_drawdown": float(round(result.max_drawdown, 2)) if result.max_drawdown else 0.0,
+            "win_rate": float(round(result.win_rate * 100, 2)) if result.win_rate else 0.0,
+            "total_trades": int(result.total_trades or 0),
+            "final_equity": float(round(result.final_capital, 2)) if result.final_capital else 0.0,
         }
+        equity_curve = result.equity_curve if hasattr(result, "equity_curve") else []
+        trades = result.trades if hasattr(result, "trades") else []
 
         return APIResponse(data={
             "valid": True,
-            "message": "策略测试完成(模拟数据)",
+            "message": "策略测试完成（真实回测）",
             "metrics": metrics,
             "equity_curve": equity_curve[::5],  # 降采样
             "trades": trades[:20],

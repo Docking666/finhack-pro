@@ -125,6 +125,17 @@ class RustCoreConfig(BaseModel):
     timeout: int = 30
 
 
+class WorkshopConfig(BaseModel):
+    """创意工坊云端配置
+
+    默认留空：未配置云端地址时 WorkshopCloud 构造会抛出明确错误。
+    可通过环境变量 FINHACK_WORKSHOP__BASE_URL 或 YAML workshop.base_url 配置。
+    """
+    base_url: str = ""
+    timeout: int = 30
+    workshop_dir: str = "data/workshop"
+
+
 class AgentConfig(BaseModel):
     """Agent系统配置"""
     market_analyzer_model: str = "gpt-4o"
@@ -161,6 +172,7 @@ class FinhackProConfig(BaseSettings):
     backtest: BacktestConfig = Field(default_factory=BacktestConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     rust_core: RustCoreConfig = Field(default_factory=RustCoreConfig)
+    workshop: WorkshopConfig = Field(default_factory=WorkshopConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     # per-Agent LLM 配置覆盖（coordinator 读取 config["agents"]，键名必须一致）
     # 示例:

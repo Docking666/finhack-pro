@@ -458,6 +458,31 @@ class TestConfigService:
 # ============================================================================
 
 
+def _mock_ohlcv():
+    """构造真实结构的 OHLCV DataFrame（缓慢上升保证 final_equity>0）"""
+    import numpy as np
+    import pandas as pd
+
+    dates = pd.bdate_range("2024-01-01", "2024-12-31")
+    n = len(dates)
+    close = 100 * (1 + 0.001 * np.arange(n))
+    return pd.DataFrame({
+        "date": dates,
+        "open": close * 0.99,
+        "high": close * 1.02,
+        "low": close * 0.98,
+        "close": close,
+        "volume": 1_000_000,
+    })
+
+
+def _empty_df():
+    """空 DataFrame（模拟数据获取失败）"""
+    import pandas as pd
+
+    return pd.DataFrame()
+
+
 class TestBacktestService:
     """BacktestService 测试"""
 
@@ -515,7 +540,9 @@ class TestBacktestService:
             end_date="2024-12-31",
         )
         status = svc.create_task(request)
-        await svc.run_task(status.task_id)
+        with patch("finhack_pro.data.fetcher.DataFetcher") as mock_fetcher_cls:
+            mock_fetcher_cls.return_value.get_daily.return_value = _mock_ohlcv()
+            await svc.run_task(status.task_id)
 
         result = svc.get_task_result(status.task_id)
         assert result is not None
@@ -533,7 +560,9 @@ class TestBacktestService:
             end_date="2024-12-31",
         )
         status = svc.create_task(request)
-        await svc.run_task(status.task_id)
+        with patch("finhack_pro.data.fetcher.DataFetcher") as mock_fetcher_cls:
+            mock_fetcher_cls.return_value.get_daily.return_value = _mock_ohlcv()
+            await svc.run_task(status.task_id)
 
         updated_status = svc.get_task_status(status.task_id)
         assert updated_status is not None
@@ -550,7 +579,9 @@ class TestBacktestService:
             end_date="2024-12-31",
         )
         status = svc.create_task(request)
-        await svc.run_task(status.task_id)
+        with patch("finhack_pro.data.fetcher.DataFetcher") as mock_fetcher_cls:
+            mock_fetcher_cls.return_value.get_daily.return_value = _mock_ohlcv()
+            await svc.run_task(status.task_id)
 
         history = svc.get_history()
         assert len(history) == 1
@@ -577,11 +608,56 @@ class TestBacktestService:
         async def callback(msg):
             messages.append(msg)
 
-        await svc.run_task(status.task_id, stream_callback=callback)
+        with patch("finhack_pro.data.fetcher.DataFetcher") as mock_fetcher_cls:
+            mock_fetcher_cls.return_value.get_daily.return_value = _mock_ohlcv()
+            await svc.run_task(status.task_id, stream_callback=callback)
         # 应该有进度消息和完成消息
         assert len(messages) > 0
         types = [m["type"] for m in messages]
         assert "backtest_completed" in types
+
+    @pytest.mark.asyncio
+    async def test_run_task_failed_when_no_data(self):
+        """数据获取失败 → 任务标记 failed，无结果"""
+        svc = BacktestService()
+        request = BacktestRequest(
+            symbols=["000001.SZ"],
+            start_date="2024-01-01",
+            end_date="2024-12-31",
+        )
+        status = svc.create_task(request)
+        with patch("finhack_pro.data.fetcher.DataFetcher") as mock_fetcher_cls:
+            mock_fetcher_cls.return_value.get_daily.return_value = _empty_df()
+            await svc.run_task(status.task_id)
+
+        updated = svc.get_task_status(status.task_id)
+        assert updated is not None
+        assert updated.status == "failed"
+        assert "无法获取" in updated.message
+        assert svc.get_task_result(status.task_id) is None
+
+    @pytest.mark.asyncio
+    async def test_run_task_failed_streams_backtest_failed(self):
+        """数据获取失败 → 流式回调收到 backtest_failed 而非 completed"""
+        svc = BacktestService()
+        request = BacktestRequest(
+            symbols=["000001.SZ"],
+            start_date="2024-01-01",
+            end_date="2024-12-31",
+        )
+        status = svc.create_task(request)
+
+        messages = []
+        async def callback(msg):
+            messages.append(msg)
+
+        with patch("finhack_pro.data.fetcher.DataFetcher") as mock_fetcher_cls:
+            mock_fetcher_cls.return_value.get_daily.return_value = _empty_df()
+            await svc.run_task(status.task_id, stream_callback=callback)
+
+        types = [m["type"] for m in messages]
+        assert "backtest_failed" in types
+        assert "backtest_completed" not in types
 
 
 # ============================================================================

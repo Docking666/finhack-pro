@@ -49,7 +49,6 @@ def validate_workflow():
         "Install Python dependencies",
         "Set up Node.js",
         "Install Electron dependencies",
-        "Generate preset data",
         "Build Python backend",
         "Copy backend artifacts",
         "Build Electron app"
@@ -67,7 +66,6 @@ def validate_workflow():
         "python/requirements.txt",
         "python/requirements-build.txt",
         "python/pyinstaller.spec",
-        "scripts/generate_preset_data.py",
         "desktop/package.json",
         "desktop/electron-builder.yml"
     ]
