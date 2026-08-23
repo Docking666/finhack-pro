@@ -77,7 +77,9 @@ cp ../.env.example ../.env
 #   不配 TUSHARE 也能用，系统会自动使用 AKShare 免费数据源
 
 # 4. 运行智能体分析（示例：分析贵州茅台）
-python -m finhack_pro.agents.coordinator --symbol 600519.SH
+# 通过 WebUI 运行（推荐）：启动后访问流水线页面，输入 600519.SH
+# 或直接用 Python 调用：
+python -c "import asyncio; from finhack_pro.agents.coordinator import AgentCoordinator; asyncio.run(AgentCoordinator({'llm': {'openai_api_key': 'sk-xxx'}}).run_analysis_pipeline('600519.SH'))"
 
 # 5. 或启动 WebUI 可视化界面
 pip install fastapi uvicorn[standard] python-multipart
@@ -164,6 +166,9 @@ FinHack Pro 是一个面向A股市场的多智能体量化交易系统，采用 
 - **Phase 1 并行**：Step 1-4 使用 `asyncio.create_task` 并发执行，SharedMemory 内部有 `asyncio.Lock` 保护并发写入，单任务失败不阻塞其他任务
 - **短路逻辑**：策略信号为 HOLD 时直接结束流水线
 - **记忆衰减**：旧记忆自动降权，重要记忆持久化到 JSONL 文件
+- **多空辩论（v2.3.3）**：策略生成 Agent 通过三轮 LLM 调用（多头研究员 → 空头研究员 → 裁判）综合技术面/新闻/基本面/微观事件四方报告，输出最终策略信号
+- **思维链传递（v2.3.3）**：各分析 Agent 输出带 `thinking` 推理摘要，下游辩论 Agent 可见上游推理过程
+- **断点恢复（v2.3.3）**：步骤级 checkpoint，崩溃后重跑跳过已完成步骤（详见[详细教程](#详细教程)）
 
 ---
 
@@ -189,6 +194,7 @@ FinHack Pro 是一个面向A股市场的多智能体量化交易系统，采用 
 - **4级重要性**：LOW / MEDIUM / HIGH / CRITICAL
 - **多条件检索**：按类型、时间、关键词、标签、Agent筛选
 - **记忆衰减**：旧记忆自动降权，重要记忆持久化到JSONL文件
+- **三层上下文架构（v2.3.3）**：① 结构化对象参数直传（信号/评分，类型安全）② 完整报告落盘为 Markdown（`data/pipeline/{run_id}/step{n}_{name}.md`，跨模型可读全文）③ 报告路径引用写入 SharedMemory（检索/复盘）
 
 #### 共享工具集
 
@@ -915,12 +921,15 @@ FinHack Pro 内置了一个现代化的 Web 管理界面，提供可视化的系
 |------|------|------|
 | GET | `/api/system/info` | 系统信息 |
 | GET | `/api/config` | 获取配置 |
-| PUT | `/api/config` | 更新配置 |
+| GET | `/api/config/full` | 获取完整配置（含明文 key，编辑用） |
+| PUT | `/api/config` | 更新配置（含 `agents` per-Agent 段） |
 | POST | `/api/config/test-connection` | 测试API连接 |
+| POST | `/api/config/save` | 保存配置到文件，保存后自动重建 Agent 系统 |
+| POST | `/api/config/reload-agents` | 显式重建 Agent 系统（per-Agent 配置生效） |
 | POST | `/api/backtest/run` | 启动回测 |
 | GET | `/api/backtest/{id}/result` | 回测结果 |
 | GET | `/api/agents/list` | Agent列表 |
-| POST | `/api/agents/run-pipeline` | 运行分析流水线 |
+| POST | `/api/agents/run-pipeline` | 运行分析流水线（支持 `run_id`/`resume` 断点恢复） |
 | GET | `/api/memory/search` | 搜索记忆 |
 | WS | `/ws/agents` | Agent思考流 |
 | WS | `/ws/backtest` | 回测进度 |
@@ -1491,11 +1500,14 @@ push/PR → Lint → Type Check → Test (3.10/3.11/3.12) → Coverage Report
 
 ### 测试覆盖
 
-当前共 **412 个测试**，覆盖所有核心模块：
+当前共 **558 个测试**，覆盖所有核心模块：
 
 | 测试文件 | 测试数 | 覆盖模块 |
 |----------|--------|----------|
 | `test_agents.py` | ~60 | Agent系统、共享记忆、工具集 |
+| `test_agent_config.py` | 13 | per-Agent 配置、服务商预置、多空辩论 |
+| `test_pipeline_resume.py` | 13 | 步骤级断点恢复、环境指纹、终态恢复 |
+| `test_agent_thinking.py` | 5 | 思维链（CoT）传递 |
 | `test_api.py` | 29 | Rust核心API客户端 |
 | `test_backtest.py` | ~30 | 回测引擎、时间切片、加速模块 |
 | `test_data.py` | ~20 | 技术指标、特征工程 |
@@ -1506,6 +1518,14 @@ push/PR → Lint → Type Check → Test (3.10/3.11/3.12) → Coverage Report
 | `test_strategies.py` | ~20 | 策略库、信号处理 |
 | `test_utils.py` | ~20 | 安全、熔断、指标 |
 | `test_webui.py` | 87 | WebUI服务层和模型 |
+
+### 版本记录
+
+| 版本 | 主要变更 |
+|------|----------|
+| **v2.3.3** | per-Agent 独立 LLM 配置（多模型/多 Key）、多空辩论实现、三层上下文架构、步骤级断点恢复、思维链 CoT 传递、OrcaRouter 服务商预置、WebUI run_id/resume 支持 |
+| v2.3.2 | 修复流水线致命 bug（SharedMemory 枚举别名、LLM 必填字段兜底） |
+| v2.3.1 | 桌面版四问题修复（Bridge 启动、akshare 数据、预置 key、配置同步） |
 
 ---
 
@@ -1527,10 +1547,9 @@ pip install -r requirements.txt
 cp ../.env.example ../.env
 # 编辑 .env，填入 OPENAI_API_KEY=sk-xxx
 
-# 4. 运行
-python -m finhack_pro.agents.coordinator --symbol 600519.SH
-# 或启动 WebUI
+# 4. 启动 WebUI（推荐，含流水线/回测/工坊全功能）
 python -m finhack_pro.webui.app
+# 浏览器访问 http://localhost:8000，在流水线页面输入 600519.SH 运行分析
 ```
 
 ### 方式二：完整模式（Rust + Python）
@@ -1678,34 +1697,47 @@ import asyncio
 
 async def main():
     config = {
+        # 全局 LLM 配置（未单独配置的 Agent 跟随此设置）
+        "llm": {
+            "provider": "openai",
+            "openai_api_key": "sk-xxx",
+            "openai_base_url": "https://api.deepseek.com/v1",
+            "model": "deepseek-chat",
+        },
+        # per-Agent 独立 LLM 配置（v2.3.3）：留空字段跟随全局
         "agents": {
             "market_analyzer": {"model": "gpt-4o", "temperature": 0.3},
-            "news_analyst": {"model": "gpt-4o", "temperature": 0.3},
-            "fundamental_analyst": {"model": "gpt-4o", "temperature": 0.2},
-            "micro_event_monitor": {"model": "gpt-4o", "temperature": 0.3},
-            "strategy_generator": {"model": "gpt-4o", "temperature": 0.5},
-            "risk_manager": {"enabled": True},
-            "trade_executor": {"enabled": True},
+            "strategy_generator": {
+                "model": "orcarouter/auto",          # OrcaRouter 单 key 多模型
+                "openai_api_key": "sk-orca",
+                "openai_base_url": "https://api.orcarouter.ai/v1",
+            },
+            "risk_manager": {"model": "gpt-4o-mini"},
         },
         "shared_memory": {
             "enabled": True,
             "persist_dir": "./data/memory",
         },
+        # 流水线产物目录（断点恢复/三层架构落盘位置）
+        "pipeline": {"output_dir": "data/pipeline"},
         "tool_registry": {"enabled": True},
     }
 
     coordinator = AgentCoordinator(config)
     await coordinator.start()
 
-    # 运行分析流水线（Phase 1 四个Agent并行执行）
+    # 运行分析流水线（Phase 1 四个Agent并行执行 + 多空辩论 + 断点恢复）
     result = await coordinator.run_analysis_pipeline(
         symbol="600519.SH",
         market_data=df,
+        run_id="my_run_001",   # v2.3.3：显式 run_id，重复调用同 id 可断点续跑
+        resume=True,
     )
 
-    print(f"策略信号: {result['strategy_signal']}")
+    print(f"策略信号: {result['signal']}")
     print(f"风控决策: {result['risk_decision']}")
-    print(f"执行报告: {result['execution_report']}")
+    print(f"执行报告: {result['execution']}")
+    print(f"报告目录: {result['report_dir']}")  # 三层架构 md 落盘位置
 
     await coordinator.stop()
 
@@ -1789,6 +1821,53 @@ class MyStrategy(BaseStrategy):
 
 ---
 
+### 教程七：断点恢复与三层上下文（v2.3.3）
+
+分析流水线支持**步骤级断点恢复**：崩溃后以相同 `run_id` 重跑，只跳过已完成步骤，绝不从中途续算（保证结果可复现、无未来函数）。
+
+```python
+async def main():
+    coordinator = AgentCoordinator(config)
+    await coordinator.start()
+
+    # 首次运行（显式 run_id）
+    result1 = await coordinator.run_analysis_pipeline(
+        symbol="600519.SH",
+        market_data=df,
+        run_id="run_600519_001",
+        resume=True,
+    )
+
+    # 若中途崩溃/中断，同 run_id 重跑 → 自动跳过已完成步骤
+    result2 = await coordinator.run_analysis_pipeline(
+        symbol="600519.SH",
+        run_id="run_600519_001",
+        resume=True,
+    )
+    assert result2["resumed_from_checkpoint"]  # 终态恢复时直接重建返回
+```
+
+**断点恢复机制：**
+
+| 组件 | 说明 |
+|------|------|
+| `run_id` | 显式运行 ID；不传则生成新 run（向后兼容） |
+| `resume=True` | 允许复用已完成产物；`False` 遇已存在 run_id 抛 `RunIdConflictError` |
+| `input_snapshot.json` | 输入数据快照（point-in-time），恢复时复用，禁止重拉数据 |
+| `env_fingerprint.json` | 环境指纹（7 Agent 模型/温度 + prompt hash）；漂移默认抛 `EnvironmentDriftError`，设 `pipeline.resume_on_drift=true` 可降级 |
+| `step{N}.done` | 原子提交标记（提交顺序 json → md → done） |
+| `pipeline_state.json` | 终态记录（hold / risk_rejected / executed），已完成 run 直接重建返回 |
+
+**三层上下文架构**（跨 Agent / 跨模型信息传递）：
+
+1. **结构化对象**：信号/评分/方向等经 Pydantic 参数直传（类型安全）
+2. **Markdown 落盘**：每步完整报告写 `data/pipeline/{run_id}/step{n}_{name}.md`，跨模型可读全文
+3. **SharedMemory 引用**：报告路径以 `SYSTEM_EVENT` 记忆写入，存"摘要 + 文件路径"
+
+**思维链（CoT）传递**：各分析 Agent 报告含 `thinking` 字段（推理摘要），下游辩论 Agent 在 prompt 中可见上游推理过程，报告 md 天然包含推理内容。
+
+---
+
 ## 配置说明
 
 ### LLM API 配置教程
@@ -1856,6 +1935,42 @@ FinHack Pro 支持所有兼容 OpenAI 格式的 LLM API，包括 OpenAI、Silico
 | `deepseek-ai/DeepSeek-R1` | 深度推理 | 低价 |
 | `THUDM/glm-4-9b-chat` | 快速响应 | 免费 |
 | `Pro/moonshotai/Kimi-K2.6` | 长文本分析 | 中等 |
+
+#### 服务商预置（v2.3.3）
+
+配置页提供 4 家预置服务商 + 自定义，选中自动填充 Base URL 与推荐模型：
+
+| 预置 | Base URL | 默认模型 | 说明 |
+|------|----------|----------|------|
+| **OrcaRouter** | `https://api.orcarouter.ai/v1` | `orcarouter/auto` | 中转站：一个 Key 通过 model 名切换任意模型 |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` | 国内低价高性价比 |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o` | 官方端点 |
+| 智谱AI | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-plus` | 中文优化 |
+
+> OrcaRouter 为 OpenAI 兼容端点，同一 Key 修改 `model` 名称即可调用不同模型，适合多 Agent 多模型架构。
+
+#### per-Agent 独立配置（v2.3.3）
+
+7 个 Agent 各自可独立设置 provider / API Key / Base URL / 模型名，**留空跟随全局 LLM 配置**——多 Agent 可多模型、多 API 来源：
+
+```yaml
+# config/default.yaml
+llm:
+  provider: "openai"
+  openai_api_key: "sk-global"
+  openai_base_url: "https://api.deepseek.com/v1"
+  model: "deepseek-chat"
+
+agents:                      # per-Agent 覆盖（只写要覆盖的字段）
+  market_analyzer:
+    model: "gpt-4o-mini"     # 仅覆盖模型，key/base_url 跟随全局
+  strategy_generator:
+    model: "orcarouter/auto" # 独立 API 来源
+    openai_api_key: "sk-orca"
+    openai_base_url: "https://api.orcarouter.ai/v1"
+```
+
+配置保存后 Agent 系统自动重建，per-Agent 配置立即生效（也可手动调用 `POST /api/config/reload-agents`）。
 
 #### 故障排查
 
@@ -1972,16 +2087,19 @@ FinHack Pro 提供开箱即用的桌面版应用，无需配置开发环境。
 
 - 双击启动，无需命令行
 - 预置茅台、平安银行等热门标的数据
-- 可视化配置界面
+- 可视化配置界面（4 家服务商预置 + 自定义）
+- per-Agent 独立模型/API Key 配置（多模型多来源）
 - 一键回测和结果导出
-- 7个Agent思考过程实时展示
-- 策略工坊：AI辅助生成策略和因子
+- 7个Agent思考过程实时展示（含多空辩论 + 思维链 CoT）
+- 流水线断点恢复（崩溃后自动跳过已完成步骤续跑）
+- 策略工坊：AI辅助生成策略和因子 + 云端共享市场
 
 ### 首次使用
 
 1. 下载并安装应用
-2. 启动后在"API配置"页面填入 OpenAI API Key
-3. 开始体验回测和 Agent 分析
+2. 启动后在"API配置"页面选择服务商（OrcaRouter / DeepSeek / OpenAI / 智谱），填入 API Key
+3. 可选：为每个 Agent 单独配置模型与 Key
+4. 开始体验回测和 Agent 分析
 
 ---
 
@@ -2037,6 +2155,23 @@ print(stats)
 tool_stats = coordinator.get_tool_stats()
 print(tool_stats)
 ```
+
+### Q7: 流水线中断后如何续跑？（v2.3.3）
+
+使用相同 `run_id` 重新调用即可，系统自动跳过已完成步骤：
+
+```python
+# 首次运行后中断 → 重跑同 run_id
+result = await coordinator.run_analysis_pipeline(
+    symbol="600519.SH",
+    run_id="my_run_001",
+    resume=True,
+)
+```
+
+- 若提示 `EnvironmentDriftError`：检测到模型/温度/prompt 变更，无法安全续跑——改用新 run_id 或设 `pipeline.resume_on_drift: true`
+- 若提示 `RunIdConflictError`：run_id 已存在且 `resume=False`——传 `resume=True` 续跑
+- 断点恢复**只跳过已完成步骤**，绝不在 LLM 调用中途续算（保证结果可复现）
 
 ---
 
