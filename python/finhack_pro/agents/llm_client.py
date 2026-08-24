@@ -168,6 +168,12 @@ class LLMClient:
                 logger.warning("circuit_breaker模块未找到，熔断限流保护已禁用")
                 self.enable_protection = False
 
+        # 实例级 LLM 流式/推理回调（WebUI 实时思考链展示用）
+        self._stream_callbacks: Dict[str, Optional[Callable[[str], None]]] = {
+            "on_token": None,
+            "on_reasoning": None,
+        }
+
         # 初始化对应客户端
         self._openai_client: Optional[Any] = None
         self._anthropic_client: Optional[Any] = None
@@ -207,6 +213,27 @@ class LLMClient:
     def reset_usage(self) -> None:
         """重置Token用量统计"""
         self._total_usage = TokenUsage()
+
+    def set_stream_callbacks(
+        self,
+        on_token: Optional[Callable[[str], None]] = None,
+        on_reasoning: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        """注入流式/推理回调（WebUI 实时展示模型思考过程）。
+
+        设置后，后续 chat/chat_structured 调用自动以流式模式执行：
+        - on_token: 正文 token 逐段回调
+        - on_reasoning: 模型推理文本（DeepSeek reasoner 的 reasoning_content /
+          Anthropic thinking）逐段回调；服务商/模型不支持时静默无输出
+        调用方在流水线结束后应调用 clear_stream_callbacks 清理。
+        """
+        self._stream_callbacks["on_token"] = on_token
+        self._stream_callbacks["on_reasoning"] = on_reasoning
+
+    def clear_stream_callbacks(self) -> None:
+        """清除流式/推理回调，恢复非流式调用"""
+        self._stream_callbacks["on_token"] = None
+        self._stream_callbacks["on_reasoning"] = None
 
     def _estimate_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
         """估算API调用成本
@@ -249,6 +276,7 @@ class LLMClient:
         estimated_cost: float = 0.01,
         stream: bool = False,
         on_token: Optional[Callable[[str], None]] = None,
+        on_reasoning: Optional[Callable[[str], None]] = None,
         response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
         """发送聊天请求
@@ -263,7 +291,9 @@ class LLMClient:
             tool_choice: 工具选择策略
             estimated_cost: 预估成本（用于预算检查）
             stream: 是否流式输出（WebUI 思考过程展示用）
-            on_token: 流式回调，每产出一段文本调用一次
+            on_token: 流式回调，每产出一段正文文本调用一次
+            on_reasoning: 推理文本回调（reasoning_content/thinking），
+                流式时逐段调用，非流式时一次性调用完整推理；服务商不支持则无输出
             response_format: 结构化输出格式（如 {"type": "json_object"}）
                 优先使用原生响应格式约束，替代提示词方式
 
@@ -281,6 +311,19 @@ class LLMClient:
                 logger.error(f"LLM调用被保护器拒绝: {e}")
                 raise
 
+        # 实例级流回调存在时自动启用流式（WebUI 思考链展示，agent 无需显式传参）
+        _inst_on_token = self._stream_callbacks.get("on_token")
+        _inst_on_reasoning = self._stream_callbacks.get("on_reasoning")
+        use_stream = stream or bool(_inst_on_token or _inst_on_reasoning)
+
+        def _combined(
+            a: Optional[Callable[[str], None]],
+            b: Optional[Callable[[str], None]],
+        ) -> Optional[Callable[[str], None]]:
+            if a and b:
+                return lambda p: (a(p), b(p))
+            return a or b
+
         # 构建消息列表
         messages: List[Dict[str, str]] = []
         if history:
@@ -292,13 +335,17 @@ class LLMClient:
             if self.provider == LLMProvider.OPENAI:
                 result = await self._chat_openai(
                     messages, system, temp, max_tok, tools, tool_choice,
-                    stream=stream, on_token=on_token,
+                    stream=use_stream,
+                    on_token=_combined(_inst_on_token, on_token),
+                    on_reasoning=_combined(_inst_on_reasoning, on_reasoning),
                     response_format=response_format,
                 )
             else:
                 result = await self._chat_anthropic(
                     messages, system, temp, max_tok,
-                    stream=stream, on_token=on_token,
+                    stream=use_stream,
+                    on_token=_combined(_inst_on_token, on_token),
+                    on_reasoning=_combined(_inst_on_reasoning, on_reasoning),
                 )
             
             # 成功回调
@@ -323,6 +370,7 @@ class LLMClient:
         tool_choice: Optional[str],
         stream: bool = False,
         on_token: Optional[Callable[[str], None]] = None,
+        on_reasoning: Optional[Callable[[str], None]] = None,
         response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
         """调用OpenAI API"""
@@ -367,6 +415,10 @@ class LLMClient:
                             full_text.append(piece)
                             if on_token:
                                 on_token(piece)
+                        # DeepSeek reasoner 等模型：推理文本走 delta.reasoning_content
+                        rc_piece = self._extract_reasoning(delta)
+                        if rc_piece and on_reasoning:
+                            on_reasoning(rc_piece)
                     text = "".join(full_text)
                     if not prompt_tokens and not completion_tokens:
                         # 服务商未返回 usage，按文本粗估
@@ -378,6 +430,11 @@ class LLMClient:
                     prompt_tokens = usage.prompt_tokens if usage else 0
                     completion_tokens = usage.completion_tokens if usage else 0
                     text = response.choices[0].message.content or ""
+                    # 非流式：一次性回调完整推理文本（reasoning_content）
+                    if on_reasoning:
+                        rc = self._extract_reasoning(response.choices[0].message)
+                        if rc:
+                            on_reasoning(rc)
 
                 total_tokens = prompt_tokens + completion_tokens
                 cost = self._estimate_cost(prompt_tokens, completion_tokens)
@@ -415,6 +472,7 @@ class LLMClient:
         max_tokens: int,
         stream: bool = False,
         on_token: Optional[Callable[[str], None]] = None,
+        on_reasoning: Optional[Callable[[str], None]] = None,
     ) -> str:
         """调用Anthropic API"""
         assert self._anthropic_client is not None
@@ -497,6 +555,7 @@ class LLMClient:
         system: str = "",
         history: Optional[List[Dict[str, str]]] = None,
         temperature: Optional[float] = None,
+        on_reasoning: Optional[Callable[[str], None]] = None,
     ) -> T:
         """结构化输出 - 返回Pydantic模型实例
 
@@ -513,6 +572,7 @@ class LLMClient:
             system: 系统提示词
             history: 对话历史
             temperature: 生成温度
+            on_reasoning: 推理文本回调（透传给底层 chat）
 
         Returns:
             解析后的Pydantic模型实例
@@ -543,6 +603,7 @@ class LLMClient:
                     system=full_system,
                     history=history,
                     temperature=temperature,
+                    on_reasoning=on_reasoning,
                     response_format=native_response_format,
                 )
 
@@ -638,6 +699,31 @@ class LLMClient:
             return None
         except Exception:
             return None
+
+    @staticmethod
+    @staticmethod
+    def _extract_reasoning(obj: Any) -> str:
+        """提取模型推理文本（DeepSeek reasoner 的 reasoning_content 等非标准字段）。
+
+        OpenAI SDK 对服务商自定义字段不保证暴露为属性（可能进入 model_extra），
+        这里同时兼容两种形态，保证未知字段不会引发异常。
+        """
+        if obj is None:
+            return ""
+        try:
+            rc = getattr(obj, "reasoning_content", None)
+            if isinstance(rc, str) and rc:
+                return rc
+        except Exception:
+            pass
+        try:
+            extra = getattr(obj, "model_extra", None) or {}
+            rc = extra.get("reasoning_content") or extra.get("thinking")
+            if isinstance(rc, dict):
+                rc = rc.get("text") or rc.get("content")
+            return rc if isinstance(rc, str) else ""
+        except Exception:
+            return ""
 
     @staticmethod
     def _extract_json(text: str) -> Any:

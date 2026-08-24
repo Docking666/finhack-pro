@@ -829,6 +829,73 @@ class AgentCoordinator:
                 except Exception:
                     self._logger.warning("事件回调推送失败", exc_info=True)
 
+            # ---- 注入 LLM 流式/推理回调：实时把模型思考推给前端 ----
+            # 方案A：思维链 Prompt 产出的正文 token（流式）实时可见
+            # 方案B：DeepSeek reasoner 等模型的 reasoning_content 原生推理文本
+            # 同步回调（LLM token 到达）→ 节流后经事件循环转异步推送，避免 task 风暴
+            _thinking_buf: Dict[int, List[str]] = {}
+            _last_emit_ts = {"t": 0.0}
+            _loop = asyncio.get_running_loop()
+
+            def _push_thinking(step: int, agent_id: str, agent_name: str) -> None:
+                buf = _thinking_buf.get(step)
+                if not buf:
+                    return
+                text = "".join(buf)
+                _thinking_buf[step] = []
+                if not text.strip():
+                    return
+                if event_callback is None:
+                    return
+                try:
+                    _loop.create_task(event_callback({
+                        "type": "agent_thinking",
+                        "run_id": run_id,
+                        "step": step,
+                        "agent_id": agent_id,
+                        "agent_name": agent_name,
+                        "thinking": text,
+                        "content": f"## {agent_name}\n\n{text}",
+                    }))
+                except Exception:
+                    self._logger.warning("思考流推送失败", exc_info=True)
+
+            def _make_llm_cb(step: int, agent_id: str, agent_name: str):
+                def _on_piece(piece: str) -> None:
+                    buf = _thinking_buf.setdefault(step, [])
+                    buf.append(piece)
+                    now = time.monotonic()
+                    joined_len = sum(len(p) for p in buf)
+                    # 节流：>400ms 或累积 >400 字符推送一次
+                    if now - _last_emit_ts["t"] > 0.4 or joined_len > 400:
+                        _last_emit_ts["t"] = now
+                        _push_thinking(step, agent_id, agent_name)
+                return _on_piece
+
+            def _flush_step_reasoning(step: int) -> str:
+                """步骤完成时取出该步骤累积的完整推理文本（供 agent_thought 携带）"""
+                buf = _thinking_buf.pop(step, None)
+                return "".join(buf) if buf else ""
+
+            _AGENT_STEP_META = {
+                "market_analyzer": (1, "market_analyzer", "市场分析(技术面)"),
+                "news_analyst": (2, "news_analyst", "新闻社媒分析"),
+                "fundamental_analyst": (3, "fundamental_analyst", "基本面分析"),
+                "micro_event_agent": (4, "micro_event_agent", "微观事件分析"),
+                "strategy_generator": (5, "strategy_generator", "策略生成(多空辩论)"),
+                "risk_manager": (6, "risk_manager", "风控审批"),
+            }
+            for _aname, _agent in self._agents.items():
+                _meta = _AGENT_STEP_META.get(_aname)
+                if not _meta:
+                    continue
+                _step, _aid, _an = _meta
+                if hasattr(_agent, "set_llm_stream_callbacks"):
+                    _agent.set_llm_stream_callbacks(
+                        on_token=_make_llm_cb(_step, _aid, _an),
+                        on_reasoning=_make_llm_cb(_step, _aid, _an),
+                    )
+
             # ---- 第1阶段: 并行执行 Step 1-4 (市场/新闻/基本面/微观事件) ----
             self._logger.info("[Phase 1] 并行执行市场分析、新闻分析、基本面分析、微观事件分析...")
 
@@ -932,16 +999,18 @@ class AgentCoordinator:
                 try:
                     report = await task
                     analysis_results[task_name] = report
-                    # 实时推送：该分析步骤完成（思考链）
+                    # 实时推送：该分析步骤完成（思考链，附完整推理文本）
                     _meta = _PHASE1_META.get(task_name)
                     if _meta and report is not None:
                         step_num, agent_id, agent_name = _meta
+                        _reasoning = _flush_step_reasoning(step_num)
                         await _emit({
                             "type": "agent_thought",
                             "run_id": run_id,
                             "step": step_num,
                             "agent_id": agent_id,
                             "agent_name": agent_name,
+                            "reasoning": _reasoning,
                             "content": f"## {agent_name}\n\n{symbol} 分析完成",
                         })
                 except Exception as e:
@@ -1092,12 +1161,14 @@ class AgentCoordinator:
                 f"策略生成完成: 方向={strategy_signal.direction.value}, "
                 f"置信度={strategy_signal.confidence:.2f}"
             )
+            _reasoning_5 = _flush_step_reasoning(5)
             await _emit({
                 "type": "agent_thought",
                 "run_id": run_id,
                 "step": 5,
                 "agent_id": "strategy_generator",
                 "agent_name": "策略生成(多空辩论)",
+                "reasoning": _reasoning_5,
                 "content": f"## 策略生成(多空辩论)\n\n方向={strategy_signal.direction.value}, "
                            f"置信度={strategy_signal.confidence:.2f}",
             })
@@ -1140,12 +1211,14 @@ class AgentCoordinator:
             self._logger.info(
                 f"风控审批完成: {'通过' if risk_decision.approved else '拒绝'}"
             )
+            _reasoning_6 = _flush_step_reasoning(6)
             await _emit({
                 "type": "agent_thought",
                 "run_id": run_id,
                 "step": 6,
                 "agent_id": "risk_manager",
                 "agent_name": "风控审批",
+                "reasoning": _reasoning_6,
                 "content": f"## 风控审批\n\n{'通过' if risk_decision.approved else '拒绝'}：{risk_decision.reasoning[:200]}",
             })
 
@@ -1190,12 +1263,14 @@ class AgentCoordinator:
                 f"交易执行完成: 状态={execution_report.status}, "
                 f"成交={execution_report.filled_volume}股"
             )
+            _reasoning_7 = _flush_step_reasoning(7)
             await _emit({
                 "type": "agent_thought",
                 "run_id": run_id,
                 "step": 7,
                 "agent_id": "trade_executor",
                 "agent_name": "交易执行",
+                "reasoning": _reasoning_7,
                 "content": f"## 交易执行\n\n状态={execution_report.status}, 成交={execution_report.filled_volume}股",
             })
 
@@ -1226,6 +1301,14 @@ class AgentCoordinator:
                 importance=self.shared_memory.MemoryImportance.HIGH,
                 tags=[symbol, "error", "pipeline"],
             )
+
+        # 清理注入的 LLM 流回调（流水线结束，避免泄漏到后续调用）
+        try:
+            for _agent in self._agents.values():
+                if hasattr(_agent, "set_llm_stream_callbacks"):
+                    _agent.set_llm_stream_callbacks(on_token=None, on_reasoning=None)
+        except Exception:
+            self._logger.warning("清理 LLM 流回调失败", exc_info=True)
 
         self._logger.info(f"========== 分析流水线完成: {symbol} ==========")
         return result

@@ -164,3 +164,127 @@ class TestCoordinatorThinkingPassthrough:
         assert call_kwargs["news_report"].thinking == "新闻偏多"
         assert call_kwargs["fundamental_report"].thinking == "基本面强"
         assert call_kwargs["micro_event_report"].thinking == "事件利好"
+
+
+class TestLLMReasoning:
+    """LLM 推理文本（reasoning_content）提取与流回调透传"""
+
+    def test_extract_reasoning_attr(self):
+        from finhack_pro.agents.llm_client import LLMClient
+
+        class _Msg:
+            reasoning_content = "逐步推理：趋势向上"
+
+        assert LLMClient._extract_reasoning(_Msg()) == "逐步推理：趋势向上"
+
+    def test_extract_reasoning_model_extra(self):
+        from finhack_pro.agents.llm_client import LLMClient
+
+        class _Msg:
+            model_extra = {"reasoning_content": "额外字段推理"}
+
+        assert LLMClient._extract_reasoning(_Msg()) == "额外字段推理"
+
+    def test_extract_reasoning_empty(self):
+        from finhack_pro.agents.llm_client import LLMClient
+
+        assert LLMClient._extract_reasoning(None) == ""
+        assert LLMClient._extract_reasoning(object()) == ""
+
+    def test_stream_callbacks_auto_stream(self):
+        """注入实例级回调后 chat 自动启用流式并合并回调（agent 零改动透传）"""
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        from finhack_pro.agents.llm_client import LLMClient
+
+        client = LLMClient(
+            provider="openai",
+            api_key="sk-test",
+            base_url="https://api.deepseek.com/v1",
+            model="deepseek-v4-flash",
+        )
+        # 屏蔽真实网络：替换 _chat_openai 记录调用参数
+        captured = {}
+        async def fake_chat(messages, system, temperature, max_tokens, tools,
+                            tool_choice, stream=False, on_token=None,
+                            on_reasoning=None, response_format=None):
+            captured["stream"] = stream
+            captured["on_token"] = on_token
+            captured["on_reasoning"] = on_reasoning
+            return "final text"
+        client._chat_openai = fake_chat
+
+        tokens, reasons = [], []
+        client.set_stream_callbacks(
+            on_token=lambda p: tokens.append(p),
+            on_reasoning=lambda p: reasons.append(p),
+        )
+        # 未显式传 stream → 自动流式
+        asyncio.run(client.chat(message="你好", system="sys"))
+        assert captured["stream"] is True
+        assert captured["on_token"] is not None
+        assert captured["on_reasoning"] is not None
+
+        # 显式 on_reasoning 与实例级合并：两者都被调用
+        explicit = []
+        asyncio.run(client.chat(message="你好", on_reasoning=lambda p: explicit.append(p)))
+        assert captured["on_reasoning"] is not None
+        captured["on_reasoning"]("推理片段")
+        assert reasons == ["推理片段"]
+        assert explicit == ["推理片段"]
+
+        # 清理后恢复非流式
+        client.clear_stream_callbacks()
+        asyncio.run(client.chat(message="你好"))
+        assert captured["stream"] is False
+
+    def test_base_agent_injects_callbacks(self):
+        """BaseAgent.set_llm_stream_callbacks 注入到 _llm"""
+        from unittest.mock import MagicMock
+
+        from finhack_pro.agents.news_analyst import NewsAnalystAgent
+
+        agent = NewsAnalystAgent.__new__(NewsAnalystAgent)
+        mock_llm = MagicMock()
+        agent._llm = mock_llm
+
+        def _cb(p):  # noqa: ANN001 - 测试回调
+            return None
+
+        agent.set_llm_stream_callbacks(on_token=_cb, on_reasoning=_cb)
+        mock_llm.set_stream_callbacks.assert_called_once_with(on_token=_cb, on_reasoning=_cb)
+
+    def test_base_agent_no_llm_silent(self):
+        """未创建 _llm 的 agent 静默跳过，不抛异常"""
+        from finhack_pro.agents.news_analyst import NewsAnalystAgent
+
+        agent = NewsAnalystAgent.__new__(NewsAnalystAgent)
+        agent._llm = None
+        agent.set_llm_stream_callbacks(on_token=lambda p: None)  # 不应抛错
+
+    def test_extract_json_still_static(self):
+        """回归：_extract_json 必须保持 @staticmethod（防止装饰器被吞）"""
+        from finhack_pro.agents.llm_client import LLMClient
+
+        assert LLMClient._extract_json('{"a": 1}') == {"a": 1}
+        client = LLMClient(
+            provider="openai",
+            api_key="sk-test",
+            base_url="https://api.deepseek.com/v1",
+            model="deepseek-v4-flash",
+        )
+        assert client._extract_json('{"a": 2}') == {"a": 2}
+
+    def test_extract_json_still_static(self):
+        """回归：_extract_json 必须保持 @staticmethod（防止装饰器被吞）"""
+        from finhack_pro.agents.llm_client import LLMClient
+
+        assert LLMClient._extract_json('{"a": 1}') == {"a": 1}
+        client = LLMClient(
+            provider="openai",
+            api_key="sk-test",
+            base_url="https://api.deepseek.com/v1",
+            model="deepseek-v4-flash",
+        )
+        assert client._extract_json('{"a": 2}') == {"a": 2}

@@ -7,7 +7,7 @@ Agent基类模块
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -351,3 +351,17 @@ class BaseAgent(ABC):
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} role={self.role.value} id={self.agent_id}>"
+
+    def set_llm_stream_callbacks(
+        self,
+        on_token: Optional[Callable[[str], None]] = None,
+        on_reasoning: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        """注入 LLM 流式/推理回调（WebUI 实时思考链展示用）。
+
+        子类在 on_init 中创建 self._llm 后生效；未创建 LLMClient 的 agent
+        静默跳过。调用方在流水线结束后应注入 None 清理。
+        """
+        llm = getattr(self, "_llm", None)
+        if llm is not None and hasattr(llm, "set_stream_callbacks"):
+            llm.set_stream_callbacks(on_token=on_token, on_reasoning=on_reasoning)

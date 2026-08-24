@@ -1263,7 +1263,12 @@ function agentsPage() {
                             status: 'running',
                         });
                     }
-                    this.thinkingMessage = `${data.agent_name} 思考中...`;
+                    // 实时思考文本（LLM 流式/推理链），截取最新片段展示滚动效果
+                    if (data.thinking) {
+                        this.thinkingMessage = `${data.agent_name}：${data.thinking.slice(-300)}`;
+                    } else {
+                        this.thinkingMessage = `${data.agent_name} 思考中...`;
+                    }
                     break;
 
                 case 'agent_thought':
@@ -1274,12 +1279,13 @@ function agentsPage() {
                         step.duration_ms = data.duration_ms;
                     }
 
-                    // 添加思考内容
+                    // 添加思考内容（含完整推理过程）
                     this.thoughtMessages.push({
                         step: data.step,
                         agent_id: data.agent_id,
                         agent_name: data.agent_name,
                         content: data.content,
+                        reasoning: data.reasoning || '',
                         duration_ms: data.duration_ms,
                     });
 
