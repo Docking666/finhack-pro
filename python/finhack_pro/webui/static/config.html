@@ -11,7 +11,7 @@
             <div>
                 <label class="block text-xs text-gray-400 mb-1">服务商</label>
                 <div class="flex gap-2">
-                    <select x-model="config.llm.provider" @change="applyProviderPreset('llm')"
+                    <select x-model="providerSelection" @change="applyProviderPreset('llm')"
                             class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
                         <template x-for="(p, key) in PROVIDER_PRESETS" :key="key">
                             <option :value="key" x-text="p.label"></option>
@@ -104,7 +104,7 @@
                     <div class="grid grid-cols-2 gap-2 mb-2">
                         <div>
                             <label class="block text-[10px] text-gray-500 mb-0.5">服务商</label>
-                            <select x-model="agentCfg.provider" @change="applyProviderPreset('agent', agentCfg)"
+                            <select x-model="agentCfg.providerSel" @change="applyProviderPreset('agent', agentCfg)"
                                     class="w-full bg-[#1e293b] border border-[#334155] rounded px-2 py-1 text-xs text-white focus:border-purple-500 focus:outline-none">
                                 <option value="">跟随全局</option>
                                 <template x-for="(p, key) in PROVIDER_PRESETS" :key="key">

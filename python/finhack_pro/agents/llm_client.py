@@ -134,6 +134,10 @@ class LLMClient:
             model_pricing_override: 模型定价覆盖（每1K token, USD），
                 优先于内置 MODEL_PRICING，用于厂商调价后的成本精确估算
         """
+        # 协议归一化：配置里 provider 可能存服务商名（deepseek/orca/zhipu 等），
+        # 调用层只认协议（openai/anthropic）——OpenAI 兼容服务商统一按 openai。
+        if provider not in {p.value for p in LLMProvider}:
+            provider = LLMProvider.OPENAI.value
         self.provider = LLMProvider(provider)
         self.model = model
         self.temperature = temperature

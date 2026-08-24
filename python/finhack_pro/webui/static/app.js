@@ -514,6 +514,8 @@ function configPage() {
             { name: 'trade_executor', label: '交易执行' },
         ],
         agentConfigs: [],
+        // 服务商选择（临时状态，不写入 llm.provider——后者恒为协议值 openai/anthropic）
+        providerSelection: 'openai',
         testing: { openai: false, anthropic: false, akshare: false, tushare: false },
         testResults: { openai: null, anthropic: null, akshare: null, tushare: null },
         saving: false,
@@ -537,6 +539,9 @@ function configPage() {
                     if (d.data) Object.assign(this.config.data, d.data);
                     if (d.risk) Object.assign(this.config.risk, d.risk);
                     if (d.backtest) Object.assign(this.config.backtest, d.backtest);
+                    // 服务商下拉按 base_url 回显（协议值 openai 不代表服务商）
+                    const presets = this.PROVIDER_PRESETS;
+                    this.providerSelection = Object.keys(presets).find(k => presets[k].base_url === this.config.llm.openai_base_url) || 'custom';
 
                     // 初始化 Agent 配置表单
                     const savedAgents = d.agents || {};
@@ -545,12 +550,17 @@ function configPage() {
                         return {
                             name: def.name,
                             label: def.label,
-                            provider: saved.provider || '',
+                            provider: saved.provider || 'openai',
+                            providerSel: '',
                             openai_api_key: saved.openai_api_key || '',
                             openai_base_url: saved.openai_base_url || '',
                             model: saved.model || '',
                             followGlobal: !(saved.provider || saved.openai_api_key || saved.openai_base_url || saved.model),
                         };
+                    });
+                    // 回显 per-Agent 服务商下拉
+                    this.agentConfigs.forEach(ac => {
+                        ac.providerSel = Object.keys(presets).find(k => presets[k].base_url === ac.openai_base_url) || 'custom';
                     });
                 }
             } catch (e) {
@@ -559,17 +569,26 @@ function configPage() {
         },
 
         // 选择预置服务商时自动填充 base_url 与默认 model
+        // 注意：llm.provider 恒为"协议"（openai/anthropic），服务商名只用于预填
+        // base_url/model，不写入 provider（调用层按协议分发）。
         applyProviderPreset(scope, agentCfg = null) {
             const presets = this.PROVIDER_PRESETS;
-            const target = scope === 'llm' ? this.config.llm : (agentCfg || null);
-            if (!target) return;
-            if (presets[target.provider]) {
-                const p = presets[target.provider];
-                target.openai_base_url = p.base_url;
-                if (!target.model) target.model = p.default_model;
-            }
-            // 更新跟随全局状态
-            if (agentCfg) {
+            if (scope === 'llm') {
+                const target = this.config.llm;
+                const sel = this.providerSelection;
+                if (presets[sel]) {
+                    target.openai_base_url = presets[sel].base_url;
+                    if (!target.model) target.model = presets[sel].default_model;
+                }
+                target.provider = 'openai';  // 协议值
+            } else if (agentCfg) {
+                const sel = agentCfg.providerSel;
+                if (presets[sel]) {
+                    agentCfg.openai_base_url = presets[sel].base_url;
+                    if (!agentCfg.model) agentCfg.model = presets[sel].default_model;
+                }
+                agentCfg.provider = 'openai';  // 协议值
+                // 更新跟随全局状态
                 agentCfg.followGlobal = !(agentCfg.provider || agentCfg.openai_api_key || agentCfg.openai_base_url || agentCfg.model);
             }
         },
@@ -593,12 +612,11 @@ function configPage() {
             agentCfg.followGlobal = true;
         },
 
-        // 构建 agents 段 payload（只含非空覆盖字段）
+        // 构建 agents 段 payload（只含非空覆盖字段；provider 恒为协议 openai，不提交）
         buildAgentsPayload() {
             const agents = {};
             for (const a of this.agentConfigs) {
                 const cfg = {};
-                if (a.provider) cfg.provider = a.provider;
                 if (a.openai_api_key) cfg.openai_api_key = a.openai_api_key;
                 if (a.openai_base_url) cfg.openai_base_url = a.openai_base_url;
                 if (a.model) cfg.model = a.model;
