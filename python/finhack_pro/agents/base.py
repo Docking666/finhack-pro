@@ -365,3 +365,10 @@ class BaseAgent(ABC):
         llm = getattr(self, "_llm", None)
         if llm is not None and hasattr(llm, "set_stream_callbacks"):
             llm.set_stream_callbacks(on_token=on_token, on_reasoning=on_reasoning)
+
+    def get_llm_stream_callbacks(self) -> tuple:
+        """读取当前 LLM 流式/推理回调（供调用方保存后在结束恢复，防并发覆盖）"""
+        llm = getattr(self, "_llm", None)
+        if llm is not None and hasattr(llm, "get_stream_callbacks"):
+            return llm.get_stream_callbacks()
+        return (None, None)

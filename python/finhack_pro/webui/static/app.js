@@ -1216,6 +1216,8 @@ function agentsPage() {
         thoughtMessages: [],
         thinkingMessage: '',
         finalSignal: null,
+        // 当前页面发起的流水线 run_id：事件按此过滤，防刷新/多标签页事件混淆
+        currentRunId: null,
         pipelineHistory: [],
         expandedLogs: [],
 
@@ -1277,6 +1279,8 @@ function agentsPage() {
             try {
                 const resp = await API.runPipeline(this.pipelineSymbol);
                 if (resp.success) {
+                    // 记录本次发起的 run_id，事件流只展示本任务（防混淆）
+                    this.currentRunId = resp.data && resp.data.run_id;
                     window.__alpineApp.showToast('分析流水线已启动', 'info');
                 }
             } catch (e) {
@@ -1286,6 +1290,12 @@ function agentsPage() {
         },
 
         handleWSMessage(data) {
+            // run_id 隔离：仅展示当前页面发起的流水线事件。
+            // 刷新后 currentRunId 为 null → 忽略后台仍在运行的其它任务事件
+            // （根治"没点击却自动运行/多标签页输出混淆"）
+            if (data.run_id !== this.currentRunId) {
+                return;
+            }
             switch (data.type) {
                 case 'pipeline_started':
                     this.pipelineRunning = true;

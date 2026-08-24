@@ -387,3 +387,102 @@ class TestResumeTransparency:
         ran = [e for e in events
                if e.get("type") == "agent_thought" and "已从断点恢复" not in (e.get("content") or "")]
         assert {e.get("step") for e in ran} >= {5, 6, 7}, f"Step5-7 应继续执行，实际步骤 {sorted(e.get('step') for e in ran)}"
+
+
+class TestPipelineIsolation:
+    """流水线并发隔离：同一时间仅一个流水线，第二个被明确拒绝"""
+
+    @pytest.mark.asyncio
+    async def test_second_pipeline_rejected_then_released(self, tmp_path):
+        import asyncio as _asyncio
+
+        from finhack_pro.agents.coordinator import (
+            AgentCoordinator,
+            PipelineBusyError,
+        )
+        from finhack_pro.agents.fundamental_analyst import FundamentalAnalysisReport
+        from finhack_pro.agents.micro_event_agent import MicroEventReport
+        from finhack_pro.agents.news_analyst import NewsAnalysisReport
+        from finhack_pro.agents.risk_manager import RiskDecision
+        from finhack_pro.agents.strategy_generator import SignalDirection, StrategySignal
+        from finhack_pro.agents.trade_executor import ExecutionReport, OrderSide
+
+        config = {
+            "llm": {"provider": "openai", "openai_api_key": "sk-test", "model": "test"},
+            "pipeline": {"output_dir": str(tmp_path / "pipeline")},
+        }
+        coord = AgentCoordinator(config)
+
+        async def _slow_report(*a, **k):
+            await _asyncio.sleep(0.3)
+            return _make_market_report("慢分析")
+
+        coord.market_analyzer.analyze = AsyncMock(side_effect=_slow_report)
+        coord.news_analyst.analyze = AsyncMock(return_value=NewsAnalysisReport(symbol="600519.SH", thinking="新闻偏多"))
+        coord.fundamental_analyst.analyze = AsyncMock(return_value=FundamentalAnalysisReport(symbol="600519.SH", thinking="基本面强"))
+        coord.micro_event_agent.scan_events = AsyncMock(return_value=MicroEventReport(symbol="600519.SH", thinking="事件利好"))
+        coord.strategy_generator.debate = AsyncMock(return_value=StrategySignal(
+            symbol="600519.SH", direction=SignalDirection.BUY, confidence=0.8,
+        ))
+        coord.risk_manager.evaluate_risk = AsyncMock(return_value=RiskDecision(symbol="600519.SH", approved=True))
+        coord.trade_executor.execute = AsyncMock(return_value=ExecutionReport(
+            order_id="t", symbol="600519.SH", side=OrderSide.BUY,
+            price=1500.0, volume=100, status="filled", filled_volume=100,
+        ))
+
+        # 第一个流水线（运行中）
+        task1 = _asyncio.create_task(coord.run_analysis_pipeline("600519.SH"))
+        await _asyncio.sleep(0.05)  # 确保 task1 已获取门禁
+
+        # 第二个立即调用 → 抛 PipelineBusyError
+        with pytest.raises(PipelineBusyError):
+            await coord.run_analysis_pipeline("600519.SH")
+
+        # 等第一个完成
+        await task1
+
+        # 门禁已释放 → 第三个可正常执行
+        coord.market_analyzer.analyze = AsyncMock(return_value=_make_market_report("后续分析"))
+        r = await coord.run_analysis_pipeline("600519.SH")
+        assert r.get("run_id")
+
+    @pytest.mark.asyncio
+    async def test_stream_callbacks_restored_after_pipeline(self, tmp_path):
+        """流水线结束后各 agent 流回调恢复为注入前状态（防泄漏/并发覆盖）"""
+        from finhack_pro.agents.coordinator import AgentCoordinator
+        from finhack_pro.agents.fundamental_analyst import FundamentalAnalysisReport
+        from finhack_pro.agents.micro_event_agent import MicroEventReport
+        from finhack_pro.agents.news_analyst import NewsAnalysisReport
+        from finhack_pro.agents.risk_manager import RiskDecision
+        from finhack_pro.agents.strategy_generator import SignalDirection, StrategySignal
+        from finhack_pro.agents.trade_executor import ExecutionReport, OrderSide
+
+        config = {
+            "llm": {"provider": "openai", "openai_api_key": "sk-test", "model": "test"},
+            "pipeline": {"output_dir": str(tmp_path / "pipeline")},
+        }
+        coord = AgentCoordinator(config)
+        coord.market_analyzer.analyze = AsyncMock(return_value=_make_market_report("市场看多"))
+        coord.news_analyst.analyze = AsyncMock(return_value=NewsAnalysisReport(symbol="600519.SH", thinking="新闻偏多"))
+        coord.fundamental_analyst.analyze = AsyncMock(return_value=FundamentalAnalysisReport(symbol="600519.SH", thinking="基本面强"))
+        coord.micro_event_agent.scan_events = AsyncMock(return_value=MicroEventReport(symbol="600519.SH", thinking="事件利好"))
+        coord.strategy_generator.debate = AsyncMock(return_value=StrategySignal(
+            symbol="600519.SH", direction=SignalDirection.BUY, confidence=0.8,
+        ))
+        coord.risk_manager.evaluate_risk = AsyncMock(return_value=RiskDecision(symbol="600519.SH", approved=True))
+        coord.trade_executor.execute = AsyncMock(return_value=ExecutionReport(
+            order_id="t", symbol="600519.SH", side=OrderSide.BUY,
+            price=1500.0, volume=100, status="filled", filled_volume=100,
+        ))
+
+        # 注入前：各 agent 流回调应为空
+        before = {name: a.get_llm_stream_callbacks()
+                  for name, a in coord._agents.items() if hasattr(a, "get_llm_stream_callbacks")}
+        assert all(cb == (None, None) for cb in before.values()), "注入前应为空回调"
+
+        await coord.run_analysis_pipeline("600519.SH")
+
+        # 结束后：恢复为注入前状态（空回调）
+        after = {name: a.get_llm_stream_callbacks()
+                 for name, a in coord._agents.items() if hasattr(a, "get_llm_stream_callbacks")}
+        assert after == before, "流水线结束后流回调应恢复原状"

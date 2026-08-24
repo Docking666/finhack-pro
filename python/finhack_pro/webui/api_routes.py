@@ -337,8 +337,20 @@ async def run_pipeline(request: Request, req: PipelineRunRequest):
     agent_svc = _get_agent_service(request)
     stream_svc = _get_stream_service(request)
 
+    # 并发隔离：已有流水线在运行 → 409 明确拒绝（避免后台失败/事件串流混淆）
+    coordinator = getattr(agent_svc, "_coordinator", None)
+    if coordinator is not None and getattr(coordinator, "_pipeline_active", False):
+        raise HTTPException(
+            status_code=409,
+            detail="已有分析流水线正在运行，请等待完成后再启动新的分析",
+        )
+
     # 先返回run_id（调用方显式传入则复用，否则生成）
     run_id = req.run_id or f"pipeline_{int(time.time())}"
+    # 关键：回填到请求对象，确保 services/coordinator/事件推送全程使用同一
+    # run_id（此前仅赋局部变量，导致前端拿到的 run_id 与事件里的不一致，
+    # 前端无法按 run_id 过滤其它任务的事件流）
+    req.run_id = run_id
 
     async def _run_and_store():
         async def _stream_callback(msg: Dict[str, Any]):

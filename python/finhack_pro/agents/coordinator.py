@@ -60,6 +60,14 @@ class RunIdConflictError(PipelineResumeError):
     """run_id 已存在但 resume=False，拒绝覆盖冻结产物"""
 
 
+class PipelineBusyError(RuntimeError):
+    """已有流水线在运行：并发隔离（同一时间仅允许一个流水线）
+
+    多个流水线并发会共享同一批 Agent/LLMClient 实例，导致流回调互相覆盖、
+    思考链事件串 run、LLM 请求互相排队等输出混淆问题，故从源头串行化。
+    """
+
+
 # 步骤 → (报告名称, Pydantic 模型) 映射，用于 JSON 落盘与恢复重建
 _STEP_MODELS = {
     1: ("market_analysis", MarketAnalysisReport),
@@ -121,6 +129,8 @@ class AgentCoordinator:
         self._agents: Dict[str, BaseAgent] = {}
         self._running = False
         self._analysis_tasks: List[asyncio.Task] = []
+        # 流水线并发门禁：同一时间仅允许一个流水线运行（防流回调覆盖/事件串 run）
+        self._pipeline_active: bool = False
         self._logger = get_logger("coordinator")
         
         # Agent健康状态追踪
@@ -718,7 +728,7 @@ class AgentCoordinator:
 
         return result
 
-    async def run_analysis_pipeline(
+    async def _run_analysis_pipeline_impl(
         self,
         symbol: str,
         market_data: Optional[Dict[str, Any]] = None,
@@ -905,6 +915,11 @@ class AgentCoordinator:
                 "strategy_generator": (5, "strategy_generator", "策略生成(多空辩论)"),
                 "risk_manager": (6, "risk_manager", "风控审批"),
             }
+            # 保存各 agent 原有的流回调，结束恢复（防并发覆盖/泄漏到后续调用）
+            _saved_stream_callbacks: Dict[str, tuple] = {}
+            for _aname, _agent in self._agents.items():
+                if hasattr(_agent, "get_llm_stream_callbacks"):
+                    _saved_stream_callbacks[_aname] = _agent.get_llm_stream_callbacks()
             for _aname, _agent in self._agents.items():
                 _meta = _AGENT_STEP_META.get(_aname)
                 if not _meta:
@@ -1356,16 +1371,56 @@ class AgentCoordinator:
                 tags=[symbol, "error", "pipeline"],
             )
 
-        # 清理注入的 LLM 流回调（流水线结束，避免泄漏到后续调用）
+        # 恢复各 agent 注入前的 LLM 流回调（流水线结束；恢复而非清空，
+        # 防并发场景下把其他调用方的回调一并清掉）
         try:
-            for _agent in self._agents.values():
+            for _aname, _agent in self._agents.items():
                 if hasattr(_agent, "set_llm_stream_callbacks"):
-                    _agent.set_llm_stream_callbacks(on_token=None, on_reasoning=None)
+                    _saved = _saved_stream_callbacks.get(_aname, (None, None))
+                    _agent.set_llm_stream_callbacks(
+                        on_token=_saved[0] if len(_saved) > 0 else None,
+                        on_reasoning=_saved[1] if len(_saved) > 1 else None,
+                    )
         except Exception:
-            self._logger.warning("清理 LLM 流回调失败", exc_info=True)
+            self._logger.warning("恢复 LLM 流回调失败", exc_info=True)
 
         self._logger.info(f"========== 分析流水线完成: {symbol} ==========")
         return result
+
+    async def run_analysis_pipeline(
+        self,
+        symbol: str,
+        market_data: Optional[Dict[str, Any]] = None,
+        indicators: Optional[Dict[str, Any]] = None,
+        current_price: Optional[float] = None,
+        run_id: Optional[str] = None,
+        resume: bool = True,
+        event_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    ) -> Dict[str, Any]:
+        """执行分析流水线（并发隔离门面）
+
+        同一时间仅允许一个流水线运行：并发任务会共享同一批 Agent/LLMClient
+        实例，导致流回调互相覆盖、思考链事件串 run、LLM 请求互相排队。
+        已有一个流水线在运行 → 抛 PipelineBusyError（由上层转为明确提示）。
+        """
+        if self._pipeline_active:
+            raise PipelineBusyError(
+                "已有分析流水线正在运行，请等待其完成后再启动新的分析"
+                "（并发运行会导致思考链串流与输出混淆）"
+            )
+        self._pipeline_active = True
+        try:
+            return await self._run_analysis_pipeline_impl(
+                symbol=symbol,
+                market_data=market_data,
+                indicators=indicators,
+                current_price=current_price,
+                run_id=run_id,
+                resume=resume,
+                event_callback=event_callback,
+            )
+        finally:
+            self._pipeline_active = False
 
     async def _generate_strategy_with_debate(
         self,

@@ -235,6 +235,10 @@ class LLMClient:
         self._stream_callbacks["on_token"] = None
         self._stream_callbacks["on_reasoning"] = None
 
+    def get_stream_callbacks(self) -> tuple:
+        """返回当前流式/推理回调（供调用方保存/恢复，防并发覆盖）"""
+        return (self._stream_callbacks["on_token"], self._stream_callbacks["on_reasoning"])
+
     def _estimate_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
         """估算API调用成本
 
