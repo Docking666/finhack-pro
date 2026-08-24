@@ -261,6 +261,13 @@ class WSManager {
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
+                // 后端心跳探测（{"type":"ping"}）→ 回 pong 保持连接。
+                // 否则后端 60s 超时清理连接，长任务（流水线/回测）运行中断连，
+                // 前端将永远收不到完成事件而卡在"运行中"。
+                if (data.type === 'ping') {
+                    ws.send(JSON.stringify({ type: 'pong' }));
+                    return;
+                }
                 if (data.type === 'pong') return;
                 if (onMessage) onMessage(data);
             } catch (e) {

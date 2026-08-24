@@ -400,21 +400,33 @@ class DataSourceTester:
             )
 
     async def _test_akshare(self, start_time: float) -> DataSourceTestResult:
-        """测试 AkShare 连接（真实网络探测：轻量单标的日线）"""
-        try:
-            import akshare as ak
+        """测试数据源连接（真实探测：走应用实际取数链，腾讯源优先，失败真实报错）
 
+        注意：不直接调 ak.stock_zh_a_hist（东财端点常被远端反爬断开），
+        而是走 DataFetcher 的数据源链（akshare_tx → akshare_em → ...），
+        确保「连接测试结果」与「应用实际取数能力」一致（SDD：测试反映真实运行）。
+        """
+        try:
             def _probe() -> Any:
                 import socket
 
                 socket.setdefaulttimeout(10)  # 防挂起
-                today = datetime.now().strftime("%Y%m%d")
-                start = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
-                return ak.stock_zh_a_hist(
+                from finhack_pro.data.fetcher import DataFetcher
+
+                fetcher = DataFetcher(
+                    source="akshare",
+                    tushare_token=self._config.data.tushare_token,
+                    cache_dir=self._config.data.cache_dir,
+                    sources=self._config.data.sources or None,
+                    custom_source=self._config.data.custom_source,
+                )
+                today = datetime.now().strftime("%Y-%m-%d")
+                start = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+                return fetcher.get_daily(
                     symbol="600519",
-                    period="daily",
                     start_date=start,
                     end_date=today,
+                    use_cache=False,  # 测试必须真实探测，不命中缓存
                 )
 
             df = await asyncio.to_thread(_probe)
@@ -825,6 +837,12 @@ class AgentService:
                     request.indicators = request.indicators or {}
 
                 # 真正调用coordinator的分析流水线（透传市场数据与 run_id/resume）
+                # event_callback：coordinator 运行中实时推送 thinking/thought 事件，
+                # 让前端实时展示思考链（而非完成后一次性补发）
+                async def _pipeline_event_cb(event: Dict[str, Any]) -> None:
+                    if stream_callback:
+                        await stream_callback(event)
+
                 pipeline_result = await self._coordinator.run_analysis_pipeline(
                     symbol=request.symbol,
                     market_data=request.market_data,
@@ -832,6 +850,7 @@ class AgentService:
                     current_price=request.current_price,
                     run_id=request.run_id,
                     resume=request.resume,
+                    event_callback=_pipeline_event_cb,
                 )
 
                 logger.info(f"[Pipeline {run_id}] Coordinator流水线完成")
@@ -856,18 +875,8 @@ class AgentService:
                     )
                     result.steps.append(step_result)
 
-                    # 推送"正在思考"状态
-                    if stream_callback:
-                        await stream_callback({
-                            "type": "agent_thinking",
-                            "run_id": run_id,
-                            "step": step_num,
-                            "agent_id": agent_id,
-                            "agent_name": step_name,
-                            "content": f"## {step_name}\n\n正在分析 {request.symbol} ...",
-                        })
-
                     # 获取coordinator该步骤的真实结果
+                    # （实时 thinking/thought 事件已由 coordinator event_callback 推送，此处仅汇总，不再重复推送）
                     step_data = pipeline_result.get(result_key)
 
                     if step_data is not None:
@@ -878,18 +887,6 @@ class AgentService:
                         summary = self._summarize_step(step_name, step_data)
                         step_result.summary = summary
 
-                        # 推送真实的分析内容
-                        if stream_callback:
-                            content = self._format_step_content(step_name, step_data, step_result.duration_ms)
-                            await stream_callback({
-                                "type": "agent_thought",
-                                "run_id": run_id,
-                                "step": step_num,
-                                "agent_id": agent_id,
-                                "agent_name": step_name,
-                                "content": content,
-                                "duration_ms": step_result.duration_ms,
-                            })
                         logger.info(f"[Pipeline {run_id}] Step {step_num}/7 {step_name} 完成")
                     else:
                         step_result.status = "skipped"

@@ -25,7 +25,7 @@ import hashlib
 import os
 import time
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from loguru import logger
 
@@ -726,6 +726,7 @@ class AgentCoordinator:
         current_price: Optional[float] = None,
         run_id: Optional[str] = None,
         resume: bool = True,
+        event_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
         """运行完整的分析流水线
 
@@ -748,6 +749,8 @@ class AgentCoordinator:
             run_id: 显式运行ID。为 None 生成新 run（旧行为）；
                 已存在目录 + resume=True + 环境指纹一致 → 恢复（跳过已完成步骤）
             resume: run_id 已存在时是否允许恢复。False 且 run_id 已存在 → RunIdConflictError
+            event_callback: 可选实时事件回调（async (event: Dict) -> None）。
+                流水线每步开始/完成时触发，用于 WebUI 实时展示思考链（agent_thinking/agent_thought）。
 
         Returns:
             包含各阶段结果的字典
@@ -817,6 +820,15 @@ class AgentCoordinator:
                 self._logger.info(f"[Pipeline {run_id}] 恢复：复用输入快照（point-in-time）")
 
         try:
+            # ---- 实时事件推送 helper（思考链：每步开始/完成触发）----
+            async def _emit(event: Dict[str, Any]) -> None:
+                if event_callback is None:
+                    return
+                try:
+                    await event_callback(event)
+                except Exception:
+                    self._logger.warning("事件回调推送失败", exc_info=True)
+
             # ---- 第1阶段: 并行执行 Step 1-4 (市场/新闻/基本面/微观事件) ----
             self._logger.info("[Phase 1] 并行执行市场分析、新闻分析、基本面分析、微观事件分析...")
 
@@ -909,14 +921,33 @@ class AgentCoordinator:
             # 收集结果，记录失败任务（失败不吞异常，真实传播）
             analysis_results = {}
             step_errors: Dict[str, str] = {}
+            _PHASE1_META = {
+                "market": (1, "market_analyzer", "市场分析(技术面)"),
+                "news": (2, "news_analyst", "新闻社媒分析"),
+                "fundamental": (3, "fundamental_analyst", "基本面分析"),
+                "micro_event": (4, "micro_event_agent", "微观事件分析"),
+            }
             for task in analysis_tasks:
+                task_name = task.get_name()
                 try:
                     report = await task
-                    analysis_results[task.get_name()] = report
+                    analysis_results[task_name] = report
+                    # 实时推送：该分析步骤完成（思考链）
+                    _meta = _PHASE1_META.get(task_name)
+                    if _meta and report is not None:
+                        step_num, agent_id, agent_name = _meta
+                        await _emit({
+                            "type": "agent_thought",
+                            "run_id": run_id,
+                            "step": step_num,
+                            "agent_id": agent_id,
+                            "agent_name": agent_name,
+                            "content": f"## {agent_name}\n\n{symbol} 分析完成",
+                        })
                 except Exception as e:
-                    self._logger.error(f"分析任务 [{task.get_name()}] 失败: {e}")
-                    analysis_results[task.get_name()] = None
-                    step_errors[task.get_name()] = str(e)
+                    self._logger.error(f"分析任务 [{task_name}] 失败: {e}")
+                    analysis_results[task_name] = None
+                    step_errors[task_name] = str(e)
 
             # Phase1 任一分析步骤失败 → 流水线整体失败并终止（决策#1：失败即终止）
             if step_errors:
@@ -1026,6 +1057,14 @@ class AgentCoordinator:
 
             # ---- 第5步: 策略生成(多空辩论) ----
             self._logger.info("[Step 5/7] 策略生成(多空辩论)...")
+            await _emit({
+                "type": "agent_thinking",
+                "run_id": run_id,
+                "step": 5,
+                "agent_id": "strategy_generator",
+                "agent_name": "策略生成(多空辩论)",
+                "content": f"## 策略生成(多空辩论)\n\n正在综合 {symbol} 的市场/新闻/基本面/微观事件报告，并进行多空研究员辩论...",
+            })
             # 组装报告 md 落盘路径（三层架构第2层，供辩论读取全文）
             report_paths = {
                 k: v for k, v in {
@@ -1053,6 +1092,15 @@ class AgentCoordinator:
                 f"策略生成完成: 方向={strategy_signal.direction.value}, "
                 f"置信度={strategy_signal.confidence:.2f}"
             )
+            await _emit({
+                "type": "agent_thought",
+                "run_id": run_id,
+                "step": 5,
+                "agent_id": "strategy_generator",
+                "agent_name": "策略生成(多空辩论)",
+                "content": f"## 策略生成(多空辩论)\n\n方向={strategy_signal.direction.value}, "
+                           f"置信度={strategy_signal.confidence:.2f}",
+            })
 
             # 存储到共享记忆
             await self.shared_memory.store(
@@ -1075,6 +1123,14 @@ class AgentCoordinator:
 
             # ---- 第6步: 风控审批 ----
             self._logger.info("[Step 6/7] 风控审批...")
+            await _emit({
+                "type": "agent_thinking",
+                "run_id": run_id,
+                "step": 6,
+                "agent_id": "risk_manager",
+                "agent_name": "风控审批",
+                "content": f"## 风控审批\n\n正在评估 {symbol} 的策略信号风险...",
+            })
 
             async def _run_risk():
                 return await self.risk_manager.evaluate_risk(signal=strategy_signal)
@@ -1084,6 +1140,14 @@ class AgentCoordinator:
             self._logger.info(
                 f"风控审批完成: {'通过' if risk_decision.approved else '拒绝'}"
             )
+            await _emit({
+                "type": "agent_thought",
+                "run_id": run_id,
+                "step": 6,
+                "agent_id": "risk_manager",
+                "agent_name": "风控审批",
+                "content": f"## 风控审批\n\n{'通过' if risk_decision.approved else '拒绝'}：{risk_decision.reasoning[:200]}",
+            })
 
             # 存储到共享记忆
             await self.shared_memory.store(
@@ -1104,6 +1168,14 @@ class AgentCoordinator:
 
             # ---- 第7步: 交易执行 ----
             self._logger.info("[Step 7/7] 交易执行...")
+            await _emit({
+                "type": "agent_thinking",
+                "run_id": run_id,
+                "step": 7,
+                "agent_id": "trade_executor",
+                "agent_name": "交易执行",
+                "content": f"## 交易执行\n\n正在为 {symbol} 生成执行计划...",
+            })
 
             async def _run_execution():
                 return await self.trade_executor.execute(
@@ -1118,6 +1190,14 @@ class AgentCoordinator:
                 f"交易执行完成: 状态={execution_report.status}, "
                 f"成交={execution_report.filled_volume}股"
             )
+            await _emit({
+                "type": "agent_thought",
+                "run_id": run_id,
+                "step": 7,
+                "agent_id": "trade_executor",
+                "agent_name": "交易执行",
+                "content": f"## 交易执行\n\n状态={execution_report.status}, 成交={execution_report.filled_volume}股",
+            })
 
             # 存储到共享记忆
             await self.shared_memory.store(

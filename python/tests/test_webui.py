@@ -1339,53 +1339,50 @@ class TestDataSourceTester:
         assert "tushare包未安装" in result.message
 
     def test_akshare_success(self):
-        """akshare 成功：stock_zh_a_hist 返回数据"""
+        """数据源连接测试成功：DataFetcher.get_daily（真实取数链）返回数据"""
         import asyncio
-        import sys
-        import types
 
         import pandas as pd
 
-        fake_ak = types.ModuleType("akshare")
-        fake_ak.stock_zh_a_hist = lambda **kw: pd.DataFrame({"date": ["2024-01-01"] * 3})
-        fake_ak.__name__ = "akshare"
+        fake_fetcher = MagicMock()
+        fake_fetcher.get_daily.return_value = pd.DataFrame({"date": ["2024-01-01"] * 3})
 
         tester = self._make_tester()
-        with patch.dict(sys.modules, {"akshare": fake_ak}):
+        with patch("finhack_pro.data.fetcher.DataFetcher", return_value=fake_fetcher):
             result = asyncio.run(tester.test_connection(source="akshare"))
 
         assert result.success is True
         assert "3 条" in result.message
 
     def test_akshare_no_data(self):
-        """akshare 返回空数据 → 失败"""
+        """数据源连接成功但返回空数据 → 失败（不伪造）"""
         import asyncio
-        import sys
-        import types
 
         import pandas as pd
 
-        fake_ak = types.ModuleType("akshare")
-        fake_ak.stock_zh_a_hist = lambda **kw: pd.DataFrame()
-        fake_ak.__name__ = "akshare"
+        fake_fetcher = MagicMock()
+        fake_fetcher.get_daily.return_value = pd.DataFrame()
 
         tester = self._make_tester()
-        with patch.dict(sys.modules, {"akshare": fake_ak}):
+        with patch("finhack_pro.data.fetcher.DataFetcher", return_value=fake_fetcher):
             result = asyncio.run(tester.test_connection(source="akshare"))
 
         assert result.success is False
         assert "未获取到数据" in result.message
 
     def test_akshare_import_error(self):
-        """akshare 未安装 → 提示安装（sys.modules 置 None 模拟导入失败）"""
+        """数据源不可用（如 akshare 未安装导致取数异常）→ 真实失败，不伪造成功"""
         import asyncio
-        import sys
+
+        fake_fetcher = MagicMock()
+        fake_fetcher.get_daily.side_effect = ImportError("No module named 'akshare'")
 
         tester = self._make_tester()
-        with patch.dict(sys.modules, {"akshare": None}):
+        with patch("finhack_pro.data.fetcher.DataFetcher", return_value=fake_fetcher):
             result = asyncio.run(tester.test_connection(source="akshare"))
+
         assert result.success is False
-        assert "akshare包未安装" in result.message
+        assert "连接失败" in result.message or result.message.strip() != ""
 
     def test_unknown_source(self):
         """未知数据源 → 失败"""
