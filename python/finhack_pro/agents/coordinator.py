@@ -916,6 +916,32 @@ class AgentCoordinator:
                         on_reasoning=_make_llm_cb(_step, _aid, _an),
                     )
 
+            # ---- 断点恢复透明化：已完成的步骤按顺序推送"已恢复"事件 ----
+            # 避免 resume 时 Step1-4 静默跳过导致前端"直接跳到多空辩论"的观感
+            if is_resume:
+                _RESUME_STEP_META = {
+                    1: ("market_analyzer", "市场分析(技术面)"),
+                    2: ("news_analyst", "新闻社媒分析"),
+                    3: ("fundamental_analyst", "基本面分析"),
+                    4: ("micro_event_agent", "微观事件分析"),
+                    5: ("strategy_generator", "策略生成(多空辩论)"),
+                    6: ("risk_manager", "风控审批"),
+                    7: ("trade_executor", "交易执行"),
+                }
+                for _s in sorted(_RESUME_STEP_META):
+                    if not self._is_step_done(run_id, _s):
+                        continue
+                    _aid, _an = _RESUME_STEP_META[_s]
+                    await _emit({
+                        "type": "agent_thought",
+                        "run_id": run_id,
+                        "step": _s,
+                        "agent_id": _aid,
+                        "agent_name": _an,
+                        "content": "已从断点恢复（历史结果已落盘，跳过重跑）",
+                        "duration_ms": 0,
+                    })
+
             # ---- 第1阶段: 并行执行 Step 1-4 (市场/新闻/基本面/微观事件) ----
             self._logger.info("[Phase 1] 并行执行市场分析、新闻分析、基本面分析、微观事件分析...")
 

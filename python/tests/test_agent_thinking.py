@@ -311,7 +311,7 @@ class TestRiskPortfolioBaseline:
     def test_risk_context_contains_real_assets(self):
         """LLM 风控上下文必须含初始资金，而非总资产为 0"""
         from finhack_pro.agents.risk_manager import RiskManagerAgent
-        from finhack_pro.agents.strategy_generator import StrategySignal, SignalDirection
+        from finhack_pro.agents.strategy_generator import SignalDirection, StrategySignal
 
         agent = RiskManagerAgent(config={})
         signal = StrategySignal(
@@ -329,3 +329,61 @@ class TestRiskPortfolioBaseline:
         assert "总资产: 1000000.00" in ctx
         assert "可用资金: 1000000.00" in ctx
         assert "总资产: 0.00" not in ctx
+
+
+class TestResumeTransparency:
+    """断点恢复透明化：已恢复步骤按顺序推送事件，前端步骤顺序完整"""
+
+    @pytest.mark.asyncio
+    async def test_resume_emits_recovered_steps(self, tmp_path):
+        from finhack_pro.agents.coordinator import AgentCoordinator
+        from finhack_pro.agents.fundamental_analyst import FundamentalAnalysisReport
+        from finhack_pro.agents.micro_event_agent import MicroEventReport
+        from finhack_pro.agents.news_analyst import NewsAnalysisReport
+        from finhack_pro.agents.risk_manager import RiskDecision
+        from finhack_pro.agents.strategy_generator import SignalDirection, StrategySignal
+        from finhack_pro.agents.trade_executor import ExecutionReport, OrderSide
+
+        config = {
+            "llm": {"provider": "openai", "openai_api_key": "sk-test", "model": "test"},
+            "pipeline": {"output_dir": str(tmp_path / "pipeline")},
+        }
+        coord = AgentCoordinator(config)
+        events = []
+
+        async def on_event(ev):
+            events.append(ev)
+
+        def _mock_all():
+            coord.market_analyzer.analyze = AsyncMock(return_value=_make_market_report("市场看多"))
+            coord.news_analyst.analyze = AsyncMock(return_value=NewsAnalysisReport(symbol="600519.SH", thinking="新闻偏多"))
+            coord.fundamental_analyst.analyze = AsyncMock(return_value=FundamentalAnalysisReport(symbol="600519.SH", thinking="基本面强"))
+            coord.micro_event_agent.scan_events = AsyncMock(return_value=MicroEventReport(symbol="600519.SH", thinking="事件利好"))
+            coord.strategy_generator.debate = AsyncMock(return_value=StrategySignal(
+                symbol="600519.SH", direction=SignalDirection.BUY, confidence=0.8,
+            ))
+            coord.risk_manager.evaluate_risk = AsyncMock(return_value=RiskDecision(symbol="600519.SH", approved=True))
+            coord.trade_executor.execute = AsyncMock(return_value=ExecutionReport(
+                order_id="test-order", symbol="600519.SH", side=OrderSide.BUY,
+                price=1500.0, volume=100, status="filled", filled_volume=100,
+            ))
+
+        _mock_all()
+        # 构造"部分完成"：手动标记 Step1-4 已落盘 done（模拟上次中断在 Step5 前）
+        for _s, _n in [(1, "market_analysis"), (2, "news_analysis"),
+                       (3, "fundamental_analysis"), (4, "micro_event_analysis")]:
+            coord._write_report_json("resume_t_1", _s, _n, {"symbol": "600519.SH", "thinking": f"历史结果{_s}"})
+            coord._mark_step_done("resume_t_1", _s, _n)
+
+        # resume：Step1-4 已 done → 推送"已从断点恢复"事件；Step5-7 继续执行
+        await coord.run_analysis_pipeline(
+            "600519.SH", run_id="resume_t_1", resume=True, event_callback=on_event)
+        recovered = [e for e in events
+                     if e.get("type") == "agent_thought" and "已从断点恢复" in (e.get("content") or "")]
+        assert len(recovered) == 4, f"应推送 4 个已恢复事件(Step1-4)，实际 {len(recovered)}"
+        steps = [e.get("step") for e in recovered]
+        assert steps == [1, 2, 3, 4], f"已恢复事件应按 1-4 顺序，实际 {steps}"
+        # Step5-7 继续真实执行（mock 返回）
+        ran = [e for e in events
+               if e.get("type") == "agent_thought" and "已从断点恢复" not in (e.get("content") or "")]
+        assert {e.get("step") for e in ran} >= {5, 6, 7}, f"Step5-7 应继续执行，实际步骤 {sorted(e.get('step') for e in ran)}"

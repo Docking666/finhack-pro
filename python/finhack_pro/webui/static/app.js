@@ -985,11 +985,49 @@ function backtestPage() {
 
                 if (resp.success) {
                     this.currentTaskId = resp.data.task_id;
+                    // WebSocket 事件丢失兜底：轮询任务状态，避免永远卡"运行中"
+                    this.startStatusPolling(resp.data.task_id);
                     window.__alpineApp.showToast('回测任务已启动', 'info');
                 }
             } catch (e) {
                 this.running = false;
                 window.__alpineApp.showToast('启动回测失败: ' + e.message, 'error');
+            }
+        },
+
+        startStatusPolling(taskId) {
+            this.stopStatusPolling();
+            this._pollTimer = setInterval(async () => {
+                try {
+                    const resp = await API.getBacktestHistory();
+                    const rec = (resp.data || []).find(r => r.task_id === taskId);
+                    if (!rec) return; // 任务可能尚未落历史
+                    if (rec.status === 'completed') {
+                        this.stopStatusPolling();
+                        if (this.running) {
+                            this.running = false;
+                            this.progress = 100;
+                            this.progressMessage = '回测完成';
+                            this.fetchResult(taskId);
+                            this.loadHistory();
+                        }
+                    } else if (rec.status === 'failed') {
+                        this.stopStatusPolling();
+                        if (this.running) {
+                            this.running = false;
+                            this.progressMessage = '回测失败: ' + (rec.error || '任务异常');
+                            window.__alpineApp.showToast('回测失败: ' + (rec.error || ''), 'error');
+                            this.loadHistory();
+                        }
+                    }
+                } catch (e) { /* 忽略，下轮重试 */ }
+            }, 4000);
+        },
+
+        stopStatusPolling() {
+            if (this._pollTimer) {
+                clearInterval(this._pollTimer);
+                this._pollTimer = null;
             }
         },
 
@@ -1018,6 +1056,7 @@ function backtestPage() {
                     break;
 
                 case 'backtest_completed':
+                    this.stopStatusPolling();
                     this.running = false;
                     this.progress = 100;
                     this.progressMessage = '回测完成';
@@ -1027,6 +1066,7 @@ function backtestPage() {
                     break;
 
                 case 'backtest_failed':
+                    this.stopStatusPolling();
                     this.running = false;
                     this.progressMessage = '回测失败: ' + (data.error || '未知错误');
                     window.__alpineApp.showToast('回测失败: ' + (data.error || ''), 'error');

@@ -73,6 +73,12 @@
         /* 思考流打字效果 */
         .typing-cursor::after { content: '|'; animation: blink 1s infinite; color: #3b82f6; }
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+        /* 推理过程折叠区滚动条（深色面板内可见） */
+        .reasoning-scroll::-webkit-scrollbar { width: 6px; }
+        .reasoning-scroll::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+        .reasoning-scroll::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        .reasoning-scroll::-webkit-scrollbar-track { background: transparent; }
     </style>
 </head>
 <body class="bg-[#0f172a] text-gray-200 min-h-screen" x-data="app()" x-init="init()">

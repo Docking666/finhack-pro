@@ -183,6 +183,7 @@
                         <th class="text-left py-2 px-2">时间范围</th>
                         <th class="text-right py-2 px-2">收益率</th>
                         <th class="text-right py-2 px-2">夏普比率</th>
+                        <th class="text-left py-2 px-2">状态</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -193,6 +194,11 @@
                             <td class="py-2 px-2 text-gray-400" x-text="record.start_date + ' ~ ' + record.end_date"></td>
                             <td class="py-2 px-2 text-right font-mono" :class="record.total_return >= 0 ? 'text-green-400' : 'text-red-400'" x-text="record.total_return.toFixed(2) + '%'"></td>
                             <td class="py-2 px-2 text-right font-mono text-white" x-text="record.sharpe_ratio.toFixed(2)"></td>
+                            <td class="py-2 px-2">
+                                <span x-show="record.status === 'failed'" class="text-xs text-red-400 bg-red-900/40 px-2 py-0.5 rounded">失败</span>
+                                <span x-show="record.status === 'running'" class="text-xs text-blue-400 bg-blue-900/40 px-2 py-0.5 rounded">运行中</span>
+                                <span x-show="record.status === 'completed'" class="text-xs text-green-400 bg-green-900/40 px-2 py-0.5 rounded">完成</span>
+                            </td>
                         </tr>
                     </template>
                 </tbody>

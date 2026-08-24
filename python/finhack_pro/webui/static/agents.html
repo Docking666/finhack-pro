@@ -98,12 +98,13 @@
 
                     <!-- 完整推理过程（可折叠，LLM 思维链/reasoning_content） -->
                     <div x-show="msg.reasoning" class="ml-7 mt-1">
-                        <details class="group">
-                            <summary class="text-xs text-gray-500 hover:text-gray-300 cursor-pointer select-none inline-flex items-center gap-1">
+                        <details class="group reasoning-details">
+                            <summary class="text-xs text-gray-500 hover:text-gray-200 cursor-pointer select-none inline-flex items-center gap-1 py-1 px-2 rounded hover:bg-[#334155]/40 transition-colors">
+                                <span class="transition-transform group-open:rotate-90 inline-block">›</span>
                                 <span x-text="'推理过程 (' + msg.reasoning.length + ' 字)'"></span>
-                                <span class="transition-transform group-open:rotate-90">›</span>
+                                <span class="text-gray-600" x-text="msg.reasoning.length > 300 ? '，点击展开可滚动查看' : ''"></span>
                             </summary>
-                            <div class="mt-1 p-3 rounded-lg bg-[#0b1220] border border-[#334155]/40 text-xs text-gray-400 whitespace-pre-wrap max-h-64 overflow-y-auto"
+                            <div class="mt-1 p-3 rounded-lg bg-[#0b1220] border border-[#334155]/40 text-xs text-gray-400 whitespace-pre-wrap max-h-72 overflow-y-auto reasoning-scroll"
                                  x-text="msg.reasoning"></div>
                         </details>
                     </div>
