@@ -71,7 +71,7 @@ RISK_MANAGER_SYSTEM_PROMPT = """你是一位严谨的量化风控专家，负责
 - 连续亏损3次后降低仓位50%
 
 ### 3. 风险评估
-- VaR(95%置信度)不超过总资金的5%
+- VaR(95%统计置信水平)不超过总资金的5%
 - 波动率异常时暂停交易
 - 流动性不足时限制交易量
 
@@ -81,7 +81,7 @@ RISK_MANAGER_SYSTEM_PROMPT = """你是一位严谨的量化风控专家，负责
 - 大盘弱势时降低整体仓位
 
 ### 5. 审批标准
-- **通过**: 信号置信度>0.6，风险可控，仓位合理
+- **通过**: 信号置信度达到门槛（signal_confidence_threshold，默认0.6），风险可控，仓位合理
 - **有条件通过**: 需要调整仓位或止损位
 - **拒绝**: 风险过高，违反风控规则
 
@@ -117,6 +117,9 @@ class RiskManagerAgent(BaseAgent):
         self._max_drawdown_limit: float = config.get("max_drawdown_limit", 0.15)
         self._max_position_pct: float = config.get("max_position_pct", 0.3)
         self._max_total_position: float = config.get("max_total_position", 0.8)
+        # 信号置信度门槛（信号质量阈值，决策层；与 var_confidence 的 VaR 统计置信水平语义不同，
+        # 见 config.RiskConfig 注释。0.6 为默认值，可配置）
+        self._min_signal_confidence: float = config.get("signal_confidence_threshold", 0.6)
         self._consecutive_losses: int = 0
 
     async def on_init(self) -> None:
@@ -269,7 +272,15 @@ class RiskManagerAgent(BaseAgent):
         if self._consecutive_losses >= 3:
             reasons.append(f"连续亏损{self._consecutive_losses}次，建议暂停交易")
 
-        # 检查7: 重复持仓检查
+        # 检查7: 信号置信度门槛（信号质量阈值，非 VaR 统计置信水平）
+        # 与 config.RiskConfig.var_confidence 语义不同：此处是决策阈值，默认 0.6 可配置
+        if signal.confidence < self._min_signal_confidence:
+            reasons.append(
+                f"信号置信度不足: {signal.confidence:.2f} < {self._min_signal_confidence:.2f}"
+                f"（未达信号置信度门槛 signal_confidence_threshold）"
+            )
+
+        # 检查8: 重复持仓检查
         existing_symbols = {pos.get("symbol") for pos in self._portfolio.positions}
         if signal.symbol in existing_symbols and signal.direction.value == "buy":
             reasons.append(f"{signal.symbol} 已在持仓中，不建议加仓")

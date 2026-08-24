@@ -835,7 +835,11 @@ function backtestPage() {
         async init() {
             window.__backtestPage = this;
             await Promise.all([this.loadStrategies(), this.loadHistory()]);
+            // 回测页模板经 x-html 异步注入，Alpine init 时 canvas 可能尚未挂载，
+            // 仅靠 $nextTick 会漏建图表 → 权益曲线永远空白。延时重试确保创建。
             this.$nextTick(() => this.initChart());
+            setTimeout(() => this.initChart(), 300);
+            setTimeout(() => this.initChart(), 1000);
         },
 
         async loadStrategies() {
@@ -932,13 +936,27 @@ function backtestPage() {
                             ticks: {
                                 color: '#64748b',
                                 font: { size: 10 },
-                                callback: (v) => (v / 10000).toFixed(0) + '万',
+                                // 自适应金额刻度（万/亿），避免恒定数据/空数据时显示错误的"0万"
+                                callback: (v) => {
+                                    const n = Number(v);
+                                    if (!isFinite(n)) return String(v);
+                                    if (Math.abs(n) >= 1e8) return (n / 1e8).toFixed(1) + '亿';
+                                    if (Math.abs(n) >= 1e4) return (n / 1e4).toFixed(1) + '万';
+                                    return String(n);
+                                },
                             },
                             grid: { color: 'rgba(51, 65, 85, 0.3)' },
                         },
                     },
                 },
             });
+        },
+
+        ensureChart() {
+            if (this.equityChart) return;
+            const canvas = document.getElementById('equity-chart');
+            if (!canvas) return;
+            this.initChart();
         },
 
         async startBacktest() {
@@ -1025,14 +1043,17 @@ function backtestPage() {
                     this.trades = result.trades || [];
                     this.currentResult = result; // 保存完整结果用于导出
 
-                    // 更新权益曲线
-                    if (result.equity_curve && this.equityChart) {
-                        this.equityChart.data.labels = result.equity_curve.map(p => p.date);
-                        this.equityChart.data.datasets[0].data = result.equity_curve.map(p => p.equity);
-                        if (result.benchmark_curve) {
-                            this.equityChart.data.datasets[1].data = result.benchmark_curve.map(p => p.equity);
+                    // 更新权益曲线（chart 未创建时先确保创建，避免图表空白）
+                    if (result.equity_curve) {
+                        this.ensureChart();
+                        if (this.equityChart) {
+                            this.equityChart.data.labels = result.equity_curve.map(p => p.date);
+                            this.equityChart.data.datasets[0].data = result.equity_curve.map(p => p.equity);
+                            if (result.benchmark_curve) {
+                                this.equityChart.data.datasets[1].data = result.benchmark_curve.map(p => p.equity);
+                            }
+                            this.equityChart.update();
                         }
-                        this.equityChart.update();
                     }
 
                     // 刷新历史

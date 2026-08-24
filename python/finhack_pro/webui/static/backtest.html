@@ -63,6 +63,10 @@
             <h3 class="text-sm font-medium text-white mb-3">权益曲线</h3>
             <div class="relative" style="height: 300px;">
                 <canvas id="equity-chart"></canvas>
+                <!-- 空态提示：未运行回测时展示，回测完成后由图表动态替换 -->
+                <div x-show="!Object.keys(metrics).length" class="absolute inset-0 flex items-center justify-center text-sm text-gray-500 pointer-events-none">
+                    运行回测后展示权益曲线与基准
+                </div>
             </div>
         </div>
 

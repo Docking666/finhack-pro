@@ -115,12 +115,20 @@ class BacktestConfig(BaseModel):
 
 
 class RiskConfig(BaseModel):
-    """风控配置"""
+    """风控配置
+
+    注意两类"置信度"语义不同，勿混用：
+      - signal_confidence_threshold: 策略信号置信度门槛（信号质量阈值，决策层）。
+        LLM 生成的信号 confidence 低于该值即拒绝，默认 0.6。
+      - var_confidence: VaR 计算的统计置信水平（风险度量参数，回测/风控层）。
+        用于在险价值估算，默认 0.95。
+    """
     max_position_pct: float = 0.3  # 单只股票最大仓位
     max_total_position_pct: float = 0.8  # 总仓位上限
     max_drawdown_pct: float = 0.15  # 最大回撤限制
     max_daily_loss_pct: float = 0.05  # 单日最大亏损
-    var_confidence: float = 0.95  # VaR置信度
+    var_confidence: float = 0.95  # VaR 统计置信水平（风险度量，非信号门槛）
+    signal_confidence_threshold: float = 0.6  # 信号置信度门槛（信号质量，决策阈值）
     stop_loss_pct: float = 0.05  # 默认止损
     take_profit_pct: float = 0.10  # 默认止盈
 
