@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import time
 import uuid
@@ -51,8 +52,24 @@ class ConfigService:
     _sensitive_fields = {"openai_api_key", "anthropic_api_key", "tushare_token", "api_key"}
 
     def __init__(self, config_path: Optional[str] = None):
-        self._config_path = config_path
-        self._config = get_config(config_path, force_reload=True)
+        self._config_path = config_path or self._resolve_default_config_path()
+        self._config = get_config(self._config_path, force_reload=True)
+
+    @staticmethod
+    def _resolve_default_config_path() -> Optional[str]:
+        """解析默认配置文件路径
+
+        优先级：FINHACK_CONFIG 环境变量（显式指定即优先，文件不存在时
+        由 save_config 首次创建）→ 当前工作目录 config/default.yaml
+        （与 save_config 的默认写入路径一致，保证保存/重启后读回同一份）。
+        """
+        env_path = os.environ.get("FINHACK_CONFIG")
+        if env_path:
+            return env_path
+        cwd_path = Path.cwd() / "config" / "default.yaml"
+        if cwd_path.exists():
+            return str(cwd_path)
+        return None
 
     def get_config(self) -> Dict[str, Any]:
         """获取当前配置(隐藏敏感字段)"""
@@ -495,8 +512,13 @@ class BacktestService:
             from finhack_pro.data.fetcher import DataFetcher
             from finhack_pro.strategies.dual_thrust import DualThrustStrategy
 
-            # 获取市场数据
-            fetcher = DataFetcher()
+            # 获取市场数据（使用配置的数据源：akshare 失败可 fallback tushare）
+            cfg = get_config()
+            fetcher = DataFetcher(
+                source=cfg.data.source,
+                tushare_token=cfg.data.tushare_token,
+                cache_dir=cfg.data.cache_dir,
+            )
             symbol = request.symbols[0] if request.symbols else "000001.SZ"
             
             if stream_callback:

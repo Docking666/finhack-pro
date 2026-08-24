@@ -222,7 +222,8 @@ def get_config(config_path: Optional[str] = None, force_reload: bool = False) ->
     """获取全局配置实例
 
     Args:
-        config_path: 配置文件路径，为None时使用默认配置
+        config_path: 配置文件路径；为None时依次尝试 FINHACK_CONFIG 环境变量，
+                     仍无则使用纯默认配置（不读任何 YAML）
         force_reload: 是否强制重新加载配置
 
     Returns:
@@ -230,8 +231,10 @@ def get_config(config_path: Optional[str] = None, force_reload: bool = False) ->
     """
     global _global_config
     if _global_config is None or force_reload:
-        if config_path:
-            _global_config = FinhackProConfig.from_yaml(config_path)
+        path = config_path or os.environ.get("FINHACK_CONFIG")
+        if path:
+            # from_yaml 内部处理文件不存在（warning + 纯默认）
+            _global_config = FinhackProConfig.from_yaml(path)
         else:
             _global_config = FinhackProConfig()
     return _global_config
