@@ -173,30 +173,47 @@ class ConfigService:
                 success=False,
                 message="OpenAI API Key 未配置",
             )
-
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                f"{url}/models",
-                headers={"Authorization": f"Bearer {key}"},
+        if not url:
+            return ConnectionTestResult(
+                provider=provider,
+                success=False,
+                message="Base URL 未配置：请在 API 基础地址输入框填写（如 https://api.deepseek.com/v1）",
             )
-            latency = (time.time() - start_time) * 1000
 
-            if resp.status_code == 200:
-                models = resp.json().get("data", [])
-                model_names = [m["id"] for m in models[:5]]
-                return ConnectionTestResult(
-                    provider=provider,
-                    success=True,
-                    message=f"{provider} 连接成功，可用模型: {', '.join(model_names)}",
-                    latency_ms=round(latency, 2),
+        models_url = f"{url.rstrip('/')}/models"
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.get(
+                    models_url,
+                    headers={"Authorization": f"Bearer {key}"},
                 )
-            else:
-                return ConnectionTestResult(
-                    provider=provider,
-                    success=False,
-                    message=f"API返回错误: {resp.status_code} {resp.text[:200]}",
-                    latency_ms=round(latency, 2),
-                )
+        except Exception as e:
+            latency = (time.time() - start_time) * 1000
+            return ConnectionTestResult(
+                provider=provider,
+                success=False,
+                message=f"连接异常: {type(e).__name__}: {e}（目标: GET {models_url}）",
+                latency_ms=round(latency, 2),
+            )
+
+        latency = (time.time() - start_time) * 1000
+
+        if resp.status_code == 200:
+            models = resp.json().get("data", [])
+            model_names = [m["id"] for m in models[:5]]
+            return ConnectionTestResult(
+                provider=provider,
+                success=True,
+                message=f"{provider} 连接成功，可用模型: {', '.join(model_names)}",
+                latency_ms=round(latency, 2),
+            )
+        else:
+            return ConnectionTestResult(
+                provider=provider,
+                success=False,
+                message=f"API返回错误: {resp.status_code} {resp.text[:200]}（请求: GET {models_url}）",
+                latency_ms=round(latency, 2),
+            )
 
     async def _test_anthropic(
         self, provider: str, api_key: Optional[str], base_url: Optional[str], start_time: float

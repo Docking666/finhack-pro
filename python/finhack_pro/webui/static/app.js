@@ -491,7 +491,7 @@ function app() {
 function configPage() {
     return {
         config: {
-            llm: { openai_api_key: '', anthropic_api_key: '', model: 'gpt-4o', temperature: 0.3, max_tokens: 4096, provider: 'openai' },
+            llm: { openai_api_key: '', anthropic_api_key: '', openai_base_url: '', model: 'gpt-4o', temperature: 0.3, max_tokens: 4096, provider: 'openai' },
             data: { tushare_token: '', data_dir: './data' },
             risk: { max_position_pct: 30, max_drawdown_pct: 15, max_daily_loss_pct: 5, var_confidence: 0.95, stop_loss_pct: 5, take_profit_pct: 10 },
             backtest: { slippage: 0.001, commission_rate: 0.0003, stamp_tax_rate: 0.001 },
