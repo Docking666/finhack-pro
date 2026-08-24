@@ -197,13 +197,22 @@ async def test_services_no_fake_signal():
 
 
 # ---------------------------------------------------------------------------
-# 8. 数据源：双源均不可用 → get_daily 显式抛 ValueError（不静默返回空 DF）
+# 8. 数据源：全部数据源失败 → get_daily 显式抛 ValueError（不静默返回空 DF）
 # ---------------------------------------------------------------------------
-def test_get_daily_raises_on_total_failure():
-    fetcher = DataFetcher(source="tushare", tushare_token="")
-    # 强制两源均不可用（确定性，不依赖真实网络）
-    fetcher._tushare_available = False
-    fetcher._akshare_available = False
+def test_get_daily_raises_on_total_failure(tmp_path):
+    # 独立缓存目录：避免命中项目 data/cache 中的历史缓存而绕过数据源链
+    fetcher = DataFetcher(
+        source="tushare", tushare_token="", cache_dir=str(tmp_path / "cache")
+    )
+
+    # 确定性模拟所有数据源失败（鸭子类型源，不依赖真实网络）
+    class _FailSource:
+        name = "fail"
+
+        def get_daily(self, symbol, start_date, end_date):
+            raise ConnectionError("模拟数据源不可用")
+
+    fetcher._sources = [_FailSource()]
 
     with pytest.raises(ValueError, match="数据源获取失败"):
         fetcher.get_daily(

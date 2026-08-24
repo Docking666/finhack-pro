@@ -42,19 +42,28 @@ class DataFetcher:
         tushare_token: str = "",
         cache_dir: str = "data/cache",
         adjust: str = "qfq",
+        akshare_hist_api: str = "tx",
+        sources: Optional[List[str]] = None,
+        custom_source: str = "",
     ) -> None:
         """初始化数据获取器
 
         Args:
-            source: 数据源 (akshare / tushare)
+            source: 数据源 (akshare / tushare)；未提供 sources 时按 legacy 规则映射多源链
             tushare_token: tushare API token
             cache_dir: 缓存目录
             adjust: 复权方式 (qfq 前复权 / hfq 后复权 / "" 不复权)
+            akshare_hist_api: akshare 日线取数端点 (tx=腾讯证券 / em=东方财富)。
+                东财接口常被远端反爬断开（RemoteDisconnected），故默认 tx（腾讯）以绕开封锁。
+            sources: 显式数据源优先级列表，如 ["akshare_tx", "baostock", "tushare"]；
+                含 "custom" 时启用自定义源（需配合 custom_source）。None 时用 legacy source 映射。
+            custom_source: 用户自定义数据源，如 "my_module.MyDataSource"（须继承 BaseDataSource）。
         """
         self.source = source
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.adjust = adjust
+        self.akshare_hist_api = akshare_hist_api or "tx"
 
         # 统一缓存：DataCache（pickle+gzip，TTL+MD5 校验，按日期过滤）
         from finhack_pro.data.cache import DataCache
@@ -63,44 +72,33 @@ class DataFetcher:
         # 全市场快照缓存锁（get_realtime 并发保护）
         self._snapshot_lock = threading.Lock()
 
-        # 初始化数据源客户端
+        # 可插拔数据源链（真实多源、依序回退；SDD：失败显式化，禁止 mock 兜底）
+        from finhack_pro.data.sources import build_source_chain
+
+        self._sources = build_source_chain(
+            source=source,
+            tushare_token=tushare_token,
+            adjust=adjust,
+            sources=sources,
+            custom_source=custom_source,
+        )
+
+        # 兼容属性（供既有调用方/测试使用）
+        self._akshare_available = any(
+            s.name.startswith("akshare") for s in self._sources
+        )
+        self._tushare_available = any(s.name == "tushare" for s in self._sources)
         self._tushare_pro: Optional[Any] = None
-        self._akshare_available: bool = False
-        self._tushare_available: bool = False
-
-        if source == "tushare" and tushare_token:
-            self._init_tushare(tushare_token)
-
-        # akshare总是尝试初始化
-        self._init_akshare()
+        for s in self._sources:
+            if s.name == "tushare":
+                self._tushare_pro = getattr(s, "_pro", None)
 
         logger.info(
             f"数据获取器初始化: source={source}, adjust={adjust}, "
+            f"源链={[s.name for s in self._sources]}, "
             f"akshare={'可用' if self._akshare_available else '不可用'}, "
             f"tushare={'可用' if self._tushare_available else '不可用'}"
         )
-
-    def _init_tushare(self, token: str) -> None:
-        """初始化tushare"""
-        try:
-            import tushare
-            tushare.set_token(token)
-            self._tushare_pro = tushare.pro_api()
-            self._tushare_available = True
-            logger.info("Tushare初始化成功")
-        except ImportError:
-            logger.warning("tushare包未安装")
-        except Exception as e:
-            logger.warning(f"Tushare初始化失败: {e}")
-
-    def _init_akshare(self) -> None:
-        """初始化akshare"""
-        try:
-            import akshare  # noqa: F401
-            self._akshare_available = True
-            logger.info("AkShare初始化成功")
-        except ImportError:
-            logger.warning("akshare包未安装")
 
     def get_daily(
         self,
@@ -134,117 +132,38 @@ class DataFetcher:
                 logger.debug(f"缓存命中: {std_symbol} ({start_date}~{end_date})")
                 return cached
 
-        # 获取数据
-        df = pd.DataFrame()
-        if self.source == "tushare" and self._tushare_available:
-            df = self._fetch_daily_tushare(std_symbol, start_date, end_date)
-        elif self._akshare_available:
-            df = self._fetch_daily_akshare(std_symbol, start_date, end_date)
+        # 获取数据：依序尝试数据源链，失败（异常或空表）真实回退，全部失败显式抛错（SDD/L5a）
+        errors: List[str] = []
+        for src in self._sources:
+            try:
+                df = src.get_daily(std_symbol, start_date, end_date)
+                if df is None or df.empty:
+                    errors.append(f"{src.name}: 返回空数据")
+                    logger.info(f"数据源 {src.name} 返回空数据，尝试下一个...")
+                    continue
+                # 标准化列名（缺失必要列抛 ValueError，不伪造零值；L5b）
+                df = self._standardize_columns(df)
+            except Exception as e:
+                errors.append(f"{src.name}: {e}")
+                logger.warning(f"数据源 {src.name} 获取失败: {e}")
+                continue
 
-        # fallback: 如果主数据源失败，尝试另一个
-        if df.empty:
-            if self.source == "tushare" and self._akshare_available:
-                logger.info("Tushare获取失败，尝试AkShare...")
-                df = self._fetch_daily_akshare(std_symbol, start_date, end_date)
-            elif self.source == "akshare" and self._tushare_available:
-                logger.info("AkShare获取失败，尝试Tushare...")
-                df = self._fetch_daily_tushare(std_symbol, start_date, end_date)
-
-        if not df.empty:
-            # 标准化列名
-            df = self._standardize_columns(df)
-            # 写入统一缓存
+            # 成功：写入缓存并返回
             self._cache.set(std_symbol, df, freq="daily")
-            logger.info(f"数据获取成功: {std_symbol}, {len(df)}条记录")
+            logger.info(f"数据获取成功: {std_symbol}, {len(df)}条记录 (源={src.name})")
+            # 按日期范围过滤返回
+            if "date" in df.columns:
+                df = df[
+                    (df["date"] >= pd.to_datetime(start_date))
+                    & (df["date"] <= pd.to_datetime(end_date))
+                ].reset_index(drop=True)
+            return df
 
-        # 按日期范围过滤返回
-        if not df.empty and "date" in df.columns:
-            df = df[
-                (df["date"] >= pd.to_datetime(start_date))
-                & (df["date"] <= pd.to_datetime(end_date))
-            ].reset_index(drop=True)
-
-        # 失败显式化（L5a）：双源均不可用/失败，绝不静默返回空 DF（SDD：禁止伪造完成结果）
-        if df.empty:
-            if not self._tushare_available and not self._akshare_available:
-                raise ValueError(
-                    f"数据源获取失败：tushare 与 akshare 均未配置/不可用，"
-                    f"无法获取 {symbol} 的行情数据。请先配置数据源后重试。"
-                )
-            raise ValueError(
-                f"数据源获取失败：tushare 与 akshare 均未能返回 {symbol} "
-                f"({start_date}~{end_date}) 的有效行情数据"
-                f"（可能数据源连接失败、接口异常或该标的无数据）。"
-            )
-
-        return df
-
-    def _fetch_daily_tushare(
-        self,
-        symbol: str,
-        start_date: str,
-        end_date: str,
-    ) -> pd.DataFrame:
-        """通过tushare获取日线数据"""
-        try:
-            assert self._tushare_pro is not None
-            # tushare使用带后缀的代码
-            ts_symbol = self._to_tushare_symbol(symbol)
-            df = self._tushare_pro.daily(
-                ts_code=ts_symbol,
-                start_date=start_date.replace("-", ""),
-                end_date=end_date.replace("-", ""),
-            )
-            if df is not None and not df.empty:
-                df = df.rename(columns={
-                    "trade_date": "date",
-                    "vol": "volume",
-                })
-                df["date"] = pd.to_datetime(df["date"])
-                df = df.sort_values("date").reset_index(drop=True)
-            return df or pd.DataFrame()
-        except Exception as e:
-            logger.error(f"Tushare获取日线失败: {e}")
-            return pd.DataFrame()
-
-    def _fetch_daily_akshare(
-        self,
-        symbol: str,
-        start_date: str,
-        end_date: str,
-    ) -> pd.DataFrame:
-        """通过akshare获取日线数据"""
-        try:
-            import akshare as ak
-
-            # akshare使用纯数字代码
-            ak_symbol = self._to_akshare_symbol(symbol)
-            df = ak.stock_zh_a_hist(
-                symbol=ak_symbol,
-                period="daily",
-                start_date=start_date.replace("-", ""),
-                end_date=end_date.replace("-", ""),
-                adjust=self.adjust,  # 复权方式配置化（qfq/hfq/空）
-            )
-            if df is not None and not df.empty:
-                # akshare列名: 日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
-                df = df.rename(columns={
-                    "日期": "date",
-                    "开盘": "open",
-                    "收盘": "close",
-                    "最高": "high",
-                    "最低": "low",
-                    "成交量": "volume",
-                    "成交额": "amount",
-                    "涨跌幅": "change_pct",
-                    "换手率": "turnover",
-                })
-                df["date"] = pd.to_datetime(df["date"])
-                df = df.sort_values("date").reset_index(drop=True)
-            return df or pd.DataFrame()
-        except Exception as e:
-            logger.error(f"AkShare获取日线失败: {e}")
-            return pd.DataFrame()
+        # 失败显式化（L5a）：所有数据源均失败，绝不静默返回空 DF（SDD：禁止伪造完成结果）
+        raise ValueError(
+            f"数据源获取失败：{symbol} ({start_date}~{end_date}) 的所有数据源均未能返回有效行情。"
+            f"尝试源: {[s.name for s in self._sources]}；详情: {'；'.join(errors)}"
+        )
 
     def get_minute(
         self,
@@ -294,7 +213,8 @@ class DataFetcher:
                     })
                     df["datetime"] = pd.to_datetime(df["datetime"])
                     df = df.sort_values("datetime").reset_index(drop=True)
-                return df or pd.DataFrame()
+                # 勿用 `df or pd.DataFrame()`（多行 DataFrame bool 求值抛 ValueError 被误吞）
+                return df if (df is not None and len(df) > 0) else pd.DataFrame()
             except Exception as e:
                 logger.error(f"AkShare获取分钟线失败: {e}")
 
@@ -551,6 +471,7 @@ class DataFetcher:
         # 数据源未提供 pre_close 时，用前一根 close 填充
         if "pre_close" not in df.columns:
             df["pre_close"] = df["close"].shift(1)
-        df["pre_close"] = df["pre_close"].fillna(method="bfill").fillna(df["close"])
+        # 注意：pandas 2.x 已移除 fillna(method=...) 参数，用 bfill() 等价替代
+        df["pre_close"] = df["pre_close"].bfill().fillna(df["close"])
 
         return df

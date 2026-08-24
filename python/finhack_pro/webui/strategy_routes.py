@@ -863,8 +863,16 @@ async def test_strategy(request: StrategyTestRequest):
         import asyncio
 
         def _fetch():
+            from finhack_pro.config import get_config
             from finhack_pro.data.fetcher import DataFetcher
-            fetcher = DataFetcher()
+            cfg = get_config()
+            fetcher = DataFetcher(
+                source=cfg.data.source,
+                tushare_token=cfg.data.tushare_token,
+                cache_dir=cfg.data.cache_dir,
+                sources=cfg.data.sources or None,
+                custom_source=cfg.data.custom_source,
+            )
             df = fetcher.get_daily(symbol=symbol, start_date=start_date, end_date=end_date)
             return df
 

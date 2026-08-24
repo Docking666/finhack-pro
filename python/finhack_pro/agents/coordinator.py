@@ -1473,6 +1473,8 @@ class AgentCoordinator:
             source=data_cfg.get("source", "akshare"),
             tushare_token=data_cfg.get("tushare_token", "") or "",
             cache_dir=data_cfg.get("cache_dir", "data/cache"),
+            sources=data_cfg.get("sources") or None,
+            custom_source=data_cfg.get("custom_source", "") or "",
         )
         end_date = _dt.date.today().strftime("%Y-%m-%d")
         start_date = (_dt.date.today() - _dt.timedelta(days=180)).strftime("%Y-%m-%d")

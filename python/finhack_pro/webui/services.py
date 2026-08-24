@@ -512,12 +512,14 @@ class BacktestService:
             from finhack_pro.data.fetcher import DataFetcher
             from finhack_pro.strategies.dual_thrust import DualThrustStrategy
 
-            # 获取市场数据（使用配置的数据源：akshare 失败可 fallback tushare）
+            # 获取市场数据（使用配置的数据源链：可插拔多源，失败真实回退）
             cfg = get_config()
             fetcher = DataFetcher(
                 source=cfg.data.source,
                 tushare_token=cfg.data.tushare_token,
                 cache_dir=cfg.data.cache_dir,
+                sources=cfg.data.sources or None,
+                custom_source=cfg.data.custom_source,
             )
             symbol = request.symbols[0] if request.symbols else "000001.SZ"
             

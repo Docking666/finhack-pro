@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 from loguru import logger
@@ -89,12 +89,20 @@ PROVIDER_PRESETS: Dict[str, Dict[str, str]] = {
 
 
 class DataConfig(BaseModel):
-    """数据源配置"""
-    source: str = "akshare"  # akshare / tushare
+    """数据源配置（可插拔多源架构，v2.3.6）
+
+    source / tushare_token / cache_dir 为兼容旧配置；
+    sources 提供显式源优先级列表（如 [akshare_tx, baostock, tushare]），
+    custom_source 提供用户自定义源（如 "my_module.MyDataSource"）。
+    """
+    source: str = "akshare"  # akshare / tushare（legacy，未提供 sources 时映射为多源链）
     tushare_token: str = ""
     cache_dir: str = "data/cache"
     default_start: str = "2020-01-01"
     default_end: str = "2024-12-31"
+    akshare_hist_api: str = "tx"  # akshare 日线端点：tx=腾讯证券(默认，绕开东财封锁) / em=东方财富
+    sources: List[str] = []       # 显式数据源优先级列表
+    custom_source: str = ""       # 用户自定义数据源类（须继承 BaseDataSource）
 
 
 class BacktestConfig(BaseModel):
