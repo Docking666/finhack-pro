@@ -98,6 +98,11 @@ class TestDebateContextThinking:
 
         llm.chat = AsyncMock(side_effect=_fake_chat)
         llm._extract_json = MagicMock(side_effect=lambda t: json.loads(t))
+        # mock LLM 返回真实结构对象（SDD：不依赖 fallback 兜底）
+        from finhack_pro.agents.strategy_generator import SignalDirection, StrategySignal
+        llm.chat_structured = AsyncMock(return_value=StrategySignal(
+            symbol="600519.SH", direction=SignalDirection.BUY, confidence=0.7,
+        ))
         agent._llm = llm
 
         report = _make_market_report()

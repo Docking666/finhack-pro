@@ -310,11 +310,11 @@ class RiskManagerAgent(BaseAgent):
 
         except Exception as e:
             self._logger.error(f"LLM风控评估失败: {e}")
-            # 规则引擎通过则默认通过
+            # fail-closed：LLM 评估失败采用保守策略，拒绝交易（非伪造数据）
             return RiskDecision(
-                approved=rule_result["passed"],
-                risk_alerts=rule_result["reasons"],
-                reasoning=f"LLM评估失败，使用规则引擎结果: {e}",
+                approved=False,
+                risk_alerts=[f"LLM评估失败，保守拒绝: {e}"],
+                reasoning="LLM评估失败，采用保守策略拒绝交易",
                 original_signal=signal.model_dump(),
             )
 

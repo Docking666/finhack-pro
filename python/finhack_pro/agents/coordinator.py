@@ -906,8 +906,9 @@ class AgentCoordinator:
                 for s in _PENDING
             ]
 
-            # 收集结果，单个任务失败不影响其他
+            # 收集结果，记录失败任务（失败不吞异常，真实传播）
             analysis_results = {}
+            step_errors: Dict[str, str] = {}
             for task in analysis_tasks:
                 try:
                     report = await task
@@ -915,6 +916,16 @@ class AgentCoordinator:
                 except Exception as e:
                     self._logger.error(f"分析任务 [{task.get_name()}] 失败: {e}")
                     analysis_results[task.get_name()] = None
+                    step_errors[task.get_name()] = str(e)
+
+            # Phase1 任一分析步骤失败 → 流水线整体失败并终止（决策#1：失败即终止）
+            if step_errors:
+                error_msg = "分析步骤失败: " + "; ".join(step_errors.values())
+                self._logger.error(f"[Pipeline {run_id}] {error_msg}")
+                result["error"] = error_msg
+                result["step_errors"] = step_errors
+                self._save_pipeline_state(run_id, "failed")
+                return result
 
             # 已完成步骤（恢复）从 JSON 重建，未完成的用本次结果
             analysis_report = analysis_results.get("market")
@@ -1124,6 +1135,8 @@ class AgentCoordinator:
         except Exception as e:
             self._logger.error(f"分析流水线异常: {e}", exc_info=True)
             result["error"] = str(e)
+            # 异常即失败：落盘 failed 状态，避免 pipeline_state.json 卡在 running
+            self._save_pipeline_state(run_id, "failed")
 
             # 记录异常到共享记忆
             await self.shared_memory.store(
@@ -1399,41 +1412,69 @@ class AgentCoordinator:
 
     @staticmethod
     def _df_to_market_data(df: Any) -> Dict[str, Any]:
-        """将DataFrame转换为市场数据字典
+        """将DataFrame转换为市场数据字典（使用真实价格，不伪造零值）
 
         Args:
-            df: pandas DataFrame
+            df: pandas DataFrame（须含 date/open/high/low/close/volume 列）
 
         Returns:
             市场数据字典
+
+        Raises:
+            ValueError: 数据为空或缺失必要列时抛出，交由上层真实失败（不静默返回 {}）
         """
-        try:
-            import pandas as pd
+        import pandas as pd
 
-            recent_bars = []
-            for _, row in df.tail(10).iterrows():
-                bar = {
-                    "date": str(row.get("date", row.name)),
-                    "open": float(row.get("open", 0)),
-                    "high": float(row.get("high", 0)),
-                    "low": float(row.get("low", 0)),
-                    "close": float(row.get("close", 0)),
-                    "volume": float(row.get("volume", 0)),
-                }
-                recent_bars.append(bar)
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            raise ValueError("市场数据为空，无法转换为分析上下文")
 
-            last = df.iloc[-1]
-            prev = df.iloc[-2] if len(df) >= 2 else last
-            current = {
-                "close": float(last.get("close", 0)),
-                "change_pct": float(
-                    (last.get("close", 0) - prev.get("close", 0))
-                    / max(prev.get("close", 1), 0.01)
-                    * 100
-                ),
+        required = ["date", "open", "high", "low", "close", "volume"]
+        missing = [c for c in required if c not in df.columns]
+        if missing:
+            raise ValueError(f"市场数据缺失必要列: {missing}（无法继续分析）")
+
+        recent_bars = []
+        for _, row in df.tail(10).iterrows():
+            bar = {
+                "date": str(row["date"]),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": float(row["volume"]),
             }
+            recent_bars.append(bar)
 
-            return {"recent_bars": recent_bars, "current": current}
+        last = df.iloc[-1]
+        prev = df.iloc[-2] if len(df) >= 2 else last
+        prev_close = float(prev["close"])
+        current = {
+            "close": float(last["close"]),
+            "change_pct": float(
+                (float(last["close"]) - prev_close) / max(prev_close, 0.01) * 100
+            ),
+        }
 
-        except Exception:
-            return {}
+        return {"recent_bars": recent_bars, "current": current}
+
+    def _fetch_real_market_data(self, symbol: str) -> Dict[str, Any]:
+        """L5d：从配置的数据源真实拉取行情并转换为分析上下文。
+
+        数据源连接/获取失败会直接抛出（不伪造空行情），交由上层标为流水线失败。
+        注：实时 WebUI 入口在 WebUIService.run_pipeline 中调用本方法取数后传入，
+        避免在单元测试（无数据源配置）下触发隐式联网。
+        """
+        import datetime as _dt
+
+        from finhack_pro.data.fetcher import DataFetcher
+
+        data_cfg = (self.config or {}).get("data", {})
+        fetcher = DataFetcher(
+            source=data_cfg.get("source", "akshare"),
+            tushare_token=data_cfg.get("tushare_token", "") or "",
+            cache_dir=data_cfg.get("cache_dir", "data/cache"),
+        )
+        end_date = _dt.date.today().strftime("%Y-%m-%d")
+        start_date = (_dt.date.today() - _dt.timedelta(days=180)).strftime("%Y-%m-%d")
+        df = fetcher.get_daily(symbol=symbol, start_date=start_date, end_date=end_date)
+        return self._df_to_market_data(df)

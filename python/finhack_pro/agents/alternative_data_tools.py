@@ -156,18 +156,10 @@ class FetchExchangeNoticesTool(BaseTool):
                             "source": "exchange",
                         }
                         notices.append(notice)
-            except Exception:
-                # 如果个股接口失败，返回模拟数据结构
-                notices = [
-                    {
-                        "id": "notice_001",
-                        "title": f"{symbol} 公告数据接口待配置",
-                        "type": "system",
-                        "publish_time": datetime.now().isoformat(),
-                        "content": "请配置tushare token或akshare以获取完整公告数据",
-                        "source": "system",
-                    }
-                ]
+            except Exception as e:
+                # 接口调用失败：诚实返回空公告，不伪造模拟数据
+                logger.warning(f"个股公告接口调用失败: {e}")
+                notices = []
             
             return {
                 "symbol": symbol,

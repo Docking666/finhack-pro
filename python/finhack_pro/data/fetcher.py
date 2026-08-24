@@ -164,6 +164,19 @@ class DataFetcher:
                 & (df["date"] <= pd.to_datetime(end_date))
             ].reset_index(drop=True)
 
+        # 失败显式化（L5a）：双源均不可用/失败，绝不静默返回空 DF（SDD：禁止伪造完成结果）
+        if df.empty:
+            if not self._tushare_available and not self._akshare_available:
+                raise ValueError(
+                    f"数据源获取失败：tushare 与 akshare 均未配置/不可用，"
+                    f"无法获取 {symbol} 的行情数据。请先配置数据源后重试。"
+                )
+            raise ValueError(
+                f"数据源获取失败：tushare 与 akshare 均未能返回 {symbol} "
+                f"({start_date}~{end_date}) 的有效行情数据"
+                f"（可能数据源连接失败、接口异常或该标的无数据）。"
+            )
+
         return df
 
     def _fetch_daily_tushare(
@@ -526,11 +539,13 @@ class DataFetcher:
         }
         df = df.rename(columns={k: v for k, v in column_map.items() if k in df.columns})
 
-        # 确保必要列存在
+        # 必要列校验（L5b）：缺失即真实失败，不伪造零值价格
         required = ["date", "open", "high", "low", "close", "volume"]
-        for col in required:
-            if col not in df.columns:
-                df[col] = 0.0
+        missing = [col for col in required if col not in df.columns]
+        if missing:
+            raise ValueError(
+                f"数据缺失必要列: {missing}（数据源返回结构异常，无法继续分析）"
+            )
 
         # 派生昨收列（供涨跌停撮合约束使用）：
         # 数据源未提供 pre_close 时，用前一根 close 填充

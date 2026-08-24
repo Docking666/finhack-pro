@@ -471,11 +471,7 @@ class MicroEventAgent(BaseAgent):
             return report
         except Exception as e:
             self._logger.error(f"生成事件报告失败: {e}")
-            return MicroEventReport(
-                symbol=symbol,
-                summary=f"分析失败: {str(e)}",
-                events_count=len(events),
-            )
+            raise
     
     # ============================================================
     # 辅助方法

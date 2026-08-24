@@ -816,6 +816,12 @@ class AgentService:
             try:
                 logger.info(f"[Pipeline {run_id}] 开始执行真实分析流水线: {request.symbol}")
 
+                # L5d：前端仅传 symbol 时 market_data=None，此处真实取数。
+                # 数据源连接/获取失败会直接抛出，由下方 except 标为流水线失败（不盲跑、不伪造）。
+                if request.market_data is None:
+                    request.market_data = self._coordinator._fetch_real_market_data(request.symbol)
+                    request.indicators = request.indicators or {}
+
                 # 真正调用coordinator的分析流水线（透传市场数据与 run_id/resume）
                 pipeline_result = await self._coordinator.run_analysis_pipeline(
                     symbol=request.symbol,
@@ -889,7 +895,7 @@ class AgentService:
                         step_result.summary = f"{step_name} 跳过(信号为HOLD或前置步骤无结果)"
                         logger.info(f"[Pipeline {run_id}] Step {step_num}/7 {step_name} 跳过")
 
-                # 设置最终信号
+                # 设置最终信号（仅在流水线真实产出信号时填充，禁止伪造 hold/0.5）
                 signal_data = pipeline_result.get("signal")
                 if signal_data:
                     result.final_signal = {
@@ -898,15 +904,30 @@ class AgentService:
                         "reason": signal_data.get("reasoning", ""),
                     }
                 else:
-                    result.final_signal = {
-                        "direction": "hold",
-                        "confidence": 0.5,
-                        "reason": "无明确信号",
-                    }
+                    result.final_signal = None
 
-                result.status = "completed"
+                # 真实映射流水线状态：coordinator 返回 error 即失败（失败即终止，不伪造完成）
+                if pipeline_result.get("error"):
+                    result.status = "failed"
+                    result.error = pipeline_result["error"]
+                    if not any(s.status == "failed" for s in result.steps):
+                        result.steps.append(PipelineStepResult(
+                            step=len(result.steps) + 1,
+                            agent_name="流水线",
+                            status="failed",
+                            duration_ms=0,
+                            summary=f"分析失败: {pipeline_result['error'][:200]}",
+                        ))
+                    if stream_callback:
+                        await stream_callback({
+                            "type": "pipeline_error",
+                            "run_id": run_id,
+                            "error": pipeline_result["error"],
+                        })
+                else:
+                    result.status = "completed"
                 result.end_time = datetime.now().isoformat()
-                logger.info(f"[Pipeline {run_id}] 流水线完成: {result.final_signal}")
+                logger.info(f"[Pipeline {run_id}] 流水线状态: {result.status}, final_signal={result.final_signal}")
 
             except Exception as e:
                 result.status = "failed"

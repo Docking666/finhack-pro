@@ -735,7 +735,11 @@ async def generate_strategy(request: StrategyGenerateRequest):
 
         return APIResponse(message="策略生成成功", data=result)
     except ValueError as e:
-        return APIResponse(message="策略已生成但格式解析失败", data={"raw_response": response, "validation": {"valid": False, "message": str(e)}})
+        return APIResponse(
+            success=False,
+            message="策略生成失败：LLM 返回格式无法解析，请重试或调整描述",
+            data={"raw_response": response, "validation": {"valid": False, "message": str(e)}},
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -770,7 +774,11 @@ async def generate_factor(request: FactorGenerateRequest):
         result["validation"] = {"valid": valid, "message": msg}
         return APIResponse(message="因子生成成功", data=result)
     except ValueError as e:
-        return APIResponse(message="因子已生成但格式解析失败", data={"raw_response": response, "validation": {"valid": False, "message": str(e)}})
+        return APIResponse(
+            success=False,
+            message="因子生成失败：LLM 返回格式无法解析，请重试或调整描述",
+            data={"raw_response": response, "validation": {"valid": False, "message": str(e)}},
+        )
     except HTTPException:
         raise
     except Exception as e:

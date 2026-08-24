@@ -353,13 +353,5 @@ class TradeExecutorAgent(BaseAgent):
             return report
         except Exception as e:
             self._logger.error(f"LLM执行优化失败: {e}")
-            return ExecutionReport(
-                order_id=order_id,
-                symbol=signal.symbol,
-                side=side,
-                price=price,
-                volume=volume,
-                algorithm=algorithm,
-                status="pending",
-                error_message=f"LLM执行优化失败: {e}",
-            )
+            # fail-closed：实际执行路径下 LLM 优化失败则真实报错，不伪造 pending 报告
+            raise

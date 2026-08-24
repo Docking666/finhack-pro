@@ -376,7 +376,7 @@ class SearchNewsTool(BaseTool):
         days = kwargs.get("days", 7)
         sentiment = kwargs.get("sentiment_filter", "all")
 
-        # 模拟新闻搜索结果(实际应接入新闻API)
+        # 新闻搜索：数据源未配置时诚实返回空结果（非模拟数据）
         return {
             "keyword": keyword,
             "days": days,
@@ -464,7 +464,7 @@ class FetchFundamentalTool(BaseTool):
         symbol = kwargs["symbol"]
         data_type = kwargs.get("data_type", "valuation")
 
-        # 模拟基本面数据(实际应接入tushare/akshare基本面接口)
+        # 基本面数据：数据源未配置时诚实返回空结果（非模拟数据）
         return {
             "symbol": symbol,
             "data_type": data_type,

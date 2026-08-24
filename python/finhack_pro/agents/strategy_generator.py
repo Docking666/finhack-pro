@@ -263,13 +263,7 @@ class StrategyGeneratorAgent(BaseAgent):
 
         except Exception as e:
             self._logger.error(f"策略生成失败: {e}")
-            return StrategySignal(
-                symbol=analysis.symbol,
-                direction=SignalDirection.HOLD,
-                confidence=0.0,
-                reasoning=f"策略生成失败: {e}",
-                strategy_type="none",
-            )
+            raise
 
     def _build_strategy_context(
         self,
@@ -514,11 +508,8 @@ class StrategyGeneratorAgent(BaseAgent):
                 conclusion=debate_data.get("conclusion", ""),
             )
         except Exception as e:
-            self._logger.warning(f"[{symbol}] 裁判结果解析失败，使用默认辩论结果: {e}")
-            debate_result = BullBearDebateResult(
-                symbol=symbol,
-                conclusion=f"裁判解析失败: {e}",
-            )
+            self._logger.error(f"[{symbol}] 裁判结果解析失败: {e}")
+            raise ValueError(f"裁判结果解析失败: {e}") from e
 
         self._logger.info(
             f"[{symbol}] 多空辩论完成: consensus={debate_result.consensus}, "
@@ -576,20 +567,4 @@ class StrategyGeneratorAgent(BaseAgent):
             return signal
         except Exception as e:
             self._logger.error(f"[{symbol}] 辩论后策略生成失败: {e}")
-            # 兜底：根据辩论共识生成简单信号
-            direction = SignalDirection.HOLD
-            if debate_result.consensus == "bullish" and debate_result.confidence >= 0.6:
-                direction = SignalDirection.BUY
-            elif debate_result.consensus == "bearish" and debate_result.confidence >= 0.6:
-                direction = SignalDirection.SELL
-            return StrategySignal(
-                symbol=symbol,
-                direction=direction,
-                confidence=debate_result.confidence,
-                reasoning=(
-                    f"多空辩论结论: {debate_result.conclusion} "
-                    f"(bull={debate_result.bull_strength:.2f}, "
-                    f"bear={debate_result.bear_strength:.2f})"
-                ),
-                strategy_type="debate_fallback",
-            )
+            raise

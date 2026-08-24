@@ -591,12 +591,13 @@ class LLMClient:
         data: Any,
         response_model: Type[T],
     ) -> Any:
-        """兜底补全必填字段
+        """兜底补全必填字段（仅同义字段推断，不伪造）
 
         某些 LLM（如 DeepSeek）在 json_object 模式下会省略必填字段
-        （如 symbol），导致 Pydantic 校验失败。这里从 LLM 输出中
-        可能存在的零散字段（如 "股票代码"、"symbol" 别名）推断，
-        或从已有数据补 default。若无法补全返回 None。
+        （如 symbol），导致 Pydantic 校验失败。这里仅从 LLM 输出中
+        可能存在的零散字段（如 "股票代码"、"symbol" 别名）推断真实值。
+        无法从真实上下文补全的字段保持缺失，交由校验失败抛错，
+        绝不填充零值/空值/默认值伪装完整报告。若无法补全返回 None。
         """
         if not isinstance(data, dict):
             return None
@@ -630,28 +631,11 @@ class LLMClient:
                     data[field] = found
                     filled = True
                     continue
-                # 使用默认值（若模型字段有默认值）
-                default_val = props.get(field, {}).get("default")
-                if default_val is not None:
-                    data[field] = default_val
-                    filled = True
-                    continue
-                # 类型默认值兜底
-                type_map = {
-                    "string": "",
-                    "integer": 0,
-                    "number": 0.0,
-                    "boolean": False,
-                    "array": [],
-                    "object": {},
-                }
-                json_type = props.get(field, {}).get("type")
-                if json_type in type_map:
-                    data[field] = type_map[json_type]
-                    filled = True
+                # 无法从真实上下文补全的必填字段：保留缺失，交由 Pydantic 校验失败抛错。
+                # 不填充零值/空值/默认值——避免把残缺响应伪装成完整报告（SDD：禁止伪造）。
             if filled:
                 return data
-            return data if filled else None
+            return None
         except Exception:
             return None
 

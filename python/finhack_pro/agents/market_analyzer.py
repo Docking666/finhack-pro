@@ -195,17 +195,7 @@ class MarketAnalyzerAgent(BaseAgent):
 
         except Exception as e:
             self._logger.error(f"市场分析失败: {e}")
-            # 返回默认报告
-            return MarketAnalysisReport(
-                symbol=symbol,
-                market_state=MarketState.SIDEWAYS,
-                trend_direction=TrendDirection.FLAT,
-                confidence=0.0,
-                key_factors=["分析失败，使用默认值"],
-                risk_level=RiskLevel.HIGH,
-                suggestion="分析服务异常，建议暂停交易",
-                technical_summary=f"分析失败: {e}",
-            )
+            raise
 
     def _build_analysis_context(
         self,

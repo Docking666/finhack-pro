@@ -1436,12 +1436,14 @@ function workshopPage() {
                     market: this.strategyForm.market,
                     style: this.strategyForm.style,
                     risk_level: this.strategyForm.risk_level,
-                    instrument: this.strategyForm.instrument,
+                    instruments: this.strategyForm.instrument,
                 });
 
                 if (resp.success) {
                     this.strategyResult = resp.data;
                     window.__alpineApp.showToast('策略生成成功', 'success');
+                } else {
+                    window.__alpineApp.showToast(resp.message || '策略生成失败', 'error');
                 }
             } catch (e) {
                 window.__alpineApp.showToast('策略生成失败: ' + e.message, 'error');

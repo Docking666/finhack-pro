@@ -165,6 +165,11 @@ class TestStrategyGeneratorDebate:
         })
         llm.chat = AsyncMock(side_effect=["多头论点", "空头论点", judge_json])
         llm._extract_json = MagicMock(side_effect=lambda t: json.loads(t))
+        # mock LLM 返回真实结构对象（SDD：不依赖 fallback 兜底）
+        from finhack_pro.agents.strategy_generator import SignalDirection, StrategySignal
+        llm.chat_structured = AsyncMock(return_value=StrategySignal(
+            symbol="600519.SH", direction=SignalDirection.BUY, confidence=0.7,
+        ))
         agent._llm = llm
 
         report = MarketAnalysisReport(

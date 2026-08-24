@@ -274,10 +274,7 @@ class NewsAnalystAgent(BaseAgent):
 
         except Exception as e:
             self._logger.error(f"新闻分析失败: {e}")
-            return NewsAnalysisReport(
-                symbol=symbol,
-                summary=f"分析失败: {str(e)}",
-            )
+            raise
 
     async def _handle_analysis_request(self, message: AgentMessage) -> Optional[AgentMessage]:
         """处理分析请求消息"""
