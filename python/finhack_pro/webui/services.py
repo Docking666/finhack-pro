@@ -519,10 +519,9 @@ class BacktestService:
         try:
             logger.info(f"[Backtest {task_id}] 开始执行真实回测: {request.symbols}")
 
-            # 导入回测引擎和策略
+            # 导入回测引擎
             from finhack_pro.backtest.runner import BacktestRunner
             from finhack_pro.data.fetcher import DataFetcher
-            from finhack_pro.strategies.dual_thrust import DualThrustStrategy
 
             # 获取市场数据（使用配置的数据源链：可插拔多源，失败真实回退）
             cfg = get_config()
@@ -563,8 +562,8 @@ class BacktestService:
                     "message": f"获取到 {len(data)} 条数据，准备回测...",
                 })
 
-            # 创建策略实例
-            strategy = DualThrustStrategy()
+            # 创建策略实例（内置或工坊保存的自有策略，见 BacktestRunner.load_strategy）
+            strategy = BacktestRunner.load_strategy(request.strategy)
             if request.strategy_params:
                 for key, value in request.strategy_params.items():
                     if hasattr(strategy, key):
@@ -581,9 +580,25 @@ class BacktestService:
                     "message": "正在执行回测计算...",
                 })
 
-            # 执行回测
+            # 执行回测（progress_callback 实时推送进度，供面板实时展示）
             import asyncio
             loop = asyncio.get_event_loop()
+
+            def _on_progress(progress: int, current_bar: str) -> None:
+                async def _push() -> None:
+                    if stream_callback:
+                        await stream_callback({
+                            "type": "backtest_progress",
+                            "task_id": task_id,
+                            "progress": progress,
+                            "current_bar": current_bar,
+                            "message": f"回测中: {current_bar} ({progress}%)",
+                        })
+                try:
+                    asyncio.run_coroutine_threadsafe(_push(), loop)
+                except Exception:
+                    pass
+
             backtest_result = await loop.run_in_executor(
                 None,
                 lambda: runner.run(
@@ -594,6 +609,7 @@ class BacktestService:
                     commission_rate=request.commission_rate,
                     stamp_tax_rate=request.stamp_tax_rate,
                     slippage=request.slippage,
+                    progress_callback=_on_progress,
                 )
             )
 
@@ -680,7 +696,7 @@ class BacktestService:
             self._history.append({
                 "task_id": task_id,
                 "symbol": ", ".join(request.symbols),
-                "strategy": request.strategy.value,
+                "strategy": request.strategy,
                 "start_date": request.start_date,
                 "end_date": request.end_date,
                 "total_return": metrics.total_return,

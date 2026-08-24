@@ -159,7 +159,7 @@ class DataSourceTestResult(BaseModel):
 # ============================================================
 
 class BacktestStrategy(str, Enum):
-    """回测策略类型"""
+    """回测策略类型（内置）"""
     DUAL_THRUST = "dual_thrust"
     MOMENTUM = "momentum"
     MEAN_REVERSION = "mean_reversion"
@@ -167,7 +167,7 @@ class BacktestStrategy(str, Enum):
 
 class BacktestRequest(BaseModel):
     """回测请求"""
-    strategy: BacktestStrategy = BacktestStrategy.DUAL_THRUST
+    strategy: str = BacktestStrategy.DUAL_THRUST.value  # 内置名或自定义策略ID（data/generated_strategies/）
     symbols: List[str] = Field(..., description="标的代码列表")
     start_date: str = Field(..., description="开始日期 YYYY-MM-DD")
     end_date: str = Field(..., description="结束日期 YYYY-MM-DD")

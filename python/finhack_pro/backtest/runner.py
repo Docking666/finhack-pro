@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -142,6 +142,7 @@ class BacktestRunner:
         stamp_tax_rate: float = 0.001,
         slippage: float = 0.001,
         params: Optional[Dict[str, Any]] = None,
+        progress_callback: Optional[Callable[[int, str], None]] = None,
     ) -> BacktestResult:
         """运行回测
 
@@ -178,6 +179,7 @@ class BacktestRunner:
             stamp_tax_rate=stamp_tax_rate,
             slippage=slippage,
             params=params,
+            progress_callback=progress_callback,
         )
 
     def _run_python_backtest(
@@ -190,6 +192,7 @@ class BacktestRunner:
         stamp_tax_rate: float,
         slippage: float,
         params: Optional[Dict[str, Any]],
+        progress_callback: Optional[Callable[[int, str], None]] = None,
     ) -> BacktestResult:
         """纯Python回测引擎
 
@@ -229,10 +232,15 @@ class BacktestRunner:
         prev_value = initial_capital
 
         # 逐K线回测
+        total_bars = len(data)
+        progress_step = max(total_bars // 100, 1)  # 每 1% 回调一次进度
         for idx, row in data.iterrows():
             bar_date = row["date"]
             if isinstance(bar_date, str):
                 bar_date = pd.to_datetime(bar_date)
+
+            if progress_callback and idx % progress_step == 0:
+                progress_callback(int(idx / total_bars * 100), str(bar_date))
 
             bar = BarData(
                 symbol=symbol,
@@ -476,16 +484,17 @@ class BacktestRunner:
 
     @staticmethod
     def load_strategy(name: str) -> BaseStrategy:
-        """加载策略实例
+        """加载策略实例（内置或工坊保存的自有策略）
 
         Args:
-            name: 策略名称
+            name: 策略名称。内置（dual_thrust/momentum/mean_reversion/ml_strategy）
+                  或 data/generated_strategies/{name}/ 下工坊保存的策略（strategy.py）
 
         Returns:
             策略实例
 
         Raises:
-            ValueError: 未知策略名称
+            ValueError: 未知策略或自定义策略加载失败
         """
         strategies: Dict[str, type] = {
             "dual_thrust": __import__(
@@ -503,9 +512,35 @@ class BacktestRunner:
         }
 
         strategy_cls = strategies.get(name.lower())
-        if not strategy_cls:
-            raise ValueError(
-                f"未知策略: {name}, 可用策略: {list(strategies.keys())}"
-            )
+        if strategy_cls:
+            return strategy_cls()
 
-        return strategy_cls()
+        # 自定义策略：工坊保存到 data/generated_strategies/{name}/strategy.py
+        # （生成代码继承 BaseStrategy 并实现 on_bar，与内置策略接口一致）
+        gen_dir = Path("data/generated_strategies") / name
+        strategy_file = gen_dir / "strategy.py"
+        if strategy_file.exists():
+            namespace: Dict[str, Any] = {}
+            try:
+                code = strategy_file.read_text(encoding="utf-8")
+                exec(compile(code, str(strategy_file), "exec"), namespace)
+            except Exception as e:
+                raise ValueError(f"自定义策略 {name} 加载失败: {e}")
+            cls = None
+            for value in namespace.values():
+                if (
+                    isinstance(value, type)
+                    and issubclass(value, BaseStrategy)
+                    and value is not BaseStrategy
+                ):
+                    cls = value
+                    break
+            if cls is None:
+                raise ValueError(f"自定义策略 {name} 未定义 BaseStrategy 子类")
+            logger.info(f"加载自定义策略: {name} -> {cls.__name__}")
+            return cls()
+
+        raise ValueError(
+            f"未知策略: {name}, 可用策略: {list(strategies.keys())}, "
+            f"或 data/generated_strategies/ 下已保存的自有策略"
+        )

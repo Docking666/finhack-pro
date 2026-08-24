@@ -236,6 +236,31 @@ async def reload_agents(request: Request):
 # 回测管理
 # ============================================================
 
+@router.get("/api/backtest/strategies", response_model=APIResponse)
+async def list_backtest_strategies():
+    """回测可用策略列表：内置策略 + 策略工坊保存的自有策略"""
+    from pathlib import Path
+
+    builtin = ["dual_thrust", "momentum", "mean_reversion", "ml_strategy"]
+    custom: list = []
+    gen_dir = Path("data/generated_strategies")
+    if gen_dir.is_dir():
+        for d in sorted(gen_dir.iterdir()):
+            if not (d / "strategy.py").exists():
+                continue
+            label = d.name
+            manifest = d / "manifest.yaml"
+            if manifest.exists():
+                try:
+                    import yaml
+                    m = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+                    label = m.get("strategy_name") or m.get("name") or d.name
+                except Exception:
+                    pass
+            custom.append({"id": d.name, "name": label})
+    return APIResponse(data={"builtin": builtin, "custom": custom})
+
+
 @router.post("/api/backtest/run", response_model=APIResponse)
 async def run_backtest(request: Request, req: BacktestRequest):
     """启动回测任务"""

@@ -125,10 +125,11 @@ class DataFetcher:
         std_symbol = self._standardize_symbol(symbol)
 
         # 统一缓存：DataCache 按 symbol+freq 缓存全量数据，get 时按日期过滤。
-        # 相比旧的"日期入文件名"缓存，命中率大幅提高（不同日期范围共享同一份缓存）。
+        # 缓存命中且过滤后有数据才算命中；过滤后为空（如缓存数据不含请求日期范围）
+        # 视为未命中，必须回源取数——否则会拿"空行情"跑流水线（错误失败，非假数据）。
         if use_cache:
             cached = self._cache.get(std_symbol, start_date, end_date, freq="daily")
-            if cached is not None:
+            if cached is not None and len(cached) > 0:
                 logger.debug(f"缓存命中: {std_symbol} ({start_date}~{end_date})")
                 return cached
 

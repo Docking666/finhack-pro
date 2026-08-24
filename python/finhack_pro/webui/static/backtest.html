@@ -7,9 +7,9 @@
             <div>
                 <label class="block text-xs text-gray-400 mb-1">策略选择</label>
                 <select x-model="params.strategy" class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
-                    <option value="dual_thrust">Dual Thrust</option>
-                    <option value="momentum">动量策略</option>
-                    <option value="mean_reversion">均值回归</option>
+                    <template x-for="s in strategyOptions" :key="s.id">
+                        <option :value="s.id" x-text="s.name"></option>
+                    </template>
                 </select>
             </div>
             <div>

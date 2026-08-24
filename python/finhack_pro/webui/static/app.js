@@ -819,6 +819,7 @@ function backtestPage() {
             end_date: '2024-12-31',
             initial_capital: 1000000,
         },
+        strategyOptions: [],  // 内置 + 工坊自有策略
         running: false,
         progress: 0,
         progressMessage: '',
@@ -833,8 +834,32 @@ function backtestPage() {
 
         async init() {
             window.__backtestPage = this;
-            await this.loadHistory();
+            await Promise.all([this.loadStrategies(), this.loadHistory()]);
             this.$nextTick(() => this.initChart());
+        },
+
+        async loadStrategies() {
+            const BUILTIN_LABELS = {
+                dual_thrust: 'Dual Thrust',
+                momentum: '动量策略',
+                mean_reversion: '均值回归',
+                ml_strategy: 'ML策略',
+            };
+            try {
+                const resp = await API.get('/api/backtest/strategies');
+                if (resp.success && resp.data) {
+                    const opts = [];
+                    for (const id of resp.data.builtin || []) {
+                        opts.push({ id, name: BUILTIN_LABELS[id] || id });
+                    }
+                    for (const s of resp.data.custom || []) {
+                        opts.push({ id: s.id, name: `[自有] ${s.name}` });
+                    }
+                    this.strategyOptions = opts;
+                }
+            } catch (e) {
+                console.error('加载策略列表失败:', e);
+            }
         },
 
         async loadHistory() {
