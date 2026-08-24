@@ -121,8 +121,13 @@ class ConfigUpdate(BaseModel):
 
 
 class ConnectionTestRequest(BaseModel):
-    """API连接测试请求"""
-    provider: str = Field(..., description="测试的服务商: openai / anthropic / tushare")
+    """API连接测试请求（协议驱动，provider 仅回显）
+
+    protocol 决定路由（openai / anthropic，缺省按 openai）；
+    provider 是自由字符串服务商名（deepseek/orca/zhipu/自定义），仅回显不参与路由。
+    """
+    protocol: str = Field("openai", description="连接协议: openai / anthropic，未知按 openai")
+    provider: str = Field(..., description="服务商名称(仅回显，不参与路由)")
     api_key: Optional[str] = None
     base_url: Optional[str] = None
 
@@ -130,6 +135,20 @@ class ConnectionTestRequest(BaseModel):
 class ConnectionTestResult(BaseModel):
     """API连接测试结果"""
     provider: str
+    success: bool
+    message: str
+    latency_ms: float = 0
+
+
+class DataSourceTestRequest(BaseModel):
+    """数据源连接测试请求"""
+    source: str = Field(..., description="数据源: akshare / tushare")
+    tushare_token: Optional[str] = None
+
+
+class DataSourceTestResult(BaseModel):
+    """数据源连接测试结果"""
+    source: str
     success: bool
     message: str
     latency_ms: float = 0

@@ -31,6 +31,7 @@ from finhack_pro.webui.services import (
     AgentService,
     BacktestService,
     ConfigService,
+    DataSourceTester,
     MemoryService,
     StreamService,
 )
@@ -89,6 +90,7 @@ def create_app(config_path: Optional[str] = None) -> FastAPI:
     app.state.agent_service = AgentService()
     app.state.memory_service = MemoryService()
     app.state.stream_service = StreamService()
+    app.state.data_source_tester = DataSourceTester()
     app.state.start_time = time.time()
     app.state.pipeline_results = {}
 

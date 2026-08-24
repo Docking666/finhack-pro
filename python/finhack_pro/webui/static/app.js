@@ -190,8 +190,11 @@ const API = {
     getConfig() { return this.get('/api/config'); },
     getFullConfig() { return this.get('/api/config/full'); },
     updateConfig(data) { return this.put('/api/config', data); },
-    testConnection(provider, apiKey, baseUrl) {
-        return this.post('/api/config/test-connection', { provider, api_key: apiKey, base_url: baseUrl });
+    testConnection(provider, apiKey, baseUrl, protocol) {
+        return this.post('/api/config/test-connection', { provider, api_key: apiKey, base_url: baseUrl, protocol });
+    },
+    testDataSource(source, tushareToken) {
+        return this.post('/api/data/test-connection', { source, tushare_token: tushareToken });
     },
     saveConfig() { return this.post('/api/config/save'); },
 
@@ -511,8 +514,8 @@ function configPage() {
             { name: 'trade_executor', label: '交易执行' },
         ],
         agentConfigs: [],
-        testing: { openai: false, anthropic: false, tushare: false },
-        testResults: { openai: null, anthropic: null, tushare: null },
+        testing: { openai: false, anthropic: false, akshare: false, tushare: false },
+        testResults: { openai: null, anthropic: null, akshare: null, tushare: null },
         saving: false,
         sharing: false,
         shareCode: '',
@@ -612,7 +615,7 @@ function configPage() {
             input.type = input.type === 'password' ? 'text' : 'password';
         },
 
-        async testConnection(provider) {
+        async testConnection(provider, protocol = 'openai') {
             this.testing[provider] = true;
             this.testResults[provider] = null;
             try {
@@ -623,11 +626,9 @@ function configPage() {
                     baseUrl = this.config.llm.openai_base_url;
                 } else if (provider === 'anthropic') {
                     apiKey = this.config.llm.anthropic_api_key;
-                } else if (provider === 'tushare') {
-                    apiKey = this.config.data.tushare_token;
                 }
 
-                const resp = await API.testConnection(provider, apiKey, baseUrl);
+                const resp = await API.testConnection(provider, apiKey, baseUrl, protocol);
                 if (resp.success && resp.data) {
                     this.testResults[provider] = resp.data;
                 } else {
@@ -640,6 +641,24 @@ function configPage() {
                 this.testResults[provider] = { success: false, message: e.message };
             } finally {
                 this.testing[provider] = false;
+            }
+        },
+
+        async testDataSource(source) {
+            this.testing[source] = true;
+            this.testResults[source] = null;
+            try {
+                const token = source === 'tushare' ? this.config.data.tushare_token : null;
+                const resp = await API.testDataSource(source, token);
+                if (resp.success && resp.data) {
+                    this.testResults[source] = resp.data;
+                } else {
+                    this.testResults[source] = { success: false, message: resp.message || '数据源测试失败' };
+                }
+            } catch (e) {
+                this.testResults[source] = { success: false, message: e.message };
+            } finally {
+                this.testing[source] = false;
             }
         },
 

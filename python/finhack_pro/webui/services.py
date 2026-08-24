@@ -10,7 +10,7 @@ import asyncio
 import sys
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
@@ -24,6 +24,7 @@ from finhack_pro.webui.models import (
     BacktestResult,
     BacktestStatus,
     ConnectionTestResult,
+    DataSourceTestResult,
     MemoryEntryResponse,
     MemorySearchRequest,
     MemoryStats,
@@ -129,13 +130,15 @@ class ConfigService:
         provider: str,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        protocol: str = "openai",
     ) -> ConnectionTestResult:
-        """测试API连接
+        """测试API连接（协议驱动）
 
         Args:
-            provider: 服务商名称 (openai / anthropic / tushare)
+            provider: 服务商名称（仅回显，不参与路由）
             api_key: API密钥(可选，为None时使用当前配置)
             base_url: 自定义API地址
+            protocol: 连接协议 openai / anthropic（未知按 openai 处理）
 
         Returns:
             连接测试结果
@@ -143,18 +146,10 @@ class ConfigService:
         start_time = time.time()
 
         try:
-            if provider == "openai":
-                return await self._test_openai(api_key, base_url, start_time)
-            elif provider == "anthropic":
-                return await self._test_anthropic(api_key, start_time)
-            elif provider == "tushare":
-                return await self._test_tushare(api_key, start_time)
-            else:
-                return ConnectionTestResult(
-                    provider=provider,
-                    success=False,
-                    message=f"不支持的服务商: {provider}",
-                )
+            if protocol == "anthropic":
+                return await self._test_anthropic(provider, api_key, base_url, start_time)
+            # 默认 openai 协议：任意 base_url / 未知 provider 均尝试 GET {base_url}/models
+            return await self._test_openai(provider, api_key, base_url, start_time)
         except Exception as e:
             latency = (time.time() - start_time) * 1000
             return ConnectionTestResult(
@@ -165,16 +160,16 @@ class ConfigService:
             )
 
     async def _test_openai(
-        self, api_key: Optional[str], base_url: Optional[str], start_time: float
+        self, provider: str, api_key: Optional[str], base_url: Optional[str], start_time: float
     ) -> ConnectionTestResult:
-        """测试OpenAI连接"""
+        """测试 OpenAI 兼容端点连接（任意服务商，只测 GET /models 不传模型名）"""
         import httpx
 
         key = api_key or self._config.llm.openai_api_key
         url = base_url or self._config.llm.openai_base_url
         if not key:
             return ConnectionTestResult(
-                provider="openai",
+                provider=provider,
                 success=False,
                 message="OpenAI API Key 未配置",
             )
@@ -190,37 +185,39 @@ class ConfigService:
                 models = resp.json().get("data", [])
                 model_names = [m["id"] for m in models[:5]]
                 return ConnectionTestResult(
-                    provider="openai",
+                    provider=provider,
                     success=True,
-                    message=f"连接成功，可用模型: {', '.join(model_names)}",
+                    message=f"{provider} 连接成功，可用模型: {', '.join(model_names)}",
                     latency_ms=round(latency, 2),
                 )
             else:
                 return ConnectionTestResult(
-                    provider="openai",
+                    provider=provider,
                     success=False,
                     message=f"API返回错误: {resp.status_code} {resp.text[:200]}",
                     latency_ms=round(latency, 2),
                 )
 
     async def _test_anthropic(
-        self, api_key: Optional[str], start_time: float
+        self, provider: str, api_key: Optional[str], base_url: Optional[str], start_time: float
     ) -> ConnectionTestResult:
-        """测试Anthropic连接"""
+        """测试 Anthropic 协议连接（支持自定义 base_url）"""
         import httpx
 
         key = api_key or self._config.llm.anthropic_api_key
         if not key:
             return ConnectionTestResult(
-                provider="anthropic",
+                provider=provider,
                 success=False,
                 message="Anthropic API Key 未配置",
             )
 
+        url = self._normalize_anthropic_url(base_url)
+
         # Anthropic没有简单的list models端点，发送一个最小请求测试
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
-                "https://api.anthropic.com/v1/messages",
+                url,
                 headers={
                     "x-api-key": key,
                     "anthropic-version": "2023-06-01",
@@ -236,68 +233,28 @@ class ConfigService:
 
             if resp.status_code == 200:
                 return ConnectionTestResult(
-                    provider="anthropic",
+                    provider=provider,
                     success=True,
-                    message="连接成功",
+                    message=f"{provider} 连接成功",
                     latency_ms=round(latency, 2),
                 )
             else:
                 return ConnectionTestResult(
-                    provider="anthropic",
+                    provider=provider,
                     success=False,
                     message=f"API返回错误: {resp.status_code} {resp.text[:200]}",
                     latency_ms=round(latency, 2),
                 )
 
-    async def _test_tushare(
-        self, api_key: Optional[str], start_time: float
-    ) -> ConnectionTestResult:
-        """测试Tushare连接"""
-        key = api_key or self._config.data.tushare_token
-        if not key:
-            return ConnectionTestResult(
-                provider="tushare",
-                success=False,
-                message="Tushare Token 未配置",
-            )
-
-        try:
-            import tushare as ts
-
-            ts.set_token(key)
-            pro = ts.pro_api()
-            # 获取交易日历测试连接
-            df = pro.trade_cal(exchange="SSE", start_date="20240101", end_date="20240110")
-            latency = (time.time() - start_time) * 1000
-
-            if df is not None and len(df) > 0:
-                return ConnectionTestResult(
-                    provider="tushare",
-                    success=True,
-                    message=f"连接成功，获取到 {len(df)} 条交易日历数据",
-                    latency_ms=round(latency, 2),
-                )
-            else:
-                return ConnectionTestResult(
-                    provider="tushare",
-                    success=False,
-                    message="连接成功但未获取到数据，请检查Token权限",
-                    latency_ms=round(latency, 2),
-                )
-        except ImportError:
-            return ConnectionTestResult(
-                provider="tushare",
-                success=False,
-                message="tushare包未安装，请执行: pip install tushare",
-            )
-        except Exception as e:
-            latency = (time.time() - start_time) * 1000
-            return ConnectionTestResult(
-                provider="tushare",
-                success=False,
-                message=f"Tushare连接失败: {str(e)}",
-                latency_ms=round(latency, 2),
-            )
+    @staticmethod
+    def _normalize_anthropic_url(base_url: Optional[str]) -> str:
+        """归一化 Anthropic base_url 到完整 /v1/messages 端点"""
+        url = (base_url or "https://api.anthropic.com").rstrip("/")
+        if url.endswith("/v1/messages"):
+            return url
+        if url.endswith("/v1"):
+            return f"{url}/messages"
+        return f"{url}/v1/messages"
 
     def _mask_sensitive(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """递归隐藏敏感字段"""
@@ -315,6 +272,147 @@ class ConfigService:
             else:
                 result[key] = value
         return result
+
+
+class DataSourceTester:
+    """数据源连接测试（akshare / tushare）——独立于 LLM 协议测试"""
+
+    def __init__(self, config: Optional[FinhackProConfig] = None):
+        self._config = config or get_config()
+
+    async def test_connection(
+        self,
+        source: str,
+        tushare_token: Optional[str] = None,
+    ) -> DataSourceTestResult:
+        """测试数据源连通性
+
+        Args:
+            source: akshare / tushare
+            tushare_token: tushare token（可选，为None时用当前配置）
+
+        Returns:
+            数据源测试结果
+        """
+        start_time = time.time()
+        try:
+            if source == "tushare":
+                return await self._test_tushare(tushare_token, start_time)
+            if source == "akshare":
+                return await self._test_akshare(start_time)
+            return DataSourceTestResult(
+                source=source,
+                success=False,
+                message=f"不支持的数据源: {source}",
+            )
+        except Exception as e:
+            latency = (time.time() - start_time) * 1000
+            return DataSourceTestResult(
+                source=source,
+                success=False,
+                message=f"连接异常: {str(e)}",
+                latency_ms=round(latency, 2),
+            )
+
+    async def _test_tushare(
+        self, token: Optional[str], start_time: float
+    ) -> DataSourceTestResult:
+        """测试 Tushare 连接（真实 trade_cal 业务调用）"""
+        key = token or self._config.data.tushare_token
+        if not key:
+            return DataSourceTestResult(
+                source="tushare",
+                success=False,
+                message="Tushare Token 未配置",
+            )
+
+        def _probe() -> Any:
+            import tushare as ts
+
+            ts.set_token(key)
+            pro = ts.pro_api()
+            return pro.trade_cal(exchange="SSE", start_date="20240101", end_date="20240110")
+
+        try:
+            df = await asyncio.to_thread(_probe)
+            latency = (time.time() - start_time) * 1000
+
+            if df is not None and len(df) > 0:
+                return DataSourceTestResult(
+                    source="tushare",
+                    success=True,
+                    message=f"连接成功，获取到 {len(df)} 条交易日历数据",
+                    latency_ms=round(latency, 2),
+                )
+            return DataSourceTestResult(
+                source="tushare",
+                success=False,
+                message="连接成功但未获取到数据，请检查Token权限",
+                latency_ms=round(latency, 2),
+            )
+        except ImportError:
+            return DataSourceTestResult(
+                source="tushare",
+                success=False,
+                message="tushare包未安装，请执行: pip install tushare",
+            )
+        except Exception as e:
+            latency = (time.time() - start_time) * 1000
+            return DataSourceTestResult(
+                source="tushare",
+                success=False,
+                message=f"Tushare连接失败: {str(e)}",
+                latency_ms=round(latency, 2),
+            )
+
+    async def _test_akshare(self, start_time: float) -> DataSourceTestResult:
+        """测试 AkShare 连接（真实网络探测：轻量单标的日线）"""
+        try:
+            import akshare as ak
+
+            def _probe() -> Any:
+                import socket
+
+                socket.setdefaulttimeout(10)  # 防挂起
+                today = datetime.now().strftime("%Y%m%d")
+                start = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+                return ak.stock_zh_a_hist(
+                    symbol="600519",
+                    period="daily",
+                    start_date=start,
+                    end_date=today,
+                )
+
+            df = await asyncio.to_thread(_probe)
+            latency = (time.time() - start_time) * 1000
+
+            if df is not None and len(df) > 0:
+                return DataSourceTestResult(
+                    source="akshare",
+                    success=True,
+                    message=f"连接成功，获取到 {len(df)} 条行情数据",
+                    latency_ms=round(latency, 2),
+                )
+            return DataSourceTestResult(
+                source="akshare",
+                success=False,
+                message="连接成功但未获取到数据",
+                latency_ms=round(latency, 2),
+            )
+        except ImportError:
+            return DataSourceTestResult(
+                source="akshare",
+                success=False,
+                message="akshare包未安装，请执行: pip install akshare",
+            )
+        except Exception as e:
+            latency = (time.time() - start_time) * 1000
+            return DataSourceTestResult(
+                source="akshare",
+                success=False,
+                message=f"AkShare连接失败: {str(e)}",
+                latency_ms=round(latency, 2),
+            )
 
 
 # ============================================================

@@ -23,6 +23,7 @@ from finhack_pro.webui.models import (
     ConfigUpdate,
     ConnectionTestRequest,
     ConnectionTestResult,
+    DataSourceTestRequest,
     HealthStatus,
     MemoryEntryResponse,
     MemorySearchRequest,
@@ -37,6 +38,7 @@ from finhack_pro.webui.services import (
     AgentService,
     BacktestService,
     ConfigService,
+    DataSourceTester,
     MemoryService,
     StreamService,
 )
@@ -172,12 +174,24 @@ async def update_config(request: Request, updates: ConfigUpdate):
 
 @router.post("/api/config/test-connection", response_model=APIResponse)
 async def test_connection(request: Request, req: ConnectionTestRequest):
-    """测试API连接"""
+    """测试API连接（协议驱动：openai 兼容 / anthropic）"""
     config_svc = _get_config_service(request)
     result = await config_svc.test_connection(
         provider=req.provider,
         api_key=req.api_key,
         base_url=req.base_url,
+        protocol=req.protocol,
+    )
+    return APIResponse(data=result.model_dump())
+
+
+@router.post("/api/data/test-connection", response_model=APIResponse)
+async def test_data_source(request: Request, req: DataSourceTestRequest):
+    """测试数据源连通性（akshare / tushare）——独立于 LLM 协议测试"""
+    tester: DataSourceTester = request.app.state.data_source_tester
+    result = await tester.test_connection(
+        source=req.source,
+        tushare_token=req.tushare_token,
     )
     return APIResponse(data=result.model_dump())
 

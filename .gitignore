@@ -51,6 +51,7 @@ config/production.yaml
 
 # Memory persistence
 data/memory/
+data/pipeline/
 *.jsonl
 
 # Test coverage

@@ -41,7 +41,7 @@
                 <input type="text" x-model="config.llm.openai_base_url" placeholder="https://api.openai.com/v1"
                        class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
                 <p class="mt-1 text-xs text-gray-500">OrcaRouter: https://api.orcarouter.ai/v1（一个 Key 切换所有模型）</p>
-                <button @click="testConnection('openai')" :disabled="testing.openai"
+                <button @click="testConnection('openai', 'openai')" :disabled="testing.openai"
                         class="mt-1.5 text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
                     <template x-if="!testing.openai"><span>测试连接</span></template>
                     <template x-if="testing.openai"><span class="spinner !w-3 !h-3 !border-2"></span></template>
@@ -173,23 +173,29 @@
                        class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
             </div>
 
-            <!-- Tushare Token（Akshare 时禁用） -->
+            <!-- Tushare Token（仅 Tushare 显示） -->
             <div x-show="config.data.source === 'tushare'" class="md:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">Tushare Token</label>
                 <div class="relative">
                     <input type="password" x-model="config.data.tushare_token" placeholder="输入Tushare Token"
-                           :disabled="config.data.source === 'akshare'"
-                           :class="config.data.source === 'akshare' ? 'w-full bg-[#0a0f1a] border border-[#1e293b] rounded-lg px-3 py-2 text-sm text-gray-600 cursor-not-allowed pr-10' : 'w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none pr-10'">
+                           class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none pr-10">
                     <button @click="togglePassword($event)" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
                     </button>
                 </div>
-                <button @click="testConnection('tushare')" :disabled="testing.tushare || config.data.source === 'akshare'"
-                        :class="config.data.source === 'akshare' ? 'mt-1.5 text-xs text-gray-600 cursor-not-allowed flex items-center gap-1' : 'mt-1.5 text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1'">
-                    <template x-if="!testing.tushare"><span>测试连接</span></template>
-                    <template x-if="testing.tushare"><span class="spinner !w-3 !h-3 !border-2"></span></template>
+            </div>
+
+            <!-- 统一数据源测试：跟随当前选中的 source -->
+            <div class="md:col-span-2">
+                <button @click="testDataSource(config.data.source)"
+                        :disabled="testing[config.data.source]"
+                        class="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
+                    <template x-if="!testing[config.data.source]"><span>测试连接（{{config.data.source === 'akshare' ? 'AkShare' : 'Tushare'}}）</span></template>
+                    <template x-if="testing[config.data.source]"><span class="spinner !w-3 !h-3 !border-2"></span></template>
                 </button>
-                <span x-show="testResults.tushare" class="ml-2 text-xs" :class="testResults.tushare?.success ? 'text-green-400' : 'text-red-400'" x-text="testResults.tushare?.message"></span>
+                <span x-show="testResults[config.data.source]" class="ml-2 text-xs"
+                      :class="testResults[config.data.source]?.success ? 'text-green-400' : 'text-red-400'"
+                      x-text="testResults[config.data.source]?.message"></span>
             </div>
         </div>
     </div>

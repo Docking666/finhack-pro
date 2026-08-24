@@ -24,6 +24,8 @@ from finhack_pro.webui.models import (
     ConnectionTestRequest,
     ConnectionTestResult,
     DataConfigUpdate,
+    DataSourceTestRequest,
+    DataSourceTestResult,
     ExecutionConfigUpdate,
     HealthStatus,
     LLMConfigUpdate,
@@ -155,6 +157,33 @@ class TestModels:
         )
         assert result.success is True
         assert result.latency_ms == 50.0
+
+    def test_connection_test_request_default_protocol(self):
+        """ConnectionTestRequest 默认 protocol=openai"""
+        req = ConnectionTestRequest(provider="deepseek")
+        assert req.protocol == "openai"
+
+    def test_connection_test_request_explicit_protocol(self):
+        """ConnectionTestRequest 显式 protocol=anthropic"""
+        req = ConnectionTestRequest(provider="anthropic", protocol="anthropic")
+        assert req.protocol == "anthropic"
+
+    def test_data_source_test_request(self):
+        """DataSourceTestRequest 创建"""
+        req = DataSourceTestRequest(source="tushare", tushare_token="x")
+        assert req.source == "tushare"
+        assert req.tushare_token == "x"
+
+    def test_data_source_test_request_missing_source(self):
+        """DataSourceTestRequest 缺 source 应报错"""
+        with pytest.raises(ValidationError):
+            DataSourceTestRequest()
+
+    def test_data_source_test_result(self):
+        """DataSourceTestResult 创建"""
+        result = DataSourceTestResult(source="akshare", success=True, message="ok", latency_ms=10.0)
+        assert result.source == "akshare"
+        assert result.success is True
 
     # --- 回测管理 ---
 
@@ -1029,3 +1058,340 @@ class TestStreamService:
         """on_pong 对未知连接不崩溃"""
         svc = StreamService()
         svc.on_pong(MagicMock())  # 不应报错
+
+
+# ============================================================================
+# 协议驱动连接测试（test-connection 不再白名单拒绝，未知 provider 按 openai）
+# ============================================================================
+
+
+class TestConnectionProtocolTests:
+    """test_connection 协议驱动测试（全 mock 不触网）"""
+
+    async def _make_svc(self):
+        from finhack_pro.webui.services import ConfigService
+        return ConfigService()
+
+    def test_openai_unknown_provider_not_rejected(self):
+        """未知 provider 按 openai 协议尝试，不再拒绝"""
+        import asyncio
+
+        from finhack_pro.webui.services import ConfigService
+
+        svc = ConfigService()
+        called = {}
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {"data": [{"id": "deepseek-v4-flash"}, {"id": "deepseek-v4-pro"}]}
+
+            @property
+            def text(self):
+                return ""
+
+        async def fake_get(url, headers=None):
+            called["url"] = url
+            called["headers"] = headers
+            return FakeResp()
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_client.return_value.__aenter__.return_value.get = fake_get
+            result = asyncio.run(svc.test_connection(
+                provider="deepseek",
+                api_key="sk-test",
+                base_url="https://api.deepseek.com/v1",
+            ))
+
+        assert result.success is True
+        assert result.provider == "deepseek"
+        assert called["url"] == "https://api.deepseek.com/v1/models"
+        assert called["headers"]["Authorization"] == "Bearer sk-test"
+
+    def test_openai_custom_base_url(self):
+        """自定义 base_url 精确拼 /models"""
+        import asyncio
+
+        from finhack_pro.webui.services import ConfigService
+
+        svc = ConfigService()
+        called = {}
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {"data": []}
+
+            @property
+            def text(self):
+                return ""
+
+        async def fake_get(url, headers=None):
+            called["url"] = url
+            return FakeResp()
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_client.return_value.__aenter__.return_value.get = fake_get
+            asyncio.run(svc.test_connection(
+                provider="orca",
+                api_key="sk-test",
+                base_url="https://api.orcarouter.ai/v1",
+            ))
+
+        assert called["url"] == "https://api.orcarouter.ai/v1/models"
+
+    def test_openai_missing_key(self):
+        """缺 key → 失败且提示"""
+        import asyncio
+
+        from finhack_pro.webui.services import ConfigService
+
+        svc = ConfigService()
+        result = asyncio.run(svc.test_connection(
+            provider="openai",
+            api_key="",
+            base_url="https://api.openai.com/v1",
+        ))
+        assert result.success is False
+        assert "API Key 未配置" in result.message
+
+    def test_anthropic_protocol_custom_base_url(self):
+        """anthropic 协议 + 自定义 base_url → 归一为 /v1/messages"""
+        import asyncio
+
+        from finhack_pro.webui.services import ConfigService
+
+        svc = ConfigService()
+        called = {}
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {}
+
+            @property
+            def text(self):
+                return ""
+
+        async def fake_post(url, headers=None, json=None):
+            called["url"] = url
+            called["headers"] = headers
+            called["body"] = json
+            return FakeResp()
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_client.return_value.__aenter__.return_value.post = fake_post
+            result = asyncio.run(svc.test_connection(
+                provider="anthropic",
+                api_key="sk-ant-test",
+                base_url="https://custom.example",
+                protocol="anthropic",
+            ))
+
+        assert result.success is True
+        assert called["url"] == "https://custom.example/v1/messages"
+        assert called["headers"]["x-api-key"] == "sk-ant-test"
+        assert called["body"]["model"] == "claude-3-haiku-20240307"
+
+    def test_anthropic_protocol_default_url(self):
+        """anthropic 无 base_url → 官方默认端点"""
+        import asyncio
+
+        from finhack_pro.webui.services import ConfigService
+
+        svc = ConfigService()
+        called = {}
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {}
+
+            @property
+            def text(self):
+                return ""
+
+        async def fake_post(url, headers=None, json=None):
+            called["url"] = url
+            return FakeResp()
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_client.return_value.__aenter__.return_value.post = fake_post
+            asyncio.run(svc.test_connection(
+                provider="anthropic",
+                api_key="sk-ant-test",
+                protocol="anthropic",
+            ))
+
+        assert called["url"] == "https://api.anthropic.com/v1/messages"
+
+    def test_anthropic_protocol_base_url_with_v1(self):
+        """anthropic base_url 以 /v1 结尾 → 补 /messages"""
+        from finhack_pro.webui.services import ConfigService
+        assert ConfigService._normalize_anthropic_url("https://x.example/v1") == "https://x.example/v1/messages"
+
+    def test_anthropic_missing_key(self):
+        """anthropic 缺 key → 失败且提示"""
+        import asyncio
+
+        from finhack_pro.webui.services import ConfigService
+
+        svc = ConfigService()
+        result = asyncio.run(svc.test_connection(
+            provider="anthropic",
+            api_key="",
+            protocol="anthropic",
+        ))
+        assert result.success is False
+        assert "Anthropic API Key 未配置" in result.message
+
+    def test_no_whitelist_rejection(self):
+        """完全未知 provider 不返回'不支持的服务商'，走 openai 路径"""
+        import asyncio
+
+        from finhack_pro.webui.services import ConfigService
+
+        svc = ConfigService()
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {"data": [{"id": "model-x"}]}
+
+            @property
+            def text(self):
+                return ""
+
+        async def fake_get(url, headers=None):
+            return FakeResp()
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_client.return_value.__aenter__.return_value.get = fake_get
+            result = asyncio.run(svc.test_connection(
+                provider="totally-unknown",
+                api_key="sk-test",
+                base_url="https://anywhere.example/v1",
+            ))
+
+        assert result.success is True
+        assert "不支持的服务商" not in result.message
+
+
+# ============================================================================
+# 数据源测试（akshare / tushare，独立于 LLM 测试；全 mock 不触网）
+# ============================================================================
+
+
+class TestDataSourceTester:
+    """DataSourceTester 测试（用 sys.modules 假模块）"""
+
+    def _make_tester(self):
+        from finhack_pro.webui.services import DataSourceTester
+        return DataSourceTester()
+
+    def test_tushare_success(self):
+        """tushare 成功：trade_cal 返回 6 行"""
+        import asyncio
+        import sys
+        import types
+
+        # 假 tushare 模块
+        fake_ts = types.ModuleType("tushare")
+        fake_pro = types.SimpleNamespace(
+            trade_cal=lambda **kw: __import__("pandas").DataFrame({"cal_date": ["20240101"] * 6})
+        )
+        fake_ts.set_token = lambda x: None
+        fake_ts.pro_api = lambda: fake_pro
+
+        tester = self._make_tester()
+        with patch.dict(sys.modules, {"tushare": fake_ts}):
+            result = asyncio.run(tester.test_connection(source="tushare", tushare_token="tok"))
+
+        assert result.success is True
+        assert result.source == "tushare"
+        assert "6 条" in result.message
+
+    def test_tushare_missing_token(self):
+        """tushare 无 token → 失败"""
+        import asyncio
+
+        from finhack_pro.webui.services import DataSourceTester
+
+        tester = DataSourceTester()
+        result = asyncio.run(tester.test_connection(source="tushare", tushare_token=""))
+        assert result.success is False
+        assert "Token 未配置" in result.message
+
+    def test_tushare_import_error(self):
+        """tushare 未安装 → 提示安装（sys.modules 置 None 模拟导入失败）"""
+        import asyncio
+        import sys
+
+        tester = self._make_tester()
+        with patch.dict(sys.modules, {"tushare": None}):
+            result = asyncio.run(tester.test_connection(source="tushare", tushare_token="tok"))
+        assert result.success is False
+        assert "tushare包未安装" in result.message
+
+    def test_akshare_success(self):
+        """akshare 成功：stock_zh_a_hist 返回数据"""
+        import asyncio
+        import sys
+        import types
+
+        import pandas as pd
+
+        fake_ak = types.ModuleType("akshare")
+        fake_ak.stock_zh_a_hist = lambda **kw: pd.DataFrame({"date": ["2024-01-01"] * 3})
+        fake_ak.__name__ = "akshare"
+
+        tester = self._make_tester()
+        with patch.dict(sys.modules, {"akshare": fake_ak}):
+            result = asyncio.run(tester.test_connection(source="akshare"))
+
+        assert result.success is True
+        assert "3 条" in result.message
+
+    def test_akshare_no_data(self):
+        """akshare 返回空数据 → 失败"""
+        import asyncio
+        import sys
+        import types
+
+        import pandas as pd
+
+        fake_ak = types.ModuleType("akshare")
+        fake_ak.stock_zh_a_hist = lambda **kw: pd.DataFrame()
+        fake_ak.__name__ = "akshare"
+
+        tester = self._make_tester()
+        with patch.dict(sys.modules, {"akshare": fake_ak}):
+            result = asyncio.run(tester.test_connection(source="akshare"))
+
+        assert result.success is False
+        assert "未获取到数据" in result.message
+
+    def test_akshare_import_error(self):
+        """akshare 未安装 → 提示安装（sys.modules 置 None 模拟导入失败）"""
+        import asyncio
+        import sys
+
+        tester = self._make_tester()
+        with patch.dict(sys.modules, {"akshare": None}):
+            result = asyncio.run(tester.test_connection(source="akshare"))
+        assert result.success is False
+        assert "akshare包未安装" in result.message
+
+    def test_unknown_source(self):
+        """未知数据源 → 失败"""
+        import asyncio
+
+        tester = self._make_tester()
+        result = asyncio.run(tester.test_connection(source="wind"))
+        assert result.success is False
+        assert "不支持的数据源" in result.message
