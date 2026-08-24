@@ -962,15 +962,8 @@ class AgentService:
                     result.steps.append(fail_step)
 
                 if stream_callback:
-                    await stream_callback({
-                        "type": "agent_thought",
-                        "run_id": run_id,
-                        "step": len(result.steps),
-                        "agent_id": "system",
-                        "agent_name": "流水线",
-                        "content": f"## ❌ 流水线执行失败\n\n**错误信息**\n\n```\n{str(e)}\n```\n\n请检查 API Key 配置后重试。",
-                        "duration_ms": 0,
-                    })
+                    # 失败仅通过 pipeline_error 推送（前端已有"系统错误"卡片），
+                    # 不再额外推 agent_thought，避免出现奇怪的 step8"流水线"卡片
                     await stream_callback({
                         "type": "pipeline_error",
                         "run_id": run_id,

@@ -87,7 +87,8 @@
                              :style="'background: ' + getAgentColor(msg.agent_id) + '30; color: ' + getAgentColor(msg.agent_id)"
                              x-text="msg.agent_name.charAt(0)"></div>
                         <span class="text-xs font-medium" :style="'color: ' + getAgentColor(msg.agent_id)" x-text="msg.agent_name"></span>
-                        <span class="text-xs text-gray-600">Step {{msg.step}}/6</span>
+                        <span x-show="msg.step >= 1 && msg.step <= 7" class="text-xs text-gray-600">Step {{msg.step}}/7</span>
+                        <span x-show="msg.step < 1 || msg.step > 7" class="text-xs text-red-400">系统</span>
                         <span x-show="msg.duration_ms" class="text-xs text-gray-600" x-text="msg.duration_ms + 'ms'"></span>
                     </div>
 

@@ -112,7 +112,13 @@ class RiskManagerAgent(BaseAgent):
             tool_registry=tool_registry,
         )
         self._llm: Optional[LLMClient] = None
-        self._portfolio: PortfolioState = PortfolioState()
+        # 初始组合 = 初始资金 + 无持仓（真实起点状态，而非 0 资产）。
+        # 系统尚无组合管理模块，update_portfolio 可被外部接入覆盖。
+        self._initial_capital: float = config.get("initial_capital", 1_000_000)
+        self._portfolio: PortfolioState = PortfolioState(
+            total_value=self._initial_capital,
+            cash=self._initial_capital,
+        )
         self._daily_loss_limit: float = config.get("daily_loss_limit", 0.05)
         self._max_drawdown_limit: float = config.get("max_drawdown_limit", 0.15)
         self._max_position_pct: float = config.get("max_position_pct", 0.3)

@@ -131,6 +131,7 @@ class RiskConfig(BaseModel):
     signal_confidence_threshold: float = 0.6  # 信号置信度门槛（信号质量，决策阈值）
     stop_loss_pct: float = 0.05  # 默认止损
     take_profit_pct: float = 0.10  # 默认止盈
+    initial_capital: float = 1_000_000  # 组合初始资金（风控评估的初始组合起点：该资金+空仓，真实初始状态）
 
 
 class RustCoreConfig(BaseModel):

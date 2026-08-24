@@ -877,6 +877,26 @@ class AgentCoordinator:
                 buf = _thinking_buf.pop(step, None)
                 return "".join(buf) if buf else ""
 
+            def _summarize_phase1_report(agent_name: str, report: Any, sym: str) -> str:
+                """把各子智能体的分析报告转成真实结果摘要（非占位文案）"""
+                try:
+                    if agent_name == "市场分析(技术面)":
+                        return (f"状态={report.market_state.value}, "
+                                f"趋势={report.trend_direction.value}, "
+                                f"置信度={report.confidence:.2f}")
+                    if agent_name == "新闻社媒分析":
+                        return (f"总体情感={report.overall_sentiment}, "
+                                f"情绪分数={report.sentiment_score:.2f}")
+                    if agent_name == "基本面分析":
+                        return (f"投资评级={report.overall_rating}, "
+                                f"评级分数={report.rating_score:.2f}")
+                    if agent_name == "微观事件分析":
+                        return (f"发现 {report.events_count} 个事件, "
+                                f"情绪变化={report.sentiment_shift}")
+                except Exception:
+                    self._logger.warning("分析报告摘要生成失败，降级为原始字段", exc_info=True)
+                return str(report)[:200]
+
             _AGENT_STEP_META = {
                 "market_analyzer": (1, "market_analyzer", "市场分析(技术面)"),
                 "news_analyst": (2, "news_analyst", "新闻社媒分析"),
@@ -999,7 +1019,8 @@ class AgentCoordinator:
                 try:
                     report = await task
                     analysis_results[task_name] = report
-                    # 实时推送：该分析步骤完成（思考链，附完整推理文本）
+                    # 实时推送：该分析步骤完成（展示各子智能体的真实分析结果摘要，
+                    # 而非"XX 分析完成"占位；推理过程见 reasoning 字段）
                     _meta = _PHASE1_META.get(task_name)
                     if _meta and report is not None:
                         step_num, agent_id, agent_name = _meta
@@ -1011,7 +1032,7 @@ class AgentCoordinator:
                             "agent_id": agent_id,
                             "agent_name": agent_name,
                             "reasoning": _reasoning,
-                            "content": f"## {agent_name}\n\n{symbol} 分析完成",
+                            "content": _summarize_phase1_report(agent_name, report, symbol),
                         })
                 except Exception as e:
                     self._logger.error(f"分析任务 [{task_name}] 失败: {e}")
@@ -1169,7 +1190,7 @@ class AgentCoordinator:
                 "agent_id": "strategy_generator",
                 "agent_name": "策略生成(多空辩论)",
                 "reasoning": _reasoning_5,
-                "content": f"## 策略生成(多空辩论)\n\n方向={strategy_signal.direction.value}, "
+                "content": f"方向={strategy_signal.direction.value}, "
                            f"置信度={strategy_signal.confidence:.2f}",
             })
 
@@ -1204,7 +1225,14 @@ class AgentCoordinator:
             })
 
             async def _run_risk():
-                return await self.risk_manager.evaluate_risk(signal=strategy_signal)
+                # 传入真实组合状态：初始资金 + 空仓（系统暂无组合管理模块，
+                # 初始组合是真实的起点状态；future 接入持仓后可 update_portfolio 覆盖）
+                from finhack_pro.agents.risk_manager import PortfolioState
+                _initial = self.config.get("risk", {}).get("initial_capital", 1_000_000)
+                return await self.risk_manager.evaluate_risk(
+                    signal=strategy_signal,
+                    portfolio=PortfolioState(total_value=_initial, cash=_initial),
+                )
 
             risk_decision = await self._run_step(run_id, 6, "risk_decision", _run_risk)
             result["risk_decision"] = risk_decision.model_dump()
@@ -1219,7 +1247,7 @@ class AgentCoordinator:
                 "agent_id": "risk_manager",
                 "agent_name": "风控审批",
                 "reasoning": _reasoning_6,
-                "content": f"## 风控审批\n\n{'通过' if risk_decision.approved else '拒绝'}：{risk_decision.reasoning[:200]}",
+                "content": f"{'通过' if risk_decision.approved else '拒绝'}：{risk_decision.reasoning[:200]}",
             })
 
             # 存储到共享记忆
@@ -1271,7 +1299,7 @@ class AgentCoordinator:
                 "agent_id": "trade_executor",
                 "agent_name": "交易执行",
                 "reasoning": _reasoning_7,
-                "content": f"## 交易执行\n\n状态={execution_report.status}, 成交={execution_report.filled_volume}股",
+                "content": f"状态={execution_report.status}, 成交={execution_report.filled_volume}股",
             })
 
             # 存储到共享记忆

@@ -288,3 +288,44 @@ class TestLLMReasoning:
             model="deepseek-v4-flash",
         )
         assert client._extract_json('{"a": 2}') == {"a": 2}
+
+
+class TestRiskPortfolioBaseline:
+    """风控初始组合回归：总资产/可用资金必须是初始资金而非 0"""
+
+    def test_default_portfolio_is_initial_capital(self):
+        from finhack_pro.agents.risk_manager import RiskManagerAgent
+
+        agent = RiskManagerAgent(config={})
+        assert agent._portfolio.total_value == 1_000_000
+        assert agent._portfolio.cash == 1_000_000
+        assert agent._portfolio.positions == []
+
+    def test_portfolio_custom_initial_capital(self):
+        from finhack_pro.agents.risk_manager import RiskManagerAgent
+
+        agent = RiskManagerAgent(config={"initial_capital": 500_000})
+        assert agent._portfolio.total_value == 500_000
+        assert agent._portfolio.cash == 500_000
+
+    def test_risk_context_contains_real_assets(self):
+        """LLM 风控上下文必须含初始资金，而非总资产为 0"""
+        from finhack_pro.agents.risk_manager import RiskManagerAgent
+        from finhack_pro.agents.strategy_generator import StrategySignal, SignalDirection
+
+        agent = RiskManagerAgent(config={})
+        signal = StrategySignal(
+            symbol="600519.SH",
+            direction=SignalDirection.BUY,
+            confidence=0.7,
+            position_size_pct=0.2,
+            stop_loss=1200.0,
+            take_profit=1400.0,
+            strategy_type="debate",
+            time_horizon="5d",
+            reasoning="测试信号",
+        )
+        ctx = agent._build_risk_context(signal, {"reasons": []})
+        assert "总资产: 1000000.00" in ctx
+        assert "可用资金: 1000000.00" in ctx
+        assert "总资产: 0.00" not in ctx
