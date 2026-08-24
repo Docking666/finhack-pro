@@ -876,6 +876,8 @@ function backtestPage() {
         },
 
         initChart() {
+            // Chart.js 未加载（本地 vendor 也不可用）时静默跳过，由 ensureChart 提示
+            if (typeof Chart === 'undefined') return;
             const canvas = document.getElementById('equity-chart');
             if (!canvas) return;
 
@@ -953,10 +955,23 @@ function backtestPage() {
         },
 
         ensureChart() {
-            if (this.equityChart) return;
+            // 页面切换（x-html 重新注入）后旧 chart 实例悬挂在已移除的 canvas 上：
+            // 检测到 canvas 不存在或已脱离 DOM → 销毁旧实例等待重建
             const canvas = document.getElementById('equity-chart');
-            if (!canvas) return;
+            if (!canvas || !canvas.isConnected) {
+                if (this.equityChart) {
+                    try { this.equityChart.destroy(); } catch (e) { /* ignore */ }
+                    this.equityChart = null;
+                }
+                return false;
+            }
+            if (this.equityChart) return true;
+            if (typeof Chart === 'undefined') {
+                window.__alpineApp && window.__alpineApp.showToast('图表库(Chart.js)加载失败，权益曲线无法显示', 'error');
+                return false;
+            }
             this.initChart();
+            return !!this.equityChart;
         },
 
         async startBacktest() {

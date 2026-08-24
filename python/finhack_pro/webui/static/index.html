@@ -25,10 +25,10 @@
     </script>
     <!-- Alpine.js CDN -->
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <!-- Chart.js CDN -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <!-- Marked.js CDN (Markdown渲染) -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Chart.js（本地 vendor，避免 CDN 加载失败导致权益曲线空白） -->
+    <script src="/static/vendor/chart.umd.min.js"></script>
+    <!-- Marked.js（本地 vendor，Markdown渲染） -->
+    <script src="/static/vendor/marked.min.js"></script>
     <style>
         /* 自定义滚动条 */
         ::-webkit-scrollbar { width: 6px; height: 6px; }
