@@ -86,6 +86,45 @@ async def test_risk_manager_fail_closed():
 
 
 # ---------------------------------------------------------------------------
+# 风控规则引擎：信号置信度低于门槛（signal_confidence_threshold，默认0.6）→ 拒绝
+# （与 var_confidence 的 VaR 统计置信水平语义区分：此处为决策阈值）
+# ---------------------------------------------------------------------------
+def test_risk_rule_engine_rejects_low_confidence():
+    rm = RiskManagerAgent(config={"model": "test", "api_key": "sk-test"})
+    assert rm._min_signal_confidence == 0.6  # 默认门槛
+
+    # 置信度不足的买入信号 → 拒绝
+    low = StrategySignal(
+        symbol="600519.SH", direction=SignalDirection.BUY, confidence=0.5
+    )
+    r = rm._rule_engine_check(low)
+    assert r["passed"] is False
+    assert any("信号置信度不足" in x for x in r["reasons"])
+
+    # 置信度达标的信号 → 通过（无其他违规）
+    high = StrategySignal(
+        symbol="600519.SH", direction=SignalDirection.BUY, confidence=0.8
+    )
+    assert rm._rule_engine_check(high)["passed"] is True
+
+    # HOLD 不受置信度门槛限制（不交易，直接通过）
+    hold = StrategySignal(
+        symbol="600519.SH", direction=SignalDirection.HOLD, confidence=0.3
+    )
+    assert rm._rule_engine_check(hold)["passed"] is True
+
+    # 门槛可配置
+    rm2 = RiskManagerAgent(config={
+        "model": "test", "api_key": "sk-test",
+        "signal_confidence_threshold": 0.7,
+    })
+    mid = StrategySignal(
+        symbol="600519.SH", direction=SignalDirection.BUY, confidence=0.65
+    )
+    assert rm2._rule_engine_check(mid)["passed"] is False
+
+
+# ---------------------------------------------------------------------------
 # 3. 工坊策略生成：LLM 返回非 JSON → 显式 success=False（不伪造成功）
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
