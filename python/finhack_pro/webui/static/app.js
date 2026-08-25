@@ -881,7 +881,17 @@ function backtestPage() {
             const canvas = document.getElementById('equity-chart');
             if (!canvas) return;
 
+            // 【关键修复】若已存在带数据的图表（renderEquityChart 已建好），不再销毁重建。
+            // 旧代码无条件 destroy + 建空图，与 renderEquityChart 形成竞态：
+            //   回测快速完成(<1s) → renderEquityChart 建数据图 → 1000ms 后 initChart() 销毁它 → 空白画布+Y轴0~1
             if (this.equityChart) {
+                try {
+                    const ds = this.equityChart.data?.datasets;
+                    if (ds && ds[0] && ds[0].data && ds[0].data.length > 0) {
+                        console.log('[initChart] Chart already has data (' + ds[0].data.length + ' points), skipping');
+                        return;
+                    }
+                } catch (_) { /* fall through to destroy stale instance */ }
                 this.equityChart.destroy();
             }
 

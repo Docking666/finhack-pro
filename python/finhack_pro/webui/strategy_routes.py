@@ -540,6 +540,8 @@ async def _call_llm(prompt: str, system: str) -> str:
                     ],
                     "temperature": 0.7,
                     "max_tokens": 4096,
+                    # 强制 JSON 输出模式，降低 LLM 返回散文/裸代码的概率（尤其对"社媒特定群体"等 niche 描述）
+                    "response_format": {"type": "json_object"},
                 },
             )
 
@@ -558,20 +560,46 @@ async def _call_llm(prompt: str, system: str) -> str:
 
 
 def _extract_json(text: str) -> Dict[str, Any]:
-    """从LLM响应中提取JSON"""
-    # 尝试提取 ```json ... ``` 块
-    match = re.search(r'```json\s*\n(.*?)\n```', text, re.DOTALL)
-    if match:
-        return json.loads(match.group(1))
-    # 尝试提取 ``` ... ``` 块
-    match = re.search(r'```\s*\n(.*?)\n```', text, re.DOTALL)
-    if match:
-        return json.loads(match.group(1))
+    """从LLM响应中提取JSON（宽松模式：支持代码块/BOM/平衡括号兜底）
+
+    复用 llm_client.LLMClient._extract_json 的健壮逻辑，比旧版正则-only 版本
+    能处理 LLM 返回裸代码、散文夹杂JSON、```python 代码块等边缘情况。
+    """
+    json_str = text.strip().lstrip("\ufeff")
+
+    # 去掉外层代码块（兼容 ```json / ```python / ``` 等各种标记）
+    if "```json" in json_str:
+        json_str = json_str.split("```json")[1].split("```")[0].strip()
+    elif "```" in json_str:
+        parts = json_str.split("```")
+        if len(parts) >= 3:
+            json_str = parts[1].strip()  # 取第一个代码块内容
+
     # 尝试直接解析
     try:
-        return json.loads(text.strip())
+        return json.loads(json_str)
     except json.JSONDecodeError:
-        raise ValueError("无法从LLM响应中提取JSON")
+        pass
+
+    # 兜底：提取第一个平衡 { ... } 或 [ ... ] 块
+    for open_ch, close_ch in (("{", "}"), ("[", "]")):
+        start = json_str.find(open_ch)
+        if start == -1:
+            continue
+        depth = 0
+        for i in range(start, len(json_str)):
+            if json_str[i] == open_ch:
+                depth += 1
+            elif json_str[i] == close_ch:
+                depth -= 1
+                if depth == 0:
+                    candidate = json_str[start:i + 1]
+                    try:
+                        return json.loads(candidate)
+                    except json.JSONDecodeError:
+                        break
+
+    raise ValueError(f"无法从LLM响应中提取JSON: {text[:200]}")
 
 
 def _validate_python_code(code: str) -> tuple:
