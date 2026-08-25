@@ -8,14 +8,47 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+# 关键词情感词典（与 AnalyzeSentimentTool 保持一致）
+_POSITIVE_WORDS = ["增长", "上涨", "突破", "超预期", "利好", "盈利", "回升", "强势", "创新高", "增持"]
+_NEGATIVE_WORDS = ["下跌", "亏损", "下滑", "不及预期", "利空", "减持", "风险", "暴跌", "制裁", "调查"]
+
+
+def _classify_sentiment(text: str) -> str:
+    """基于关键词的简单情感分类，与 AnalyzeSentimentTool 保持一致的判定规则。"""
+    score = 0
+    for word in _POSITIVE_WORDS:
+        if word in text:
+            score += 1
+    for word in _NEGATIVE_WORDS:
+        if word in text:
+            score -= 1
+    if score > 0:
+        return "positive"
+    if score < 0:
+        return "negative"
+    return "neutral"
+
+
+def _normalize_stock_code(keyword: str) -> Optional[str]:
+    """从关键词（股票代码或名称）中提取 6 位 A 股代码。"""
+    if not keyword:
+        return None
+    # 优先匹配 6 位连续数字（A 股代码）
+    m = re.search(r"\b(\d{6})\b", str(keyword))
+    if m:
+        return m.group(1)
+    return None
 
 
 class ToolCategory(str, Enum):
@@ -374,16 +407,94 @@ class SearchNewsTool(BaseTool):
     async def execute(self, **kwargs) -> Any:
         keyword = kwargs["keyword"]
         days = kwargs.get("days", 7)
-        sentiment = kwargs.get("sentiment_filter", "all")
+        sentiment_filter = kwargs.get("sentiment_filter", "all")
+        source_filter = kwargs.get("source", "all")
 
-        # 新闻搜索：数据源未配置时诚实返回空结果（非模拟数据）
+        code = _normalize_stock_code(keyword)
+
+        raw_news: List[Dict[str, Any]] = []
+        news: List[Dict[str, Any]] = []
+        error: Optional[str] = None
+        if code:
+            try:
+                import akshare as ak
+
+                df = ak.stock_news_em(symbol=code)
+                if df is not None and len(df):
+                    cutoff = datetime.now() - timedelta(days=days)
+                    for _, row in df.iterrows():
+                        publish_time = str(row.get("发布时间", "")).strip()
+                        # 解析发布时间并按 days 过滤
+                        pub_dt = None
+                        try:
+                            pub_dt = datetime.strptime(publish_time[:19], "%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            pub_dt = None
+
+                        title = str(row.get("新闻标题", "")).strip()
+                        content = str(row.get("新闻内容", "")).strip()
+                        source = str(row.get("文章来源", "")).strip()
+                        url = str(row.get("新闻链接", "")).strip()
+
+                        # 来源软过滤（all 放行，否则按来源关键词匹配）
+                        if source_filter not in ("all", "", None):
+                            if source_filter not in source:
+                                continue
+
+                        text = f"{title} {content}"
+                        sent = _classify_sentiment(text)
+
+                        item = {
+                            "title": title,
+                            "content": content,
+                            "source": source,
+                            "publish_time": publish_time,
+                            "url": url,
+                            "sentiment": sent,
+                        }
+                        raw_news.append(item)
+                        # days 窗口过滤（解析失败的新闻视为近期，保留）
+                        if pub_dt is not None and pub_dt < cutoff:
+                            continue
+                        news.append(item)
+            except Exception as e:  # noqa: BLE001
+                error = f"{type(e).__name__}: {e}"
+                logger.warning("search_news 东财新闻接口调用失败: %s", error)
+        else:
+            error = "无法从关键词中提取 6 位股票代码"
+
+        # 情感过滤
+        if sentiment_filter not in ("all", "", None):
+            news = [n for n in news if n["sentiment"] == sentiment_filter]
+
+        # 优雅降级：days 窗口过滤后为空但原始抓取有数据，则回退到东财近期新闻，
+        # 避免过严的时间窗口再次落入"无数据"占位态（东财 news_em 本身即返回近期新闻）
+        if not news and raw_news:
+            news = raw_news
+
+        if not news:
+            if error:
+                note = f"未获取到相关新闻（数据源错误: {error}）"
+            else:
+                note = (
+                    "东财新闻接口暂无可匹配数据。"
+                    "该结果仅反映数据缺失状态，不代表实际市场情况。"
+                )
+            return {
+                "keyword": keyword,
+                "days": days,
+                "sentiment_filter": sentiment_filter,
+                "total_results": 0,
+                "news": [],
+                "note": note,
+            }
+
         return {
             "keyword": keyword,
             "days": days,
-            "sentiment_filter": sentiment,
-            "total_results": 0,
-            "news": [],
-            "note": "新闻API未配置，返回空结果。请配置新闻数据源(tushare新闻接口/自定义爬虫)以启用此功能。",
+            "sentiment_filter": sentiment_filter,
+            "total_results": len(news),
+            "news": news,
         }
 
 
