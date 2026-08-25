@@ -208,7 +208,8 @@ class TestLLMReasoning:
         captured = {}
         async def fake_chat(messages, system, temperature, max_tokens, tools,
                             tool_choice, stream=False, on_token=None,
-                            on_reasoning=None, response_format=None):
+                            on_reasoning=None, response_format=None,
+                            timeout=None):
             captured["stream"] = stream
             captured["on_token"] = on_token
             captured["on_reasoning"] = on_reasoning
