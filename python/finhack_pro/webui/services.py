@@ -1207,7 +1207,7 @@ class StreamService:
     def __init__(
         self,
         heartbeat_interval: float = 30.0,   # 心跳间隔(秒)
-        heartbeat_timeout: float = 60.0,    # 心跳超时(秒)
+        heartbeat_timeout: float = 180.0,   # 心跳超时(秒)，需覆盖多空辩论等长耗时步骤(~120s)
     ):
         # 按频道分组的连接管理
         self._channels: Dict[str, Set[Any]] = {

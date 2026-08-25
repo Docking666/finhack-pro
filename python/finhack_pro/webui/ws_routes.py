@@ -48,6 +48,9 @@ async def ws_backtest(websocket: WebSocket):
                 msg = json.loads(data)
                 if msg.get("type") == "ping":
                     await websocket.send_json({"type": "pong", "timestamp": datetime.now().isoformat()})
+                elif msg.get("type") == "pong":
+                    # 客户端响应服务端心跳 ping，更新最后活跃时间
+                    stream_svc.on_pong(websocket)
             except json.JSONDecodeError:
                 pass
     except WebSocketDisconnect:
@@ -79,6 +82,8 @@ async def ws_agents(websocket: WebSocket):
                 msg = json.loads(data)
                 if msg.get("type") == "ping":
                     await websocket.send_json({"type": "pong", "timestamp": datetime.now().isoformat()})
+                elif msg.get("type") == "pong":
+                    stream_svc.on_pong(websocket)
             except json.JSONDecodeError:
                 pass
     except WebSocketDisconnect:
@@ -108,6 +113,8 @@ async def ws_system(websocket: WebSocket):
                 msg = json.loads(data)
                 if msg.get("type") == "ping":
                     await websocket.send_json({"type": "pong", "timestamp": datetime.now().isoformat()})
+                elif msg.get("type") == "pong":
+                    stream_svc.on_pong(websocket)
             except json.JSONDecodeError:
                 pass
     except WebSocketDisconnect:
