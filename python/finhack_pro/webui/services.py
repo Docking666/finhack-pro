@@ -761,6 +761,7 @@ class AgentService:
         "market_analyzer": "市场分析Agent",
         "news_analyst": "新闻社媒Agent",
         "fundamental_analyst": "基本面Agent",
+        "micro_event_agent": "微观事件Agent",
         "strategy_generator": "多空研究员",
         "risk_manager": "风险管理Agent",
         "trade_executor": "交易执行Agent",

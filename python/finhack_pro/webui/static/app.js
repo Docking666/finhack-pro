@@ -90,6 +90,7 @@ function getAgentColor(agentId) {
         'market_analyzer': '#3b82f6',     // 蓝色
         'news_analyst': '#8b5cf6',        // 紫色
         'fundamental_analyst': '#06b6d4', // 青色
+        'micro_event_agent': '#ec4899',   // 粉色 - 微观事件
         'strategy_generator': '#f59e0b',  // 橙色
         'risk_manager': '#ef4444',        // 红色
         'trade_executor': '#10b981',      // 绿色

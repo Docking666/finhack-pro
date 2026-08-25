@@ -78,7 +78,7 @@ async def get_system_info(request: Request):
     memory_svc = _get_memory_service(request)
 
     # 获取Agent和记忆统计
-    agent_count = 6  # 默认6个Agent
+    agent_count = 7  # 默认7个Agent（七智能体架构）
     memory_count = 0
     tool_count = 7  # 默认7个工具
 
