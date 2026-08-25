@@ -15,7 +15,15 @@ data:
   cache_dir: data/cache
   default_end: '2024-12-31'
   default_start: '2020-01-01'
-  source: tushare
+  # 显式多源链（按优先级）：baostock 主源（零注册官方 API，最稳）→ 新浪 →
+  # 腾讯(tx，间歇性 Errno 22 由 RetryDataSource 重试缓解）→ 东财兜底（易反爬）。
+  # 注：source 字段仅作兼容，sources 非空时以此显式链为准。
+  source: akshare
+  sources:
+    - baostock
+    - akshare_sina
+    - akshare_tx
+    - akshare_em
   tushare_token: ''
 environment: backtest
 llm:

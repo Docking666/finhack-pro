@@ -705,12 +705,16 @@ class BacktestService:
                 "created_at": status.start_time,
             })
 
-            # 推送完成事件
+            # 推送完成事件（携带完整结果数据，确保即使 fetchResult API 调用失败，
+            # 前端仍能从 WS 事件直接渲染权益曲线和交易记录）
             if stream_callback:
                 await stream_callback({
                     "type": "backtest_completed",
                     "task_id": task_id,
                     "metrics": metrics.model_dump(),
+                    "equity_curve": equity_curve,
+                    "benchmark_curve": benchmark_curve,
+                    "trades": [t.model_dump() for t in trades],
                 })
 
             logger.info(f"回测任务完成: {task_id}, 收益率={metrics.total_return}%")

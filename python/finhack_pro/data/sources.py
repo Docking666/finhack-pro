@@ -97,6 +97,7 @@ class AkshareTXDataSource(BaseDataSource):
             start_date=start_date.replace("-", ""),
             end_date=end_date.replace("-", ""),
             adjust=self.adjust,
+            timeout=15,
         )
         if df is None or len(df) == 0:
             return pd.DataFrame()
@@ -231,6 +232,38 @@ class TushareDataSource(BaseDataSource):
         return df.sort_values("date").reset_index(drop=True)
 
 
+class RetryDataSource(BaseDataSource):
+    """重试包装器：对内部数据源 get_daily 做有限次重试，缓解网络抖动 /
+    反爬瞬时断开（RemoteDisconnected）导致的假失败。重试耗尽仍失败则抛出最后异常，
+    由上层依序回退到下一个数据源（SDD：真实失败，禁止伪造）。"""
+
+    name = "retry"  # 占位，构造时改为内部源名
+
+    def __init__(self, inner: BaseDataSource, retries: int = 3, timeout: int = 15) -> None:
+        super().__init__(adjust=inner.adjust)
+        self.inner = inner
+        self.retries = retries
+        self.timeout = timeout
+        self.name = inner.name  # 对外暴露内部源名，便于链路诊断
+
+    def get_daily(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+        last_err: Optional[Exception] = None
+        for attempt in range(1, self.retries + 1):
+            try:
+                df = self.inner.get_daily(symbol, start_date, end_date)
+                if df is None or len(df) == 0:
+                    last_err = ValueError(f"{self.inner.name}: 返回空数据")
+                    logger.info("数据源 %s 第%d次返回空，重试", self.inner.name, attempt)
+                    continue
+                return df
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                logger.warning("数据源 %s 第%d次失败: %s", self.inner.name, attempt, e)
+                continue
+        logger.error("数据源 %s 重试 %d 次仍失败", self.inner.name, self.retries)
+        raise last_err if last_err else ValueError(f"{self.inner.name}: 未知失败")
+
+
 # 内置源注册表
 SOURCE_REGISTRY: Dict[str, Type[BaseDataSource]] = {
     "akshare_tx": AkshareTXDataSource,
@@ -322,4 +355,6 @@ def build_source_chain(
             "数据源配置无效：没有可用的数据源。请配置 data.source / data.sources "
             "或 data.custom_source 后重试。"
         )
-    return chain
+    # 统一加重试包装（SDD：瞬时失败真实重试，避免单源网络抖动导致全链路失败；
+    # 重试耗尽仍失败则抛最后异常，由 fetcher 依序回退到下一个源）
+    return [RetryDataSource(s, retries=3, timeout=15) for s in chain]

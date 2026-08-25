@@ -959,17 +959,34 @@ function backtestPage() {
             // 检测到 canvas 不存在或已脱离 DOM → 销毁旧实例等待重建
             const canvas = document.getElementById('equity-chart');
             if (!canvas || !canvas.isConnected) {
+                console.log('[ensureChart] Canvas not found or not connected:', !!canvas, canvas?.isConnected);
                 if (this.equityChart) {
-                    try { this.equityChart.destroy(); } catch (e) { /* ignore */ }
+                    try { this.equityChart.destroy(); } catch (e) { console.warn('[ensureChart] destroy error:', e); }
                     this.equityChart = null;
                 }
                 return false;
             }
-            if (this.equityChart) return true;
+            if (this.equityChart) {
+                // 验证 chart 实例仍然关联到有效 canvas（防止 x-html 重建后悬挂）
+                try {
+                    const ctx = this.equityChart.ctx;
+                    if (!ctx || !ctx.canvas) {
+                        console.log('[ensureChart] Chart instance has stale context, destroying');
+                        this.equityChart.destroy();
+                        this.equityChart = null;
+                    } else {
+                        return true;
+                    }
+                } catch (e) {
+                    console.warn('[ensureChart] Chart validation error, recreating:', e);
+                    this.equityChart = null;
+                }
+            }
             if (typeof Chart === 'undefined') {
                 window.__alpineApp && window.__alpineApp.showToast('图表库(Chart.js)加载失败，权益曲线无法显示', 'error');
                 return false;
             }
+            console.log('[ensureChart] Calling initChart()');
             this.initChart();
             return !!this.equityChart;
         },
@@ -1076,7 +1093,17 @@ function backtestPage() {
                     this.progress = 100;
                     this.progressMessage = '回测完成';
                     this.metrics = data.metrics || {};
-                    // 获取完整结果
+
+                    // 立即从 WS 事件数据渲染权益曲线
+                    if (data.equity_curve && data.equity_curve.length > 0) {
+                        console.log('[WS backtest_completed] Rendering chart from WS event:', data.equity_curve.length, 'points');
+                        this.renderEquityChart(data);
+                        if (data.trades) {
+                            this.trades = data.trades;
+                        }
+                    }
+
+                    // 仍异步获取完整结果（用于导出等需要完整数据的场景）
                     this.fetchResult(data.task_id);
                     break;
 
@@ -1098,17 +1125,12 @@ function backtestPage() {
                     this.trades = result.trades || [];
                     this.currentResult = result; // 保存完整结果用于导出
 
-                    // 更新权益曲线（chart 未创建时先确保创建，避免图表空白）
-                    if (result.equity_curve) {
-                        this.ensureChart();
-                        if (this.equityChart) {
-                            this.equityChart.data.labels = result.equity_curve.map(p => p.date);
-                            this.equityChart.data.datasets[0].data = result.equity_curve.map(p => p.equity);
-                            if (result.benchmark_curve) {
-                                this.equityChart.data.datasets[1].data = result.benchmark_curve.map(p => p.equity);
-                            }
-                            this.equityChart.update();
-                        }
+                    // 渲染权益曲线（采用"销毁重建"策略，避免 Chart 实例与 DOM 脱离导致的空白问题）
+                    if (result.equity_curve && result.equity_curve.length > 0) {
+                        console.log('[fetchResult] Rendering chart with', result.equity_curve.length, 'data points');
+                        this.renderEquityChart(result);
+                    } else {
+                        console.warn('[fetchResult] No equity_curve data');
                     }
 
                     // 刷新历史
@@ -1117,6 +1139,107 @@ function backtestPage() {
                 }
             } catch (e) {
                 console.error('获取回测结果失败:', e);
+            }
+        },
+
+        /**
+         * 销毁旧图表并用数据创建新图表（根治"实例悬挂/数据不更新"问题）
+         * @param {Object} result - 包含 equity_curve 和 benchmark_curve 的回测结果
+         */
+        renderEquityChart(result) {
+            const canvas = document.getElementById('equity-chart');
+            if (!canvas || !canvas.isConnected) {
+                console.warn('[renderEquityChart] canvas not available');
+                return;
+            }
+            if (typeof Chart === 'undefined') {
+                console.warn('[renderEquityChart] Chart.js not loaded');
+                return;
+            }
+
+            // 1. 销毁旧实例（无论状态如何）
+            if (this.equityChart) {
+                try { this.equityChart.destroy(); } catch (e) { /* ignore */ }
+                this.equityChart = null;
+            }
+
+            // 2. 准备数据
+            const labels = result.equity_curve.map(p => p.date ? String(p.date).substring(0, 10) : '');
+            const equityData = result.equity_curve.map(p => p.equity);
+            const benchData = (result.benchmark_curve || []).map(p => p.equity);
+
+            console.log('[renderEquityChart] labels:', labels.length, 'equity:', equityData.length, 'bench:', benchData.length,
+                        'first equity:', equityData[0], 'last equity:', equityData[equityData.length - 1]);
+
+            // 3. 创建新图表（数据直接注入，避免空图表→更新的时序窗口）
+            try {
+                const ctx = canvas.getContext('2d');
+                this.equityChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: '策略权益',
+                                data: equityData,
+                                borderColor: '#3b82f6',
+                                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                                fill: true,
+                                tension: 0.3,
+                                pointRadius: 0,
+                                borderWidth: 2,
+                            },
+                            {
+                                label: '基准',
+                                data: benchData,
+                                borderColor: '#6b7280',
+                                backgroundColor: 'transparent',
+                                borderDash: [5, 5],
+                                tension: 0.3,
+                                pointRadius: 0,
+                                borderWidth: 1,
+                            },
+                        ],
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { intersect: false, mode: 'index' },
+                        plugins: {
+                            legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
+                            tooltip: {
+                                backgroundColor: '#1e293b',
+                                titleColor: '#e2e8f0',
+                                bodyColor: '#94a3b8',
+                                borderColor: '#334155',
+                                borderWidth: 1,
+                            },
+                        },
+                        scales: {
+                            x: {
+                                ticks: { color: '#64748b', font: { size: 10 }, maxTicksLimit: 10 },
+                                grid: { color: 'rgba(51, 65, 85, 0.3)' },
+                            },
+                            y: {
+                                ticks: {
+                                    color: '#64748b',
+                                    font: { size: 10 },
+                                    callback: (v) => {
+                                        const n = Number(v);
+                                        if (!isFinite(n)) return String(v);
+                                        if (Math.abs(n) >= 1e8) return (n / 1e8).toFixed(1) + '亿';
+                                        if (Math.abs(n) >= 1e4) return (n / 1e4).toFixed(1) + '万';
+                                        return String(v);
+                                    },
+                                },
+                                grid: { color: 'rgba(51, 65, 85, 0.3)' },
+                            },
+                        },
+                    },
+                });
+                console.log('[renderEquityChart] Chart created successfully with data');
+            } catch (e) {
+                console.error('[renderEquityChart] Error creating chart:', e);
             }
         },
 
