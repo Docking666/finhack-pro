@@ -23,11 +23,31 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import re
 import time
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from loguru import logger
+
+# ============================================================
+# 各步骤超时配置（秒）—— 防止单步 LLM 调用/网络抖动永久阻塞流水线
+# ============================================================
+_STEP_TIMEOUTS: Dict[int, int] = {
+    1: 120,   # 市场分析：单次 LLM 调用 + 数据准备
+    2: 120,   # 新闻社媒：工具调用(akshare) + 单次 LLM
+    3: 120,   # 基本面：单次 LLM
+    4: 150,   # 微观事件：多次工具调用(龙虎榜/大宗/北向等) + LLM
+    5: 600,   # 多空辩论：4 次串行 LLM（多头→空头→裁判→信号），最耗时
+    6: 90,    # 风控审批：单次 LLM
+    7: 90,    # 交易执行：单次 LLM
+}
+
+# 思维链 JSON 泄漏检测模式（LLM reasoning_content 回显工具原始数据时触发）
+_JSON_LEAK_RE = re.compile(
+    r'"(?:impact_level|url|tags|title|source|publish_time|sentiment|news_id)"\s*:',
+    re.IGNORECASE,
+)
 
 from finhack_pro.agents.alternative_data_tools import register_alternative_data_tools
 from finhack_pro.agents.base import AgentMessage, BaseAgent
@@ -659,6 +679,9 @@ class AgentCoordinator:
 
         已 done → 从 JSON 重建返回；否则执行 runner()，成功后写
         json → md → done（done 是提交点）。步内异常上抛，不写 done。
+
+        加 asyncio.wait_for 超时保护（见 _STEP_TIMEOUTS），防止 LLM 长思考/
+        网络抖动/重试循环导致整条流水线永久阻塞。
         """
         if self._is_step_done(run_id, step):
             report = self._load_step_report(run_id, step)
@@ -667,7 +690,15 @@ class AgentCoordinator:
                 return report
             self._logger.warning(f"[Pipeline {run_id}] Step {step} done 标记存在但 JSON 损坏，整步重跑")
 
-        report = await runner()
+        timeout = _STEP_TIMEOUTS.get(step, 120)
+        try:
+            report = await asyncio.wait_for(runner(), timeout=timeout)
+        except asyncio.TimeoutError:
+            self._logger.error(
+                f"[Pipeline {run_id}] Step {step} ({name}) 超时 ({timeout}s)，"
+                f"可能原因：LLM 长思考 / 网络延迟 / 推理模型 reasoning_content 过长"
+            )
+            raise
         if report is not None:
             self._write_report_json(run_id, step, name, report)
             self._write_report_md(run_id, step, name, report)
@@ -855,6 +886,16 @@ class AgentCoordinator:
                 _thinking_buf[step] = []
                 if not text.strip():
                     return
+
+                # ---- 思维链 JSON 泄漏检测与净化 ----
+                # 某些推理模型（DeepSeek R1 等）会在 reasoning_content 中回显输入上下文，
+                # 导致 search_news 等工具的原始 JSON 被推送到前端"思考过程"区域。
+                # 检测特征：连续 ≥3 个工具字段键（impact_level/url/tags/title/source 等）
+                if _JSON_LEAK_RE.search(text) and text.count('":') >= 3:
+                    # 提取记录条数用于友好提示
+                    count = text.count('"title"') or text.count("title")
+                    text = f"[数据分析中，共加载 {max(count, 1)} 条记录]"
+
                 if event_callback is None:
                     return
                 try:
@@ -930,6 +971,24 @@ class AgentCoordinator:
                         on_token=_make_llm_cb(_step, _aid, _an),
                         on_reasoning=_make_llm_cb(_step, _aid, _an),
                     )
+                # 注入子步骤进度回调（Agent 内部 emit_progress → agent_thinking 事件）
+                if hasattr(_agent, "set_progress_callback"):
+                    def _make_progress_cb(step_i: int, aid_i: str, an_i: str):
+                        def _cb(msg: str) -> None:
+                            try:
+                                _loop.create_task(event_callback({
+                                    "type": "agent_thinking",
+                                    "run_id": run_id,
+                                    "step": step_i,
+                                    "agent_id": aid_i,
+                                    "agent_name": an_i,
+                                    "thinking": msg,
+                                    "content": f"## {an_i}\n\n{msg}",
+                                }))
+                            except Exception:
+                                pass
+                        return _cb
+                    _agent.set_progress_callback(_make_progress_cb(_step, _aid, _an))
 
             # ---- 断点恢复透明化：已完成的步骤按顺序推送"已恢复"事件 ----
             # 避免 resume 时 Step1-4 静默跳过导致前端"直接跳到多空辩论"的观感

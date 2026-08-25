@@ -372,3 +372,25 @@ class BaseAgent(ABC):
         if llm is not None and hasattr(llm, "get_stream_callbacks"):
             return llm.get_stream_callbacks()
         return (None, None)
+
+    def set_progress_callback(
+        self, cb: Optional[Callable[[str], None]]
+    ) -> None:
+        """注入子步骤进度回调（coordinator → agent 桥接）。
+
+        Agent 在长时间操作的节点（如 debate 的多/空/裁判各轮 LLM 调用前后）
+        可调用 self.emit_progress(msg) 推送中间进度到前端思考链。
+        """
+        self._progress_callback = cb
+
+    async def emit_progress(self, message: str) -> None:
+        """推送子步骤进度消息到 coordinator 事件流。
+
+        用法（strategy_generator.debate() 中）：
+            await self.emit_progress("多头论点生成中...")
+            bull = await self._llm.chat(...)
+            await self.emit_progress("空头论点生成中...")
+        """
+        cb = getattr(self, "_progress_callback", None)
+        if cb:
+            cb(message)

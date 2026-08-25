@@ -1369,10 +1369,21 @@ function agentsPage() {
         currentRunId: null,
         pipelineHistory: [],
         expandedLogs: [],
+        _lastThinkingTs: 0,          // 看门狗：最后一次 agent_thinking 事件时间戳
 
         async init() {
             window.__agentsPage = this;
             await this.loadData();
+            // 看门狗定时器：检测长时间无更新的 running 步骤，提示用户
+            this._watchdogTimer = setInterval(() => {
+                if (!this.pipelineRunning) return;
+                const runningStep = this.pipelineSteps.find(s => s.status === 'running');
+                if (runningStep && this._lastThinkingTs > 0 && (Date.now() - this._lastThinkingTs) > 30000) {
+                    if (!this.thinkingMessage.includes('响应较慢')) {
+                        this.thinkingMessage += '（响应较慢，请稍候…）';
+                    }
+                }
+            }, 10000);
         },
 
         async loadData() {
@@ -1453,6 +1464,7 @@ function agentsPage() {
 
                 case 'agent_thinking':
                     // 更新步骤状态
+                    this._lastThinkingTs = Date.now(); // 看门狗心跳
                     const existingStep = this.pipelineSteps.find(s => s.step === data.step);
                     if (!existingStep) {
                         this.pipelineSteps.push({
@@ -1464,7 +1476,14 @@ function agentsPage() {
                     }
                     // 实时思考文本（LLM 流式/推理链），截取最新片段展示滚动效果
                     if (data.thinking) {
-                        this.thinkingMessage = `${data.agent_name}：${data.thinking.slice(-300)}`;
+                        let thinking = data.thinking;
+                        // JSON 泄漏检测：推理模型回显工具原始数据时，thinking 会包含
+                        // 大量 "key": value 结构（如 impact_level/url/tags/title/source 等）
+                        const jsonKeyCount = (thinking.match(/"/g) || []).length;
+                        if (jsonKeyCount > 8 && /"\w+"\s*:/.test(thinking)) {
+                            thinking = '[数据分析中...]';
+                        }
+                        this.thinkingMessage = `${data.agent_name}：${thinking.slice(-300)}`;
                     } else {
                         this.thinkingMessage = `${data.agent_name} 思考中...`;
                     }
@@ -1499,6 +1518,7 @@ function agentsPage() {
                 case 'pipeline_completed':
                     this.pipelineRunning = false;
                     this.thinkingMessage = '';
+                    this._lastThinkingTs = 0;
                     if (data.final_signal) {
                         this.finalSignal = data.final_signal;
                     }

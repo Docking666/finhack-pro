@@ -440,6 +440,7 @@ class StrategyGeneratorAgent(BaseAgent):
         )
 
         # 第一轮：多头论点
+        await self.emit_progress("📊 多头论点生成中...")
         bull_prompt = (
             f"## 标的: {symbol}\n\n{context}\n\n"
             "请作为多头研究员，列出所有支持看涨的理由。\n"
@@ -456,6 +457,7 @@ class StrategyGeneratorAgent(BaseAgent):
         )
 
         # 第二轮：空头论点
+        await self.emit_progress("📉 空头论点生成中...")
         bear_prompt = (
             f"## 标的: {symbol}\n\n{context}\n\n"
             "请作为空头研究员，列出所有支持看跌的理由。\n"
@@ -472,6 +474,7 @@ class StrategyGeneratorAgent(BaseAgent):
         )
 
         # 第三轮：裁判综合
+        await self.emit_progress("⚖️ 裁判综合评估中...")
         judge_prompt = (
             f"## 标的: {symbol}\n\n"
             f"### 原始分析\n{context}\n\n"
@@ -521,6 +524,7 @@ class StrategyGeneratorAgent(BaseAgent):
         )
 
         # 综合辩论结果生成最终策略信号
+        await self.emit_progress("🎯 策略信号生成中...")
         return await self._generate_signal_from_debate(
             symbol=symbol,
             analysis_report=analysis_report,

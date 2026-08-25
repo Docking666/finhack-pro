@@ -282,6 +282,7 @@ class LLMClient:
         on_token: Optional[Callable[[str], None]] = None,
         on_reasoning: Optional[Callable[[str], None]] = None,
         response_format: Optional[Dict[str, Any]] = None,
+        timeout: Optional[int] = None,
     ) -> str:
         """发送聊天请求
 
@@ -306,6 +307,7 @@ class LLMClient:
         """
         temp = temperature if temperature is not None else self.temperature
         max_tok = max_tokens if max_tokens is not None else self.max_tokens
+        effective_timeout = timeout if timeout is not None else self.timeout
 
         # 熔断限流检查
         if self.enable_protection and self._protection:
@@ -343,6 +345,7 @@ class LLMClient:
                     on_token=_combined(_inst_on_token, on_token),
                     on_reasoning=_combined(_inst_on_reasoning, on_reasoning),
                     response_format=response_format,
+                    timeout=effective_timeout,
                 )
             else:
                 result = await self._chat_anthropic(
@@ -350,6 +353,7 @@ class LLMClient:
                     stream=use_stream,
                     on_token=_combined(_inst_on_token, on_token),
                     on_reasoning=_combined(_inst_on_reasoning, on_reasoning),
+                    timeout=effective_timeout,
                 )
             
             # 成功回调
@@ -376,15 +380,26 @@ class LLMClient:
         on_token: Optional[Callable[[str], None]] = None,
         on_reasoning: Optional[Callable[[str], None]] = None,
         response_format: Optional[Dict[str, Any]] = None,
+        timeout: Optional[int] = None,
     ) -> str:
         """调用OpenAI API"""
         assert self._openai_client is not None
+
+        eff_timeout = timeout if timeout is not None else self.timeout
+        # 细粒度超时：connect(连接)/read(响应读取)/write(请求发送)/pool(连接池等待)
+        # 推理模型长思考场景下 read 超时是关键（reasoning_content 可能持续数十秒无新 token）
+        try:
+            from httpx import Timeout as HttpxTimeout
+            httpx_timeout = HttpxTimeout(connect=10.0, read=float(eff_timeout), write=30.0, pool=10.0)
+        except ImportError:
+            httpx_timeout = eff_timeout  # 降级：httpx 未安装时用裸 int
 
         kwargs: Dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            "timeout": httpx_timeout,
         }
         if system:
             kwargs["messages"] = [{"role": "system", "content": system}] + kwargs["messages"]
@@ -477,9 +492,12 @@ class LLMClient:
         stream: bool = False,
         on_token: Optional[Callable[[str], None]] = None,
         on_reasoning: Optional[Callable[[str], None]] = None,
+        timeout: Optional[int] = None,
     ) -> str:
         """调用Anthropic API"""
         assert self._anthropic_client is not None
+
+        eff_timeout = timeout if timeout is not None else self.timeout
 
         kwargs: Dict[str, Any] = {
             "model": self.model,
