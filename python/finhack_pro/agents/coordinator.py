@@ -1380,6 +1380,14 @@ class AgentCoordinator:
                 # 传入真实组合状态：初始资金 + 空仓（系统暂无组合管理模块，
                 # 初始组合是真实的起点状态；future 接入持仓后可 update_portfolio 覆盖）
                 from finhack_pro.agents.risk_manager import PortfolioState
+                # P2② 情绪择时：评估前注入全市场情绪温度（过热降仓/恐慌预警）
+                try:
+                    from finhack_pro.agents.sentiment_index import compute_sentiment_index
+                    sentiment_index = await compute_sentiment_index()
+                    self.risk_manager.set_sentiment_index(sentiment_index)
+                except Exception as e:
+                    self._logger.warning(f"[Pipeline {run_id}] 市场情绪指数获取失败（跳过择时）: {e}")
+
                 _initial = self.config.get("risk", {}).get("initial_capital", 1_000_000)
                 return await self.risk_manager.evaluate_risk(
                     signal=strategy_signal,

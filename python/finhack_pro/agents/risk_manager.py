@@ -123,6 +123,8 @@ class RiskManagerAgent(BaseAgent):
         self._max_drawdown_limit: float = config.get("max_drawdown_limit", 0.15)
         self._max_position_pct: float = config.get("max_position_pct", 0.3)
         self._max_total_position: float = config.get("max_total_position", 0.8)
+        # 市场情绪温度（P2② 情绪择时）：由流水线在评估前注入 compute_sentiment_index 结果
+        self._sentiment_index: Optional[Dict[str, Any]] = None
         # 信号置信度门槛（信号质量阈值，决策层；与 var_confidence 的 VaR 统计置信水平语义不同，
         # 见 config.RiskConfig 注释。0.6 为默认值，可配置）
         self._min_signal_confidence: float = config.get("signal_confidence_threshold", 0.6)
@@ -181,6 +183,10 @@ class RiskManagerAgent(BaseAgent):
             f"日盈亏={portfolio.daily_pnl:.2f}"
         )
 
+    def set_sentiment_index(self, sentiment_index: Optional[Dict[str, Any]]) -> None:
+        """注入全市场情绪温度（P2② 情绪择时，评估前由流水线调用）"""
+        self._sentiment_index = sentiment_index
+
     async def evaluate_risk(
         self,
         signal: StrategySignal,
@@ -235,6 +241,7 @@ class RiskManagerAgent(BaseAgent):
             包含passed和reasons的字典
         """
         reasons: List[str] = []
+        warnings_list: List[str] = []
 
         # 检查1: 信号方向为HOLD时直接通过(不交易)
         if signal.direction.value == "hold":
@@ -291,10 +298,25 @@ class RiskManagerAgent(BaseAgent):
         if signal.symbol in existing_symbols and signal.direction.value == "buy":
             reasons.append(f"{signal.symbol} 已在持仓中，不建议加仓")
 
+        # 检查9: 市场情绪温度（P2② 情绪择时）
+        # 过热 → 降仓/观望（拒绝）；恐慌 → 预警（不硬拒，提示机会与风险）
+        sentiment = getattr(self, "_sentiment_index", None) or {}
+        temperature = sentiment.get("temperature")
+        if temperature in ("overheated", "panicky"):
+            _detail = (
+                f"市场情绪{'过热' if temperature == 'overheated' else '恐慌'}"
+                f"(平均关注指数={sentiment.get('mean_attention')}, "
+                f"上涨占比={sentiment.get('advancers_ratio', 0):.1%})"
+            )
+            if temperature == "overheated":
+                reasons.append(f"{_detail}：情绪过热，建议降低仓位或观望（情绪择时）")
+            else:
+                warnings_list.append(f"{_detail}：市场恐慌，注意风险与潜在机会（情绪择时）")
+
         return {
             "passed": len(reasons) == 0,
             "reasons": reasons,
-            "warnings": [],
+            "warnings": warnings_list,
         }
 
     async def _llm_evaluate(
