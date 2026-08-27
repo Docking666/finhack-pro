@@ -50,14 +50,47 @@
                 <template x-for="(step, idx) in pipelineSteps" :key="idx">
                     <div class="flex items-center gap-2">
                         <div class="flex items-center gap-1.5 px-2 py-1 rounded text-xs"
-                             :class="step.status === 'completed' ? 'bg-green-900/50 text-green-400' : step.status === 'running' ? 'bg-blue-900/50 text-blue-400' : 'bg-[#0f172a] text-gray-500'">
+                             :class="step.status === 'completed' ? 'bg-green-900/50 text-green-400' : step.status === 'running' ? 'bg-blue-900/50 text-blue-400' : step.status === 'failed' ? 'bg-red-900/50 text-red-400' : step.status === 'skipped' ? 'bg-gray-800 text-gray-400' : 'bg-[#0f172a] text-gray-500'">
                             <template x-if="step.status === 'running'"><span class="spinner !w-3 !h-3 !border-2"></span></template>
                             <template x-if="step.status === 'completed'">
                                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
                             </template>
+                            <template x-if="step.status === 'failed'">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                            </template>
+                            <template x-if="step.status === 'skipped'">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6l5-3-5-3z"></path></svg>
+                            </template>
                             <span x-text="step.agent_name"></span>
+                            <span class="opacity-70"
+                                  x-text="step.status === 'completed' ? '完成' : step.status === 'running' ? '运行中' : step.status === 'failed' ? '失败' : step.status === 'skipped' ? '跳过' : '待执行'"></span>
                         </div>
                         <span x-show="idx < pipelineSteps.length - 1" class="text-gray-600">&rarr;</span>
+                    </div>
+                </template>
+            </div>
+
+            <!-- 任务操作区：取消 / 续跑 -->
+            <div class="flex items-center gap-3">
+                <template x-if="pipelineRunning && currentRunId">
+                    <button @click="cancelPipeline()"
+                            class="px-3 py-1 bg-red-600/80 hover:bg-red-600 text-white text-xs rounded-lg transition-colors flex items-center gap-1.5">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                        <span>取消流水线</span>
+                    </button>
+                </template>
+                <template x-if="!pipelineRunning && pendingRun">
+                    <div class="flex items-center gap-2 bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-1.5">
+                        <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+                        <span class="text-xs text-gray-400">
+                            未完成任务 <span class="text-gray-300 font-mono" x-text="pendingRun.run_id"></span>
+                            (<span x-text="pendingRun.status === 'running' ? '进行中' : pendingRun.status === 'failed' ? '失败' : '待执行'"></span>,
+                            <span x-text="pendingRun.steps_completed"></span>/<span x-text="pendingRun.steps_total || 7"></span> 步)
+                        </span>
+                        <button @click="resumePipeline(pendingRun)"
+                                class="px-2.5 py-0.5 bg-blue-600/80 hover:bg-blue-600 text-white text-xs rounded transition-colors">
+                            续跑
+                        </button>
                     </div>
                 </template>
             </div>
@@ -161,17 +194,18 @@
                                  fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
                             </svg>
-                            <div class="w-2 h-2 rounded-full" :class="record.status === 'completed' ? 'bg-green-500' : 'bg-red-500'"></div>
+                            <div class="w-2 h-2 rounded-full"
+                                 :class="record.status === 'completed' ? 'bg-green-500' : record.status === 'running' ? 'bg-blue-500' : record.status === 'cancelled' ? 'bg-gray-500' : 'bg-red-500'"></div>
                             <span class="text-sm text-white font-mono" x-text="record.symbol"></span>
                             <span class="text-xs text-gray-500" x-text="formatTime(record.start_time)"></span>
                         </div>
                         <div class="flex items-center gap-3">
                             <span class="text-xs text-gray-400">
-                                <span class="text-green-400" x-text="record.steps_completed"></span>/<span x-text="record.steps_total || 6"></span> 步
+                                <span class="text-green-400" x-text="record.steps_completed"></span>/<span x-text="record.steps_total || 7"></span> 步
                             </span>
                             <span class="px-2 py-0.5 rounded text-xs"
-                                  :class="record.status === 'completed' ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'"
-                                  x-text="record.status === 'completed' ? '完成' : '失败'"></span>
+                                  :class="record.status === 'completed' ? 'bg-green-900/50 text-green-400' : record.status === 'running' ? 'bg-blue-900/50 text-blue-400' : record.status === 'cancelled' ? 'bg-gray-800 text-gray-400' : 'bg-red-900/50 text-red-400'"
+                                  x-text="record.status === 'completed' ? '完成' : record.status === 'running' ? '运行中' : record.status === 'cancelled' ? '已取消' : record.status === 'pending' ? '待执行' : '失败'"></span>
                         </div>
                     </div>
 

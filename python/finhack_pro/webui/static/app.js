@@ -169,7 +169,14 @@ const API = {
             const resp = await fetch(url, options);
             const json = await resp.json();
             if (!resp.ok) {
-                throw new Error(json.detail || `HTTP ${resp.status}`);
+                // detail 可能是字符串（FastAPI 默认）或对象（如 409 携带 active_run_id）
+                const detail = json.detail;
+                const msg = typeof detail === 'string' ? detail
+                    : (detail && detail.message) || `HTTP ${resp.status}`;
+                const err = new Error(msg);
+                err.status = resp.status;
+                if (detail && typeof detail === 'object') err.detail = detail;
+                throw err;
             }
             return json;
         } catch (e) {
@@ -208,8 +215,11 @@ const API = {
     // Agent管理
     listAgents() { return this.get('/api/agents/list'); },
     getAgentStatus(agentId) { return this.get(`/api/agents/${agentId}/status`); },
-    runPipeline(symbol) { return this.post('/api/agents/run-pipeline', { symbol }); },
+    runPipeline(payload) { return this.post('/api/agents/run-pipeline', payload || { symbol: '600519.SH' }); },
     getPipelineHistory() { return this.get('/api/agents/pipeline/history'); },
+    listPipelineRuns() { return this.get('/api/agents/pipeline/list'); },
+    getPipelineRun(runId) { return this.get(`/api/agents/pipeline/${runId}`); },
+    cancelPipeline(runId) { return this.post(`/api/agents/pipeline/${runId}/cancel`, {}); },
 
     // 共享记忆
     getMemoryStats() { return this.get('/api/memory/stats'); },
@@ -1367,9 +1377,19 @@ function agentsPage() {
         finalSignal: null,
         // 当前页面发起的流水线 run_id：事件按此过滤，防刷新/多标签页事件混淆
         currentRunId: null,
+        // 任务列表（含磁盘检查点恢复的未完成任务）
+        pipelineRuns: [],
         pipelineHistory: [],
         expandedLogs: [],
         _lastThinkingTs: 0,          // 看门狗：最后一次 agent_thinking 事件时间戳
+
+        // 未完成任务（非当前发起 run）：提供续跑入口
+        get pendingRun() {
+            const run = this.pipelineRuns.find(r =>
+                (r.status === 'running' || r.status === 'failed' || r.status === 'pending')
+                && r.run_id !== this.currentRunId);
+            return run || null;
+        },
 
         async init() {
             window.__agentsPage = this;
@@ -1388,15 +1408,27 @@ function agentsPage() {
 
         async loadData() {
             try {
-                const [agentsResp, historyResp] = await Promise.allSettled([
+                const [agentsResp, historyResp, runsResp] = await Promise.allSettled([
                     API.listAgents(),
                     API.getPipelineHistory(),
+                    API.listPipelineRuns(),
                 ]);
                 if (agentsResp.status === 'fulfilled' && agentsResp.value.success) {
                     this.agentList = agentsResp.value.data;
                 }
                 if (historyResp.status === 'fulfilled' && historyResp.value.success) {
                     this.pipelineHistory = historyResp.value.data;
+                }
+                if (runsResp.status === 'fulfilled' && runsResp.value.success) {
+                    this.pipelineRuns = runsResp.value.data;
+                    // 刷新后恢复：存在 running 任务 → 重新订阅其事件流（根治
+                    // currentRunId=null 导致后台事件被 run_id 过滤丢弃、界面空白）
+                    const running = runsResp.value.data.find(r => r.status === 'running');
+                    if (running) {
+                        this.currentRunId = running.run_id;
+                        this.pipelineRunning = true;
+                        this.pipelineSteps = (running.steps || []).map(s => ({ ...s }));
+                    }
                 }
             } catch (e) {
                 console.error('加载Agent数据失败:', e);
@@ -1424,7 +1456,7 @@ function agentsPage() {
             }
         },
 
-        async runPipeline() {
+        async runPipeline(runId = null) {
             if (!this.pipelineSymbol.trim()) {
                 window.__alpineApp.showToast('请输入标的代码', 'warning');
                 return;
@@ -1436,17 +1468,57 @@ function agentsPage() {
             this.thinkingMessage = '';
             this.finalSignal = null;
 
+            const payload = { symbol: this.pipelineSymbol };
+            if (runId) {
+                // 模块化续跑：复用 run_id，已完成步骤保留、未完成模块从头重跑
+                payload.run_id = runId;
+                payload.resume = true;
+            }
+
             try {
-                const resp = await API.runPipeline(this.pipelineSymbol);
+                const resp = await API.runPipeline(payload);
                 if (resp.success) {
                     // 记录本次发起的 run_id，事件流只展示本任务（防混淆）
                     this.currentRunId = resp.data && resp.data.run_id;
-                    window.__alpineApp.showToast('分析流水线已启动', 'info');
+                    window.__alpineApp.showToast(runId ? '已从断点续跑' : '分析流水线已启动', 'info');
                 }
             } catch (e) {
                 this.pipelineRunning = false;
-                window.__alpineApp.showToast('启动流水线失败: ' + e.message, 'error');
+                // 409 并发隔离：已有任务在运行 → 明确提示并提供查看入口
+                if (e.status === 409) {
+                    const activeRunId = e.detail && e.detail.active_run_id;
+                    window.__alpineApp.showToast(
+                        '已有流水线正在运行' + (activeRunId ? `（${activeRunId}）` : '') + '，可等待完成、取消或续跑',
+                        'warning');
+                    this.loadData();
+                } else {
+                    window.__alpineApp.showToast('启动流水线失败: ' + e.message, 'error');
+                }
             }
+        },
+
+        async cancelPipeline() {
+            if (!this.currentRunId) return;
+            try {
+                const resp = await API.cancelPipeline(this.currentRunId);
+                if (resp.success) {
+                    window.__alpineApp.showToast('取消请求已发送', 'info');
+                } else {
+                    window.__alpineApp.showToast('任务不在运行中，状态: ' + (resp.data && resp.data.status), 'warning');
+                    this.loadData();
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('取消失败: ' + e.message, 'error');
+            }
+        },
+
+        async resumePipeline(run) {
+            if (!run || !run.run_id) return;
+            // 用任务自身的标的代码续跑（防用户手改输入框导致 symbol 不一致被拒）
+            if (run.symbol) {
+                this.pipelineSymbol = run.symbol;
+            }
+            await this.runPipeline(run.run_id);
         },
 
         handleWSMessage(data) {
@@ -1544,6 +1616,21 @@ function agentsPage() {
                     });
                     this.loadData();
                     window.__alpineApp.showToast('分析流水线失败: ' + (data.error || '未知错误'), 'error');
+                    break;
+
+                case 'pipeline_cancelled':
+                    this.pipelineRunning = false;
+                    this.thinkingMessage = '';
+                    this._lastThinkingTs = 0;
+                    this.thoughtMessages.push({
+                        step: 98,
+                        agent_id: 'system',
+                        agent_name: '系统提示',
+                        content: '## ⏹ 流水线已取消\n\n任务已停止，已完成步骤保留，可在任务列表中选择"续跑"。',
+                        duration_ms: 0,
+                    });
+                    this.loadData();
+                    window.__alpineApp.showToast('流水线已取消', 'warning');
                     break;
             }
         },
