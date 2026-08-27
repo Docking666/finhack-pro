@@ -241,7 +241,9 @@ async def list_backtest_strategies():
     """回测可用策略列表：内置策略 + 策略工坊保存的自有策略"""
     from pathlib import Path
 
-    builtin = ["dual_thrust", "momentum", "mean_reversion", "ml_strategy"]
+    builtin = ["dual_thrust", "momentum", "mean_reversion", "ml_strategy",
+               "micro_cap", "event_driven", "sentiment_reversal",
+               "dragon_tiger_follow", "alternative_cross"]
     custom: list = []
     gen_dir = Path("data/generated_strategies")
     if gen_dir.is_dir():

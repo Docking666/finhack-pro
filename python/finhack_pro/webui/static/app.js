@@ -877,6 +877,11 @@ function backtestPage() {
                 momentum: '动量策略',
                 mean_reversion: '均值回归',
                 ml_strategy: 'ML策略',
+                micro_cap: '小市值策略',
+                event_driven: '事件驱动策略',
+                sentiment_reversal: '情绪反转策略',
+                dragon_tiger_follow: '龙虎榜跟随策略',
+                alternative_cross: '另类数据交叉策略',
             };
             try {
                 const resp = await API.get('/api/backtest/strategies');

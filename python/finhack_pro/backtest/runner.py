@@ -132,6 +132,20 @@ class BacktestRunner:
             logger.info("Rust引擎不可用，使用Python回测模式")
             return False
 
+    # BarData.extra 可选列（差异化策略依赖；数据框含这些列时自动注入）
+    _EXTRA_COLUMNS = ("volume_ratio", "ma20", "rsi", "macd_signal", "turnover", "market_cap", "net_inflow")
+
+    @classmethod
+    def _extract_bar_extra(cls, row: pd.Series) -> Dict[str, Any]:
+        """从数据行提取可选扩展字段注入 BarData.extra（NaN/缺失列安全跳过）"""
+        extra: Dict[str, Any] = {}
+        for col in cls._EXTRA_COLUMNS:
+            if col in row.index:
+                val = row[col]
+                if val is not None and not (isinstance(val, float) and val != val):  # 非 NaN
+                    extra[col] = float(val) if isinstance(val, (int, float)) else val
+        return extra
+
     def run(
         self,
         strategy: BaseStrategy,
@@ -250,6 +264,7 @@ class BacktestRunner:
                 low=float(row["low"]),
                 close=float(row["close"]),
                 volume=float(row["volume"]),
+                extra=self._extract_bar_extra(row),
             )
 
             context.current_time = bar_date
@@ -514,6 +529,17 @@ class BacktestRunner:
         strategy_cls = strategies.get(name.lower())
         if strategy_cls:
             return strategy_cls()
+
+        # 差异化策略（README Niche Strategy Framework："机构做广度，个人做深度"）
+        niche_types = {
+            "micro_cap", "event_driven", "sentiment_reversal",
+            "dragon_tiger_follow", "alternative_cross",
+        }
+        if name.lower() in niche_types:
+            from finhack_pro.strategies.niche_strategy import create_niche_strategy
+            strategy = create_niche_strategy(name.lower())
+            logger.info(f"加载差异化策略: {name} -> {strategy.config.niche_type.value}")
+            return strategy
 
         # 自定义策略：工坊保存到 data/generated_strategies/{name}/strategy.py
         # （生成代码继承 BaseStrategy 并实现 on_bar，与内置策略接口一致）

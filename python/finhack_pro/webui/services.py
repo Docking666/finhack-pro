@@ -42,6 +42,43 @@ from finhack_pro.webui.models import (
 # 配置服务
 # ============================================================
 
+# 差异化策略（niche）依赖的 BarData.extra 技术字段预计算
+_NICHE_STRATEGY_IDS = {
+    "micro_cap", "event_driven", "sentiment_reversal",
+    "dragon_tiger_follow", "alternative_cross",
+}
+
+
+def _precompute_niche_fields(data) -> "Any":
+    """为差异化策略预计算技术字段（ma20/volume_ratio/rsi/macd_signal）
+
+    写入 data DataFrame 列，回测 runner 的 _extract_bar_extra 自动注入 BarData.extra。
+    缺失数据源列时安全跳过（框架语义诚实：无数据不造假信号）。
+    """
+    df = data.copy()
+    if "close" not in df.columns:
+        return df
+
+    # MA20
+    df["ma20"] = df["close"].rolling(20, min_periods=5).mean()
+    # 量比（当日量 / 20日均量）
+    if "volume" in df.columns:
+        df["volume_ratio"] = df["volume"] / df["volume"].rolling(20, min_periods=5).mean().replace(0, 1e-10)
+    # RSI14
+    delta = df["close"].diff()
+    gain = delta.clip(lower=0).rolling(14, min_periods=5).mean()
+    loss = (-delta.clip(upper=0)).rolling(14, min_periods=5).mean()
+    rs = gain / loss.replace(0, 1e-10)
+    df["rsi"] = 100 - 100 / (1 + rs)
+    # MACD 金叉/死叉（ema12 上穿/下穿 ema26）
+    ema12 = df["close"].ewm(span=12, adjust=False).mean()
+    ema26 = df["close"].ewm(span=26, adjust=False).mean()
+    df["macd_signal"] = "neutral"
+    df.loc[(ema12 > ema26) & (ema12.shift(1) <= ema26.shift(1)), "macd_signal"] = "golden_cross"
+    df.loc[(ema12 < ema26) & (ema12.shift(1) >= ema26.shift(1)), "macd_signal"] = "death_cross"
+    return df
+
+
 class ConfigService:
     """配置管理服务
 
@@ -594,6 +631,19 @@ class BacktestService:
                     for key, value in request.strategy_params.items():
                         if hasattr(strategy, key):
                             setattr(strategy, key, value)
+
+            # 差异化策略（niche）：预计算技术字段 → runner 注入 BarData.extra；
+            # 并喂入 Agent 扫描的微观事件（实时链路：事件驱动/情绪反转/龙虎榜跟随）
+            _strat_ids = request.strategies or [request.strategy]
+            if any(s.lower() in _NICHE_STRATEGY_IDS for s in _strat_ids):
+                data = _precompute_niche_fields(data)
+                micro_events = getattr(request, "micro_events", None)
+                if micro_events and hasattr(strategy, "feed_micro_events"):
+                    try:
+                        fed = strategy.feed_micro_events(micro_events)
+                        logger.info(f"[Backtest {task_id}] 差异化策略接入 {fed} 条微观事件（实时链路）")
+                    except Exception as e:
+                        logger.warning(f"[Backtest {task_id}] 微观事件喂入失败: {e}")
 
             # 创建回测运行器
             runner = BacktestRunner()

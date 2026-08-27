@@ -181,6 +181,7 @@ class BacktestRequest(BaseModel):
     strategies: Optional[List[str]] = Field(None, description="多策略组合（非空时启用信号聚合，strategy 字段被忽略）")
     signal_filters: Optional[Dict[str, Any]] = Field(None, description="信号滤波配置（如 {enable_high_cost: false, kama_period: 10}）")
     validator_profile: str = Field("default", description="策略验证档位: default/conservative/aggressive/high_frequency/low_frequency")
+    micro_events: Optional[List[Dict[str, Any]]] = Field(None, description="Agent 扫描的微观事件（喂入差异化策略实时信号，如事件驱动/情绪反转/龙虎榜跟随）")
 
 
 class BacktestStatus(BaseModel):
