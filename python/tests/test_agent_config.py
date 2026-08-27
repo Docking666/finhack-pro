@@ -163,7 +163,10 @@ class TestStrategyGeneratorDebate:
             "key_debates": ["估值"],
             "conclusion": "综合看多",
         })
-        llm.chat = AsyncMock(side_effect=["多头论点", "空头论点", judge_json])
+        llm.chat = AsyncMock(side_effect=[
+            "多头论点", "空头论点", judge_json,   # 第 1 轮
+            "多头反驳", "空头反驳", judge_json,   # 第 2 轮（分歧 0.3 不收敛 → 轮满停）
+        ])
         llm._extract_json = MagicMock(side_effect=lambda t: json.loads(t))
         # mock LLM 返回真实结构对象（SDD：不依赖 fallback 兜底）
         from finhack_pro.agents.strategy_generator import SignalDirection, StrategySignal
@@ -180,7 +183,7 @@ class TestStrategyGeneratorDebate:
             risk_level="medium",
         )
         signal = await agent.debate(analysis_report=report, current_price=1500.0)
-        assert llm.chat.await_count == 3
+        assert llm.chat.await_count == 6  # 多轮：2 轮 × 3 次（分歧不收敛 → 轮满停止）
         assert signal.symbol == "600519.SH"
         assert signal.direction.value in ("buy", "sell", "hold")
 
@@ -202,7 +205,10 @@ class TestStrategyGeneratorDebate:
             "consensus": "bearish", "confidence": 0.8,
             "key_debates": ["x"], "conclusion": "偏空",
         })
-        llm.chat = AsyncMock(side_effect=["多头", "空头", judge_json])
+        llm.chat = AsyncMock(side_effect=[
+            "多头", "空头", judge_json,          # 第 1 轮（分歧 0.3 不收敛）
+            "多头反驳", "空头反驳", judge_json,   # 第 2 轮（轮满停止）
+        ])
         llm._extract_json = MagicMock(side_effect=lambda t: json.loads(t))
         llm.chat_structured = AsyncMock(return_value=StrategySignal(
             symbol="600519.SH", direction=SignalDirection.SELL, confidence=0.8,

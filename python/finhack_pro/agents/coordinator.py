@@ -38,7 +38,7 @@ _STEP_TIMEOUTS: Dict[int, int] = {
     2: 120,   # 新闻社媒：工具调用(akshare) + 单次 LLM
     3: 120,   # 基本面：单次 LLM
     4: 150,   # 微观事件：多次工具调用(龙虎榜/大宗/北向等) + LLM
-    5: 600,   # 多空辩论：4 次串行 LLM（多头→空头→裁判→信号），最耗时
+    5: 900,   # 多空辩论：多轮(至多2轮×3次)串行 LLM + 情绪工具，最耗时
     6: 90,    # 风控审批：单次 LLM
     7: 90,    # 交易执行：单次 LLM
 }
@@ -1590,6 +1590,20 @@ class AgentCoordinator:
         if hasattr(self.strategy_generator, "debate"):
             self._logger.info("使用多空辩论模式生成策略...")
             try:
+                # P1①：获取标的真实股吧关注度/排名，注入辩论上下文
+                sentiment_data = None
+                try:
+                    from finhack_pro.agents.alternative_data_tools import FetchSentimentDataTool
+                    _sent = await FetchSentimentDataTool().execute(symbol=symbol, days=7)
+                    if _sent and not _sent.get("error"):
+                        sentiment_data = _sent
+                        self._logger.info(
+                            f"[{symbol}] 市场情绪注入辩论: 关注指数={_sent.get('discussion_count')}, "
+                            f"排名={_sent.get('hot_rank')}, 变化={_sent.get('rank_change')}"
+                        )
+                except Exception as e:
+                    self._logger.warning(f"[{symbol}] 获取市场情绪数据失败（跳过注入）: {e}")
+
                 signal = await self.strategy_generator.debate(
                     analysis_report=analysis_report,
                     news_report=news_report,
@@ -1597,6 +1611,7 @@ class AgentCoordinator:
                     micro_event_report=micro_event_report,
                     current_price=current_price,
                     report_paths=report_paths,
+                    sentiment_data=sentiment_data,
                 )
                 return signal
             except Exception as e:

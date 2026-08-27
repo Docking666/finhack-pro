@@ -94,7 +94,12 @@ class TestDebateContextThinking:
 
         async def _fake_chat(message, **kwargs):
             captured.append(message)
-            return "多头论点" if len(captured) == 1 else ("空头论点" if len(captured) == 2 else judge_json)
+            cycle = (len(captured) - 1) % 3  # 每轮 3 次：多/空/裁
+            if cycle == 0:
+                return "多头论点"
+            if cycle == 1:
+                return "空头论点"
+            return judge_json
 
         llm.chat = AsyncMock(side_effect=_fake_chat)
         llm._extract_json = MagicMock(side_effect=lambda t: json.loads(t))
@@ -116,8 +121,8 @@ class TestDebateContextThinking:
             fundamental_report=fund,
             micro_event_report=micro,
         )
-        # 三轮 prompt 都应包含 thinking
-        assert len(captured) == 3, f"chat 应调用3次，实际{len(captured)}"
+        # 多轮辩论（分歧 0.2 不收敛 → 2 轮共 6 次调用），所有 prompt 都应包含 thinking
+        assert len(captured) == 6, f"chat 应调用6次，实际{len(captured)}"
         for prompt in captured:
             has_thinking = any(
                 t in prompt for t in ("均线纠缠", "新闻情绪", "估值合理", "并购事件")

@@ -320,6 +320,7 @@ class StrategyGeneratorAgent(BaseAgent):
         micro_event_report: Any = None,
         current_price: Optional[float] = None,
         report_paths: Optional[Dict[str, str]] = None,
+        sentiment_data: Optional[Dict[str, Any]] = None,
     ) -> str:
         """构建多空辩论的四方报告上下文
 
@@ -385,6 +386,21 @@ class StrategyGeneratorAgent(BaseAgent):
             if getattr(micro_event_report, 'thinking', None):
                 parts.append(f"**分析推理**: {micro_event_report.thinking}")
 
+        # 市场情绪与关注度（P1①：股吧真实关注度/排名变化作为辩论温度计）
+        if sentiment_data:
+            parts.append("\n## 市场情绪与关注度\n")
+            parts.append(f"**股吧关注指数**: {sentiment_data.get('discussion_count', 'N/A')}")
+            parts.append(f"**全市场人气排名**: {sentiment_data.get('hot_rank', 'N/A')}")
+            rank_change = sentiment_data.get("rank_change") or 0
+            if rank_change:
+                parts.append(f"**排名变化**: {'上升' if rank_change > 0 else '下降'} {abs(rank_change)} 位")
+            else:
+                parts.append("**排名变化**: 平稳")
+            if sentiment_data.get("spike_detected"):
+                parts.append("**舆情爆发**: 关注度显著上升（排名快速攀升，短期波动或放大）")
+            parts.append("**解读**: 关注度是市场情绪温度计——极端过热需警惕短期回调，"
+                         "冷清期机会可能被低估；排名骤升常伴随波动放大。")
+
         # 完整报告 md 文件引用（三层架构第2层）：LLM 可按需读取全文
         if report_paths:
             parts.append("\n## 完整报告文件（可按需读取细节）")
@@ -404,16 +420,13 @@ class StrategyGeneratorAgent(BaseAgent):
         micro_event_report: Any = None,
         current_price: Optional[float] = None,
         report_paths: Optional[Dict[str, str]] = None,
+        sentiment_data: Optional[Dict[str, Any]] = None,
     ) -> StrategySignal:
         """执行多空辩论并生成最终策略信号
 
-        综合技术面、新闻面、基本面、微观事件四方报告，通过三轮LLM调用
-        完成多空辩论：
-        1. 多头研究员生成看涨论点
-        2. 空头研究员生成看跌论点
-        3. 裁判综合双方论点做出判断
-
-        最终将辩论结果与技术面报告综合生成 StrategySignal。
+        多轮辩论（P1① 升级）：每轮 = 多头论点 → 空头论点 → 裁判裁决；
+        裁判分歧收敛（|bull-bear| < 0.1）或达轮次上限则停止——支持
+        "论点→反驳→收敛"而非固定 3 次调用。情绪/关注度分位注入上下文。
 
         Args:
             analysis_report: 技术面分析报告
@@ -421,87 +434,129 @@ class StrategyGeneratorAgent(BaseAgent):
             fundamental_report: 基本面分析报告(可选)
             micro_event_report: 微观事件分析报告(可选)
             current_price: 当前价格(可选)
-            report_paths: 各报告 md 落盘路径字典（三层架构第2层），
-                如 {"analysis": ".../step1_market_analysis.md", ...}
+            report_paths: 各报告 md 落盘路径字典
+            sentiment_data: 股吧关注度/排名数据（FetchSentimentDataTool 输出）
 
         Returns:
             StrategySignal 策略信号
-
-        Raises:
-            LLM 硬错误会向上抛(由 coordinator 回退到 generate_strategy)
         """
         assert self._llm is not None
         symbol = getattr(analysis_report, "symbol", "unknown")
 
-        self._logger.info(f"[{symbol}] 开始多空辩论...")
+        self._logger.info(f"[{symbol}] 开始多空辩论（多轮）...")
         context = self._build_debate_context(
             analysis_report, news_report, fundamental_report, micro_event_report, current_price,
-            report_paths=report_paths,
+            report_paths=report_paths, sentiment_data=sentiment_data,
         )
 
-        # 第一轮：多头论点
-        await self.emit_progress("📊 多头论点生成中...")
-        bull_prompt = (
-            f"## 标的: {symbol}\n\n{context}\n\n"
-            "请作为多头研究员，列出所有支持看涨的理由。\n"
-            "先在开头用 3-5 句逐步展示你的推理过程（关键证据与逻辑链条），"
-            "然后再输出JSON格式：\n"
-            "- arguments: 看涨论点列表(每个论点包含 reason 和 strength)\n"
-            "- overall_strength: 多头整体强度(0-1)\n"
-            "- weaknesses: 多头论点的潜在弱点"
-        )
-        bull_response = await self._llm.chat(
-            message=bull_prompt,
-            system=BULL_ANALYST_SYSTEM_PROMPT,
-            temperature=0.4,
-        )
+        max_rounds = int(getattr(self, "max_debate_rounds", 2) or 2)
+        bull_strength, bear_strength = 0.5, 0.5
+        prev_bull = prev_bear = prev_judge = ""
+        debate_data: Dict[str, Any] = {}
+        final_judge = ""
 
-        # 第二轮：空头论点
-        await self.emit_progress("📉 空头论点生成中...")
-        bear_prompt = (
-            f"## 标的: {symbol}\n\n{context}\n\n"
-            "请作为空头研究员，列出所有支持看跌的理由。\n"
-            "先在开头用 3-5 句逐步展示你的推理过程（关键证据与逻辑链条），"
-            "然后再输出JSON格式：\n"
-            "- arguments: 看跌论点列表(每个论点包含 reason 和 strength)\n"
-            "- overall_strength: 空头整体强度(0-1)\n"
-            "- weaknesses: 空头论点的潜在弱点"
-        )
-        bear_response = await self._llm.chat(
-            message=bear_prompt,
-            system=BEAR_ANALYST_SYSTEM_PROMPT,
-            temperature=0.4,
-        )
+        for round_i in range(1, max_rounds + 1):
+            self._logger.info(f"[{symbol}] 辩论第 {round_i}/{max_rounds} 轮")
 
-        # 第三轮：裁判综合
-        await self.emit_progress("⚖️ 裁判综合评估中...")
-        judge_prompt = (
-            f"## 标的: {symbol}\n\n"
-            f"### 原始分析\n{context}\n\n"
-            f"### 多头论点\n{bull_response}\n\n"
-            f"### 空头论点\n{bear_response}\n\n"
-            "请作为裁判，综合多空双方论点做出最终判断。\n"
-            "先在开头用 3-5 句逐步展示你的权衡推理（关键争议如何裁决），"
-            "然后再输出JSON格式：\n"
-            "- bull_arguments: 提取的多头核心论点列表\n"
-            "- bear_arguments: 提取的空头核心论点列表\n"
-            "- bull_strength: 多头论点强度(0-1)\n"
-            "- bear_strength: 空头论点强度(0-1)\n"
-            "- consensus: 共识方向(bullish/bearish/neutral)\n"
-            "- confidence: 共识置信度(0-1)\n"
-            "- key_debates: 关键争议点列表\n"
-            "- conclusion: 综合结论(100字以内)"
-        )
-        judge_response = await self._llm.chat(
-            message=judge_prompt,
-            system=DEBATE_JUDGE_SYSTEM_PROMPT,
-            temperature=0.2,
-        )
+            # 第一角色：多头（第2轮起需反驳空头论点 + 参考裁判反馈）
+            await self.emit_progress(f"📊 多头论点生成中（第 {round_i} 轮）...")
+            bull_prompt = (
+                f"## 标的: {symbol}\n\n{context}\n\n"
+                "请作为多头研究员，列出所有支持看涨的理由。\n"
+                "先在开头用 3-5 句逐步展示你的推理过程（关键证据与逻辑链条），"
+                "然后再输出JSON格式：\n"
+                "- arguments: 看涨论点列表(每个论点包含 reason 和 strength)\n"
+                "- overall_strength: 多头整体强度(0-1)\n"
+                "- weaknesses: 多头论点的潜在弱点"
+            )
+            if round_i > 1 and (prev_bear or prev_judge):
+                bull_prompt += (
+                    f"\n\n### 需反驳的空头论点（第 {round_i - 1} 轮）\n{prev_bear}"
+                    f"\n\n### 裁判上一轮反馈\n{prev_judge}"
+                    "\n\n请针对性反驳空头最强论点，并回应对裁判指出的弱点。"
+                )
+            bull_response = await self._llm.chat(
+                message=bull_prompt,
+                system=BULL_ANALYST_SYSTEM_PROMPT,
+                temperature=0.4,
+            )
+            prev_bull = bull_response
 
-        # 解析裁判结果
+            # 第二角色：空头（同理反驳多头）
+            await self.emit_progress(f"📉 空头论点生成中（第 {round_i} 轮）...")
+            bear_prompt = (
+                f"## 标的: {symbol}\n\n{context}\n\n"
+                "请作为空头研究员，列出所有支持看跌的理由。\n"
+                "先在开头用 3-5 句逐步展示你的推理过程（关键证据与逻辑链条），"
+                "然后再输出JSON格式：\n"
+                "- arguments: 看跌论点列表(每个论点包含 reason 和 strength)\n"
+                "- overall_strength: 空头整体强度(0-1)\n"
+                "- weaknesses: 空头论点的潜在弱点"
+            )
+            if round_i > 1 and (prev_bull or prev_judge):
+                bear_prompt += (
+                    f"\n\n### 需反驳的多头论点（第 {round_i - 1} 轮）\n{prev_bull}"
+                    f"\n\n### 裁判上一轮反馈\n{prev_judge}"
+                    "\n\n请针对性反驳多头最强论点，并回应对裁判指出的弱点。"
+                )
+            bear_response = await self._llm.chat(
+                message=bear_prompt,
+                system=BEAR_ANALYST_SYSTEM_PROMPT,
+                temperature=0.4,
+            )
+            prev_bear = bear_response
+
+            # 第三角色：裁判裁决
+            await self.emit_progress(f"⚖️ 裁判综合评估中（第 {round_i} 轮）...")
+            judge_prompt = (
+                f"## 标的: {symbol}\n\n"
+                f"### 原始分析\n{context}\n\n"
+                f"### 多头论点\n{bull_response}\n\n"
+                f"### 空头论点\n{bear_response}\n\n"
+                "请作为裁判，综合多空双方论点做出最终判断。\n"
+                "先在开头用 3-5 句逐步展示你的权衡推理（关键争议如何裁决），"
+                "然后再输出JSON格式：\n"
+                "- bull_arguments: 提取的多头核心论点列表\n"
+                "- bear_arguments: 提取的空头核心论点列表\n"
+                "- bull_strength: 多头论点强度(0-1)\n"
+                "- bear_strength: 空头论点强度(0-1)\n"
+                "- consensus: 共识方向(bullish/bearish/neutral)\n"
+                "- confidence: 共识置信度(0-1)\n"
+                "- key_debates: 关键争议点列表\n"
+                "- conclusion: 综合结论(100字以内)"
+            )
+            if round_i > 1:
+                judge_prompt += (
+                    f"\n\n### 上一轮裁决记录\n{prev_judge}"
+                    "\n请说明本轮与上轮的分歧是否收敛，并给出最终裁决。"
+                )
+            judge_response = await self._llm.chat(
+                message=judge_prompt,
+                system=DEBATE_JUDGE_SYSTEM_PROMPT,
+                temperature=0.2,
+            )
+            prev_judge = judge_response
+            final_judge = judge_response
+
+            # 解析本轮裁判结果
+            try:
+                import json as _json
+                debate_data = self._llm._extract_json(judge_response)
+                bull_strength = float(debate_data.get("bull_strength", 0.5) or 0.5)
+                bear_strength = float(debate_data.get("bear_strength", 0.5) or 0.5)
+            except Exception as e:
+                self._logger.warning(f"[{symbol}] 第 {round_i} 轮裁判解析失败: {e}")
+                if round_i == max_rounds:
+                    raise ValueError(f"裁判结果解析失败: {e}") from e
+                continue
+
+            # 收敛早停：多空强度分歧足够小 → 辩论收敛
+            if abs(bull_strength - bear_strength) < 0.1:
+                self._logger.info(f"[{symbol}] 辩论收敛（|bull-bear|={abs(bull_strength - bear_strength):.2f}），第 {round_i} 轮停止")
+                break
+
+        # 最终裁判结果（末轮或收敛轮）
         try:
-            import json as _json
-            debate_data = self._llm._extract_json(judge_response)
             debate_result = BullBearDebateResult(
                 symbol=symbol,
                 bull_arguments=debate_data.get("bull_arguments", []),
