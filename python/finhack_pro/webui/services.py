@@ -563,11 +563,37 @@ class BacktestService:
                 })
 
             # 创建策略实例（内置或工坊保存的自有策略，见 BacktestRunner.load_strategy）
-            strategy = BacktestRunner.load_strategy(request.strategy)
-            if request.strategy_params:
-                for key, value in request.strategy_params.items():
-                    if hasattr(strategy, key):
-                        setattr(strategy, key, value)
+            # 多策略组合：启用信号聚合器 + 滤波管道（CompositeStrategy，runner 接口不变）
+            if request.strategies:
+                from finhack_pro.strategies.composite_strategy import CompositeStrategy
+                from finhack_pro.strategies.signal_aggregator import SignalAggregator
+
+                subs = []
+                for sname in request.strategies:
+                    try:
+                        subs.append(BacktestRunner.load_strategy(sname))
+                    except Exception as e:
+                        raise ValueError(f"多策略组合加载失败 [{sname}]: {e}")
+                if not subs:
+                    raise ValueError("多策略组合为空，无法回测")
+                filter_cfg = request.signal_filters or {}
+                strategy = CompositeStrategy(
+                    strategies=subs,
+                    aggregator=SignalAggregator(
+                        filter_config=filter_cfg,
+                        enable_high_cost_filters=bool(filter_cfg.get("enable_high_cost", False)),
+                    ),
+                )
+                logger.info(
+                    f"[Backtest {task_id}] 多策略组合回测: {request.strategies} "
+                    f"(聚合器+滤波管道, enable_high_cost={filter_cfg.get('enable_high_cost', False)})"
+                )
+            else:
+                strategy = BacktestRunner.load_strategy(request.strategy)
+                if request.strategy_params:
+                    for key, value in request.strategy_params.items():
+                        if hasattr(strategy, key):
+                            setattr(strategy, key, value)
 
             # 创建回测运行器
             runner = BacktestRunner()

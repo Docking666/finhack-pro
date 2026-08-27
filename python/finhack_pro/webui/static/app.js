@@ -842,6 +842,8 @@ function backtestPage() {
             start_date: '2024-01-01',
             end_date: '2024-12-31',
             initial_capital: 1000000,
+            strategies: [],              // 多策略组合（≥2 时启用信号聚合+滤波）
+            enableHighCostFilters: false, // 高开销滤波器（Transformer/粒子滤波）
         },
         strategyOptions: [],  // 内置 + 工坊自有策略
         running: false,
@@ -1053,13 +1055,21 @@ function backtestPage() {
 
             try {
                 const symbols = this.params.symbols.split(',').map(s => s.trim()).filter(Boolean);
-                const resp = await API.runBacktest({
+                const payload = {
                     strategy: this.params.strategy,
                     symbols,
                     start_date: this.params.start_date,
                     end_date: this.params.end_date,
                     initial_capital: this.params.initial_capital,
-                });
+                };
+                // 多策略组合（≥2）→ 启用信号聚合器+滤波管道，strategy 字段被后端忽略
+                if ((this.params.strategies || []).length >= 2) {
+                    payload.strategies = this.params.strategies;
+                    payload.signal_filters = {
+                        enable_high_cost: !!this.params.enableHighCostFilters,
+                    };
+                }
+                const resp = await API.runBacktest(payload);
 
                 if (resp.success) {
                     this.currentTaskId = resp.data.task_id;

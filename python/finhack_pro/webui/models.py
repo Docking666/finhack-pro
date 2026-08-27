@@ -177,6 +177,9 @@ class BacktestRequest(BaseModel):
     stamp_tax_rate: float = Field(0.001, description="印花税率")
     slippage: float = Field(0.001, description="滑点")
     strategy_params: Optional[Dict[str, Any]] = Field(None, description="策略参数")
+    # 信号处理流水线（README：信号聚合器 + 滤波管道）
+    strategies: Optional[List[str]] = Field(None, description="多策略组合（非空时启用信号聚合，strategy 字段被忽略）")
+    signal_filters: Optional[Dict[str, Any]] = Field(None, description="信号滤波配置（如 {enable_high_cost: false, kama_period: 10}）")
 
 
 class BacktestStatus(BaseModel):

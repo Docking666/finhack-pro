@@ -12,6 +12,24 @@
                     </template>
                 </select>
             </div>
+            <div class="lg:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">多策略组合（勾选 ≥2 个启用信号聚合器 + 滤波管道）</label>
+                <div class="flex flex-wrap gap-2">
+                    <template x-for="s in strategyOptions" :key="'c' + s.id">
+                        <label class="flex items-center gap-1.5 cursor-pointer bg-[#0f172a] border border-[#334155] rounded px-2 py-1 text-xs text-gray-300 hover:border-[#475569] transition-colors">
+                            <input type="checkbox" :value="s.id" x-model="params.strategies" class="accent-blue-600">
+                            <span x-text="s.name"></span>
+                        </label>
+                    </template>
+                </div>
+                <div class="flex items-center gap-2 mt-2">
+                    <label class="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+                        <input type="checkbox" x-model="params.enableHighCostFilters" class="accent-amber-500">
+                        启用高开销滤波器（Transformer/粒子滤波，回测较慢）
+                    </label>
+                    <span class="text-[10px] text-gray-600">P1(卡尔曼+自适应加权)/P2(KAMA/FRAMA+异常检测) 默认开启</span>
+                </div>
+            </div>
             <div>
                 <label class="block text-xs text-gray-400 mb-1">标的代码 (逗号分隔)</label>
                 <input type="text" x-model="params.symbols" placeholder="600519.SH, 000001.SZ"
