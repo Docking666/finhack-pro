@@ -1946,6 +1946,14 @@ function workshopPage() {
         // Tab状态
         activeTab: 'ai_strategy',
 
+        // 云端市场状态（CloudBase）
+        cloudPackages: [],
+        cloudKeyword: '',
+        cloudError: '',
+        cloudLoading: false,
+        cloudUploading: false,
+        cloudUploadPath: 'data/workshop/my_strat-v1.0.0.zip',
+
         // AI策略生成状态
         strategyForm: {
             description: '',
@@ -2655,6 +2663,64 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
                 }
             } catch (e) {
                 window.__alpineApp.showToast('保存失败: ' + e.message, 'error');
+            }
+        },
+
+        // ---- 云端市场（CloudBase）----
+        async loadCloudPackages() {
+            this.cloudLoading = true;
+            this.cloudError = '';
+            try {
+                let path = '/api/workshop/cloud/packages';
+                if (this.cloudKeyword.trim()) {
+                    path += '?q=' + encodeURIComponent(this.cloudKeyword.trim());
+                }
+                const resp = await API.get(path);
+                if (resp.success) {
+                    this.cloudPackages = resp.data || [];
+                } else {
+                    this.cloudError = resp.message || '云端市场加载失败';
+                    this.cloudPackages = [];
+                }
+            } catch (e) {
+                this.cloudError = '无法连接云端市场: ' + e.message + '（需配置 workshop.base_url）';
+                this.cloudPackages = [];
+            } finally {
+                this.cloudLoading = false;
+            }
+        },
+
+        async installCloudPackage(packageId) {
+            try {
+                const resp = await API.post('/api/workshop/cloud/install', { package_id: packageId });
+                if (resp.success) {
+                    window.__alpineApp.showToast('云端策略已安装', 'success');
+                } else {
+                    window.__alpineApp.showToast('安装失败: ' + (resp.message || ''), 'error');
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('安装失败: ' + e.message, 'error');
+            }
+        },
+
+        async uploadCloudPackage() {
+            if (!this.cloudUploadPath.trim()) {
+                window.__alpineApp.showToast('请输入策略包路径', 'warning');
+                return;
+            }
+            this.cloudUploading = true;
+            try {
+                const resp = await API.post('/api/workshop/cloud/upload', { zip_path: this.cloudUploadPath.trim() });
+                if (resp.success) {
+                    window.__alpineApp.showToast('策略包已上传云端', 'success');
+                    this.loadCloudPackages();
+                } else {
+                    window.__alpineApp.showToast('上传失败: ' + (resp.message || ''), 'error');
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('上传失败: ' + e.message, 'error');
+            } finally {
+                this.cloudUploading = false;
             }
         },
 
