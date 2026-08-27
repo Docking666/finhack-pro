@@ -858,6 +858,7 @@ function backtestPage() {
         currentTaskId: null,
         exporting: false,
         currentResult: null,
+        validation: null,   // 策略验证报告（StrategyValidator 7 项）
 
         async init() {
             window.__backtestPage = this;
@@ -1052,6 +1053,7 @@ function backtestPage() {
             this.metrics = {};
             this.trades = [];
             this.tradePage = 1;
+            this.validation = null;
 
             try {
                 const symbols = this.params.symbols.split(',').map(s => s.trim()).filter(Boolean);
@@ -1149,6 +1151,7 @@ function backtestPage() {
                     this.progress = 100;
                     this.progressMessage = '回测完成';
                     this.metrics = data.metrics || {};
+                    this.validation = data.validation || null;
 
                     // 立即从 WS 事件数据渲染权益曲线
                     if (data.equity_curve && data.equity_curve.length > 0) {
@@ -1181,6 +1184,7 @@ function backtestPage() {
                     this.metrics = result.metrics || {};
                     this.trades = result.trades || [];
                     this.currentResult = result; // 保存完整结果用于导出
+                    this.validation = result.validation || null;
 
                     // 渲染权益曲线（采用"销毁重建"策略，避免 Chart 实例与 DOM 脱离导致的空白问题）
                     if (result.equity_curve && result.equity_curve.length > 0) {

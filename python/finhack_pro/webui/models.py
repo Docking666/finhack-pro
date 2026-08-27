@@ -180,6 +180,7 @@ class BacktestRequest(BaseModel):
     # 信号处理流水线（README：信号聚合器 + 滤波管道）
     strategies: Optional[List[str]] = Field(None, description="多策略组合（非空时启用信号聚合，strategy 字段被忽略）")
     signal_filters: Optional[Dict[str, Any]] = Field(None, description="信号滤波配置（如 {enable_high_cost: false, kama_period: 10}）")
+    validator_profile: str = Field("default", description="策略验证档位: default/conservative/aggressive/high_frequency/low_frequency")
 
 
 class BacktestStatus(BaseModel):
@@ -228,6 +229,7 @@ class BacktestResult(BaseModel):
     trades: List[TradeRecord] = Field(default_factory=list)
     benchmark_curve: List[Dict[str, Any]] = Field(default_factory=list)
     daily_returns: List[float] = Field(default_factory=list, description="每日收益率序列（与 equity_curve 对齐）")
+    validation: Optional[Dict[str, Any]] = Field(None, description="策略验证报告（StrategyValidator 7 项检查）")
 
 
 # ============================================================

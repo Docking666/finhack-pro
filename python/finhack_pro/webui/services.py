@@ -701,6 +701,29 @@ class BacktestService:
                 final_equity=round(backtest_result.final_capital, 2),
             )
 
+            # ---- 策略验证（README StrategyValidator 7 项：交易次数/夏普/回撤/Calmar/WF/MC/相关性）----
+            # MC 模拟(1000次)+WF(5窗口) 较重，放 executor 跑，失败诚实降级为 error 字段
+            validation: Optional[Dict[str, Any]] = None
+            try:
+                from finhack_pro.strategies.strategy_validator import StrategyValidator
+
+                _perf = {
+                    "returns": list(getattr(backtest_result, "daily_returns", [])),
+                    "sharpe_ratio": float(getattr(backtest_result, "sharpe_ratio", 0) or 0),
+                    "max_drawdown": float(getattr(backtest_result, "max_drawdown", 0) or 0),
+                    "total_trades": int(getattr(backtest_result, "total_trades", 0) or 0),
+                    "annual_return": float(getattr(backtest_result, "annual_return", 0) or 0),
+                }
+                _profile = getattr(request, "validator_profile", "default") or "default"
+                _validator = StrategyValidator.from_profile(_profile)
+                _vresult = await loop.run_in_executor(None, lambda: _validator.validate(_perf))
+                validation = _vresult.model_dump()
+                logger.info(f"[Backtest {task_id}] 策略验证完成({_profile}): "
+                            f"通过={validation.get('passed')}, 评分={validation.get('overall_score', 0):.1f}")
+            except Exception as e:
+                logger.warning(f"[Backtest {task_id}] 策略验证失败: {e}")
+                validation = {"error": str(e), "profile": getattr(request, "validator_profile", "default")}
+
             result = BacktestResult(
                 task_id=task_id,
                 status="completed",
@@ -709,6 +732,7 @@ class BacktestService:
                 trades=[t.model_dump() for t in trades],
                 benchmark_curve=benchmark_curve,
                 daily_returns=[round(r, 6) for r in getattr(backtest_result, "daily_returns", [])],
+                validation=validation,
             )
 
             logger.info(f"[Backtest {task_id}] 回测完成: 总收益 {metrics.total_return}%, 交易次数 {metrics.total_trades}")
@@ -743,6 +767,7 @@ class BacktestService:
                     "benchmark_curve": benchmark_curve,
                     "trades": [t.model_dump() for t in trades],
                     "daily_returns": [round(r, 6) for r in getattr(backtest_result, "daily_returns", [])],
+                    "validation": validation,
                 })
 
             logger.info(f"回测任务完成: {task_id}, 收益率={metrics.total_return}%")

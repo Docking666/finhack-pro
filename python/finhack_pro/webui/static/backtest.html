@@ -144,6 +144,33 @@
                     <span class="text-sm font-mono font-bold text-white" x-text="formatMoney(metrics.final_equity || 0)"></span>
                 </div>
             </div>
+
+            <!-- 策略验证结果（README StrategyValidator 7 项） -->
+            <div x-show="validation" class="mt-3 pt-3 border-t border-[#334155]">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs text-gray-400">
+                        策略验证
+                        <span class="text-gray-600" x-text="validation && validation.profile_used ? '(' + validation.profile_used + ')' : ''"></span>
+                    </span>
+                    <span class="px-2 py-0.5 rounded text-xs"
+                          :class="validation && validation.passed ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'"
+                          x-text="validation && validation.passed ? '通过' : '未通过'"></span>
+                </div>
+                <div x-show="validation && validation.error" class="text-xs text-amber-400 mb-1" x-text="'验证失败: ' + validation.error"></div>
+                <template x-if="validation && validation.checks">
+                    <div class="space-y-1">
+                        <template x-for="(check, i) in validation.checks" :key="i">
+                            <div class="flex items-center justify-between text-xs">
+                                <span class="text-gray-400" x-text="check.name"></span>
+                                <span :class="check.passed ? 'text-green-400' : 'text-red-400'"
+                                      x-text="check.passed ? '通过' : check.detail"></span>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+                <div x-show="validation && !validation.error" class="text-xs text-gray-500 mt-1.5"
+                     x-text="'综合评分: ' + (validation.overall_score || 0).toFixed(0) + '/100 · ' + (validation.summary || '')"></div>
+            </div>
         </div>
     </div>
 
