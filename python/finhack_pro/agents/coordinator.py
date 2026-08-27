@@ -88,6 +88,14 @@ class PipelineBusyError(RuntimeError):
     """
 
 
+class PipelineCancelledError(RuntimeError):
+    """用户主动取消流水线（协作式取消）
+
+    cancel_check 回调在步骤边界被调用，检测到取消标志时抛出，
+    由 run_analysis_pipeline 捕获后落盘 cancelled 终态（已 done 步骤保留）。
+    """
+
+
 # 步骤 → (报告名称, Pydantic 模型) 映射，用于 JSON 落盘与恢复重建
 _STEP_MODELS = {
     1: ("market_analysis", MarketAnalysisReport),
@@ -674,6 +682,7 @@ class AgentCoordinator:
         step: int,
         name: str,
         runner: Any,
+        cancel_check: Optional[Callable[[], None]] = None,
     ) -> Any:
         """执行单个步骤（原子单元）
 
@@ -682,7 +691,13 @@ class AgentCoordinator:
 
         加 asyncio.wait_for 超时保护（见 _STEP_TIMEOUTS），防止 LLM 长思考/
         网络抖动/重试循环导致整条流水线永久阻塞。
+
+        cancel_check: 协作式取消回调（每次步骤边界调用一次）。已取消 →
+        抛 PipelineCancelledError（步骤内 LLM 调用不中断，粒度=步骤）。
         """
+        if cancel_check is not None:
+            cancel_check()
+
         if self._is_step_done(run_id, step):
             report = self._load_step_report(run_id, step)
             if report is not None:
@@ -768,6 +783,7 @@ class AgentCoordinator:
         run_id: Optional[str] = None,
         resume: bool = True,
         event_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        cancel_check: Optional[Callable[[], None]] = None,
     ) -> Dict[str, Any]:
         """运行完整的分析流水线
 
@@ -1081,16 +1097,16 @@ class AgentCoordinator:
             async def _run_market_analysis():
                 return await self._run_step(run_id, 1, "market_analysis", lambda: self.market_analyzer.analyze(
                     symbol=symbol, market_data=market_data, indicators=indicators,
-                ))
+                ), cancel_check=cancel_check)
 
             async def _run_news_analysis():
-                return await self._run_step(run_id, 2, "news_analysis", lambda: self.news_analyst.analyze(symbol=symbol))
+                return await self._run_step(run_id, 2, "news_analysis", lambda: self.news_analyst.analyze(symbol=symbol), cancel_check=cancel_check)
 
             async def _run_fundamental_analysis():
-                return await self._run_step(run_id, 3, "fundamental_analysis", lambda: self.fundamental_analyst.analyze(symbol=symbol))
+                return await self._run_step(run_id, 3, "fundamental_analysis", lambda: self.fundamental_analyst.analyze(symbol=symbol), cancel_check=cancel_check)
 
             async def _run_micro_event_analysis():
-                return await self._run_step(run_id, 4, "micro_event_analysis", lambda: self.micro_event_agent.scan_events(symbol=symbol, days=7))
+                return await self._run_step(run_id, 4, "micro_event_analysis", lambda: self.micro_event_agent.scan_events(symbol=symbol, days=7), cancel_check=cancel_check)
 
             # 只对未完成步骤创建 task（断点恢复核心：跳过已 done 步骤）
             _PENDING = [s for s in (1, 2, 3, 4) if not self._is_step_done(run_id, s)]
@@ -1276,7 +1292,7 @@ class AgentCoordinator:
                     report_paths=report_paths,
                 )
 
-            strategy_signal = await self._run_step(run_id, 5, "strategy_signal", _run_strategy)
+            strategy_signal = await self._run_step(run_id, 5, "strategy_signal", _run_strategy, cancel_check=cancel_check)
             result["signal"] = strategy_signal.model_dump()
             self._logger.info(
                 f"策略生成完成: 方向={strategy_signal.direction.value}, "
@@ -1334,7 +1350,7 @@ class AgentCoordinator:
                     portfolio=PortfolioState(total_value=_initial, cash=_initial),
                 )
 
-            risk_decision = await self._run_step(run_id, 6, "risk_decision", _run_risk)
+            risk_decision = await self._run_step(run_id, 6, "risk_decision", _run_risk, cancel_check=cancel_check)
             result["risk_decision"] = risk_decision.model_dump()
             self._logger.info(
                 f"风控审批完成: {'通过' if risk_decision.approved else '拒绝'}"
@@ -1385,7 +1401,7 @@ class AgentCoordinator:
                     current_price=current_price,
                 )
 
-            execution_report = await self._run_step(run_id, 7, "execution_report", _run_execution)
+            execution_report = await self._run_step(run_id, 7, "execution_report", _run_execution, cancel_check=cancel_check)
             result["execution"] = execution_report.model_dump()
             self._logger.info(
                 f"交易执行完成: 状态={execution_report.status}, "
@@ -1414,6 +1430,21 @@ class AgentCoordinator:
             )
 
             self._save_pipeline_state(run_id, "completed", terminal="executed")
+
+        except PipelineCancelledError:
+            # 用户取消（协作式标志路径）：落盘 cancelled 终态（已 done 步骤保留）
+            self._logger.warning(f"[Pipeline {run_id}] 用户取消流水线")
+            self._save_pipeline_state(run_id, "cancelled")
+            result["status"] = "cancelled"
+            result["error"] = "用户取消流水线"
+
+        except asyncio.CancelledError:
+            # 用户取消（task.cancel() 即时中断路径）：同样落盘 cancelled 终态。
+            # 不 re-raise：吞掉后正常收尾（恢复流回调 + 返回结果），task 受控结束。
+            self._logger.warning(f"[Pipeline {run_id}] 用户取消流水线（task.cancel）")
+            self._save_pipeline_state(run_id, "cancelled")
+            result["status"] = "cancelled"
+            result["error"] = "用户取消流水线"
 
         except Exception as e:
             self._logger.error(f"分析流水线异常: {e}", exc_info=True)
@@ -1455,12 +1486,16 @@ class AgentCoordinator:
         run_id: Optional[str] = None,
         resume: bool = True,
         event_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        cancel_check: Optional[Callable[[], None]] = None,
     ) -> Dict[str, Any]:
         """执行分析流水线（并发隔离门面）
 
         同一时间仅允许一个流水线运行：并发任务会共享同一批 Agent/LLMClient
         实例，导致流回调互相覆盖、思考链事件串 run、LLM 请求互相排队。
         已有一个流水线在运行 → 抛 PipelineBusyError（由上层转为明确提示）。
+
+        cancel_check: 协作式取消回调（每步骤边界调用一次，抛
+        PipelineCancelledError 中止流水线并落盘 cancelled 状态）。
         """
         if self._pipeline_active:
             raise PipelineBusyError(
@@ -1477,6 +1512,7 @@ class AgentCoordinator:
                 run_id=run_id,
                 resume=resume,
                 event_callback=event_callback,
+                cancel_check=cancel_check,
             )
         finally:
             self._pipeline_active = False

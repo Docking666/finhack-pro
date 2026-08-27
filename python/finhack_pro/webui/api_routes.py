@@ -337,12 +337,21 @@ async def run_pipeline(request: Request, req: PipelineRunRequest):
     agent_svc = _get_agent_service(request)
     stream_svc = _get_stream_service(request)
 
-    # 并发隔离：已有流水线在运行 → 409 明确拒绝（避免后台失败/事件串流混淆）
+    # 并发隔离：已有流水线在运行 → 409 携带 active_run_id，前端据此提供查看/续跑入口
     coordinator = getattr(agent_svc, "_coordinator", None)
+    active_run_id = None
     if coordinator is not None and getattr(coordinator, "_pipeline_active", False):
+        for rid, entry in getattr(agent_svc, "_running_pipelines", {}).items():
+            _res = entry.get("result")
+            if _res is not None and getattr(_res, "status", "") == "running":
+                active_run_id = rid
+                break
         raise HTTPException(
             status_code=409,
-            detail="已有分析流水线正在运行，请等待完成后再启动新的分析",
+            detail={
+                "message": "已有分析流水线正在运行，请等待完成、取消或续跑后再启动新的分析",
+                "active_run_id": active_run_id,
+            },
         )
 
     # 先返回run_id（调用方显式传入则复用，否则生成）
@@ -362,7 +371,11 @@ async def run_pipeline(request: Request, req: PipelineRunRequest):
     if not hasattr(request.app.state, "pipeline_results"):
         request.app.state.pipeline_results = {}
 
-    asyncio.create_task(_run_and_store())
+    task = asyncio.create_task(_run_and_store())
+    # 保存 task 句柄到 service 注册表（供 cancel_pipeline 即时取消）
+    entry = getattr(agent_svc, "_running_pipelines", {}).get(run_id)
+    if entry is not None:
+        entry["task"] = task
 
     return APIResponse(message="分析流水线已启动", data={"run_id": run_id})
 
@@ -373,6 +386,38 @@ async def get_pipeline_history(request: Request, limit: int = Query(20, ge=1, le
     agent_svc = _get_agent_service(request)
     history = agent_svc.get_pipeline_history(limit=limit)
     return APIResponse(data=history)
+
+
+@router.get("/api/agents/pipeline/list", response_model=APIResponse)
+async def list_pipeline_runs(request: Request, limit: int = Query(50, ge=1, le=200)):
+    """获取所有流水线任务（内存历史 + 运行中 + 磁盘检查点恢复）"""
+    agent_svc = _get_agent_service(request)
+    runs = agent_svc.list_pipeline_runs(limit=limit)
+    return APIResponse(data=runs)
+
+
+@router.get("/api/agents/pipeline/{run_id}", response_model=APIResponse)
+async def get_pipeline_run(request: Request, run_id: str):
+    """查询单个流水线任务状态（运行中 / 历史 / 磁盘检查点）"""
+    agent_svc = _get_agent_service(request)
+    run = agent_svc.get_pipeline_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"流水线任务不存在: {run_id}")
+    return APIResponse(data=run)
+
+
+@router.post("/api/agents/pipeline/{run_id}/cancel", response_model=APIResponse)
+async def cancel_pipeline(request: Request, run_id: str):
+    """取消运行中的流水线（协作式标志 + task.cancel 即时中断，落盘 cancelled 终态）"""
+    agent_svc = _get_agent_service(request)
+    ok = agent_svc.cancel_pipeline(run_id)
+    if not ok:
+        # 不在运行中：若磁盘检查点存在则已非 running，返回当前状态供前端刷新
+        existing = agent_svc.get_pipeline_run(run_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail=f"流水线任务不存在: {run_id}")
+        return APIResponse(data={"run_id": run_id, "cancel_requested": False, "status": existing.get("status")})
+    return APIResponse(message="取消请求已发送", data={"run_id": run_id, "cancel_requested": True})
 
 
 # ============================================================

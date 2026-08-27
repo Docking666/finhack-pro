@@ -838,7 +838,20 @@ class AgentService:
             start_time=datetime.now().isoformat(),
         )
 
-        self._running_pipelines[run_id] = {"result": result, "request": request}
+        # 协作式取消标志（可变 dict，供 cancel_check 闭包与 cancel_pipeline 共享）
+        cancel_flag = {"cancelled": False}
+        self._running_pipelines[run_id] = {
+            "result": result,
+            "request": request,
+            "task": None,
+            "cancel_flag": cancel_flag,
+        }
+
+        def _cancel_check() -> None:
+            """步骤边界取消检查：已取消 → 抛 PipelineCancelledError 中止流水线"""
+            if cancel_flag["cancelled"]:
+                from finhack_pro.agents.coordinator import PipelineCancelledError
+                raise PipelineCancelledError(f"用户取消流水线 {run_id}")
 
         if stream_callback:
             await stream_callback({
@@ -872,6 +885,7 @@ class AgentService:
                     run_id=request.run_id,
                     resume=request.resume,
                     event_callback=_pipeline_event_cb,
+                    cancel_check=_cancel_check,
                 )
 
                 logger.info(f"[Pipeline {run_id}] Coordinator流水线完成")
@@ -926,8 +940,17 @@ class AgentService:
                 else:
                     result.final_signal = None
 
-                # 真实映射流水线状态：coordinator 返回 error 即失败（失败即终止，不伪造完成）
-                if pipeline_result.get("error"):
+                # 真实映射流水线状态：cancelled（用户取消）→ 终态；error 即失败（失败即终止，不伪造完成）
+                if pipeline_result.get("status") == "cancelled":
+                    result.status = "cancelled"
+                    result.error = pipeline_result.get("error") or "用户取消流水线"
+                    if stream_callback:
+                        await stream_callback({
+                            "type": "pipeline_cancelled",
+                            "run_id": run_id,
+                            "error": result.error,
+                        })
+                elif pipeline_result.get("error"):
                     result.status = "failed"
                     result.error = pipeline_result["error"]
                     if not any(s.status == "failed" for s in result.steps):
@@ -1090,6 +1113,119 @@ class AgentService:
     def get_pipeline_history(self, limit: int = 20) -> List[Dict[str, Any]]:
         """获取流水线执行历史"""
         return self._pipeline_history[-limit:]
+
+    # ============================================================
+    # 流水线任务注册表：状态查询 / 磁盘恢复 / 取消
+    # ============================================================
+
+    def _scan_disk_pipeline_runs(self) -> List[Dict[str, Any]]:
+        """扫描 data/pipeline/*/ 磁盘检查点，恢复未完成/已完成的历史任务
+
+        每个 run 目录含 pipeline_state.json（status）+ step{N}.done 标记。
+        刷新/重启后内存历史为空，此方法让前端能恢复展示未完成任务状态。
+        """
+        from finhack_pro.agents.coordinator import _STEP_MODELS
+
+        # 从 coordinator 配置读取输出目录（不创建任何探测目录）
+        base = "data/pipeline"
+        if self._coordinator is not None:
+            try:
+                _cfg = getattr(self._coordinator, "config", None) or {}
+                base = (_cfg.get("pipeline") or {}).get("output_dir", "data/pipeline")
+            except Exception:
+                base = "data/pipeline"
+        runs: List[Dict[str, Any]] = []
+        try:
+            if not os.path.isdir(base):
+                return runs
+            for name in sorted(os.listdir(base), reverse=True):
+                run_dir = os.path.join(base, name)
+                if not os.path.isdir(run_dir):
+                    continue
+                state_path = os.path.join(run_dir, "pipeline_state.json")
+                import json as _json
+                state = None
+                try:
+                    if os.path.exists(state_path):
+                        with open(state_path, "r", encoding="utf-8") as f:
+                            state = _json.load(f)
+                except Exception:
+                    state = None
+                status = (state or {}).get("status", "running")
+                # 无 state 文件但有 done 标记 → 推测 running（进行中/中断）
+                done_steps = sorted(
+                    int(f[4:-5]) for f in os.listdir(run_dir)
+                    if f.startswith("step") and f.endswith(".done")
+                )
+                runs.append({
+                    "run_id": name,
+                    "status": status,
+                    "steps_completed": len(done_steps),
+                    "steps_total": len(_STEP_MODELS),
+                    "done_steps": done_steps,
+                    "start_time": None,
+                    "end_time": None,
+                })
+        except Exception as e:
+            logger.warning(f"扫描磁盘流水线检查点失败: {e}")
+        return runs
+
+    def list_pipeline_runs(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """返回所有已知流水线任务：内存历史 + 运行中 + 磁盘检查点（去重）"""
+        merged: Dict[str, Dict[str, Any]] = {}
+
+        # 1) 运行中（含取消标志）
+        for run_id, entry in self._running_pipelines.items():
+            result = entry.get("result")
+            merged[run_id] = {
+                "run_id": run_id,
+                "symbol": getattr(result, "symbol", ""),
+                "status": "running",
+                "error": getattr(result, "error", None),
+                "steps_completed": len([s for s in getattr(result, "steps", []) if s.status == "completed"]),
+                "steps_total": len(getattr(result, "steps", [])),
+                "steps": [s.model_dump() for s in getattr(result, "steps", [])],
+                "final_signal": getattr(result, "final_signal", None),
+                "start_time": getattr(result, "start_time", None),
+                "end_time": getattr(result, "end_time", None),
+            }
+
+        # 2) 已完成历史（内存）
+        for item in self._pipeline_history:
+            merged[item["run_id"]] = item
+
+        # 3) 磁盘检查点（未在内存中出现的 run —— 刷新/重启后的未完成任务）
+        for item in self._scan_disk_pipeline_runs():
+            merged.setdefault(item["run_id"], item)
+
+        runs = sorted(merged.values(), key=lambda x: x.get("start_time") or "", reverse=True)
+        return runs[:limit]
+
+    def get_pipeline_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """按 run_id 查询单个任务（运行中 / 历史 / 磁盘检查点）"""
+        for item in self.list_pipeline_runs(limit=500):
+            if item.get("run_id") == run_id:
+                return item
+        return None
+
+    def cancel_pipeline(self, run_id: str) -> bool:
+        """请求取消运行中的流水线
+
+        协作式：置 cancel_flag → coordinator 步骤边界抛 PipelineCancelledError 优雅落盘；
+        即时兜底：同时 task.cancel()（LLM await 点立即中断，coordinator 捕获后落盘 cancelled）。
+        返回是否成功发起取消。
+        """
+        entry = self._running_pipelines.get(run_id)
+        if not entry:
+            return False
+        flag = entry.get("cancel_flag")
+        if flag is not None:
+            flag["cancelled"] = True
+        task = entry.get("task")
+        if task is not None and not task.done():
+            task.cancel()
+        logger.info(f"[Pipeline {run_id}] 已发起取消请求")
+        return True
 
 
 # ============================================================
