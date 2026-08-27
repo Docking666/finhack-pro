@@ -542,29 +542,15 @@ class BacktestRunner:
             return strategy
 
         # 自定义策略：工坊保存到 data/generated_strategies/{name}/strategy.py
-        # （生成代码继承 BaseStrategy 并实现 on_bar，与内置策略接口一致）
+        # 统一收敛到 WorkshopStrategyAdapter（AST 安全扫描 + 旧/新 API 桥接），
+        # 不再裸 exec（此前空命名空间导致 BaseStrategy NameError / API 不兼容）
         gen_dir = Path("data/generated_strategies") / name
         strategy_file = gen_dir / "strategy.py"
         if strategy_file.exists():
-            namespace: Dict[str, Any] = {}
-            try:
-                code = strategy_file.read_text(encoding="utf-8")
-                exec(compile(code, str(strategy_file), "exec"), namespace)
-            except Exception as e:
-                raise ValueError(f"自定义策略 {name} 加载失败: {e}")
-            cls = None
-            for value in namespace.values():
-                if (
-                    isinstance(value, type)
-                    and issubclass(value, BaseStrategy)
-                    and value is not BaseStrategy
-                ):
-                    cls = value
-                    break
-            if cls is None:
-                raise ValueError(f"自定义策略 {name} 未定义 BaseStrategy 子类")
-            logger.info(f"加载自定义策略: {name} -> {cls.__name__}")
-            return cls()
+            from finhack_pro.workshop.strategy_adapter import WorkshopStrategyAdapter
+            code = strategy_file.read_text(encoding="utf-8")
+            logger.info(f"加载自定义策略: {name} -> WorkshopStrategyAdapter")
+            return WorkshopStrategyAdapter(code)
 
         raise ValueError(
             f"未知策略: {name}, 可用策略: {list(strategies.keys())}, "

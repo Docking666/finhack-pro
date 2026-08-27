@@ -70,6 +70,17 @@ class StrategyTestRequest(BaseModel):
     end_date: str = Field("2024-12-31", description="结束日期")
     initial_capital: float = Field(1000000, description="初始资金")
 
+class StrategySaveRequest(BaseModel):
+    """策略保存请求（保存到 data/generated_strategies 供回测列表加载）"""
+    code: str = Field(..., description="策略Python代码")
+    name: str = Field("自定义策略", description="策略名称")
+    description: str = Field("", description="策略描述")
+
+class FactorSaveRequest(BaseModel):
+    """因子保存请求（保存到 data/generated_factors）"""
+    code: str = Field(..., description="因子Python代码")
+    name: str = Field("自定义因子", description="因子名称")
+
 
 # ============================================================
 # 策略模板库
@@ -612,14 +623,16 @@ def _validate_python_code(code: str) -> tuple:
 
 
 def _validate_strategy_code(code: str) -> tuple:
-    """验证策略代码结构"""
+    """验证策略代码结构（兼容旧 API self.buy/sell 与新 API 返回 Signal 列表）"""
     checks = []
     if "class " not in code:
         checks.append("缺少策略类定义(class)")
     if "def on_bar" not in code:
         checks.append("缺少 on_bar 方法")
-    if "self.buy" not in code and "self.sell" not in code:
-        checks.append("缺少交易信号(buy/sell)")
+    has_legacy = "self.buy" in code or "self.sell" in code
+    has_new_api = "Signal" in code or "signals.append" in code or "return [" in code
+    if not has_legacy and not has_new_api:
+        checks.append("缺少交易信号(旧 API self.buy/sell 或新 API 返回 Signal 列表)")
     if "BaseStrategy" not in code:
         checks.append("策略类未继承 BaseStrategy")
 
@@ -986,6 +999,59 @@ async def get_categories():
     categories = list(set(t["category"] for t in STRATEGY_TEMPLATES))
     styles = list(set(t["style"] for t in STRATEGY_TEMPLATES))
     return APIResponse(data={"categories": categories, "styles": styles, "difficulties": ["⭐", "⭐⭐", "⭐⭐⭐"]})
+
+
+@router.post("/save", response_model=APIResponse)
+async def save_strategy(request: StrategySaveRequest):
+    """保存策略代码到 data/generated_strategies（回测列表可加载，修复 saveStrategy 空实现）"""
+    valid, msg = _validate_strategy_code(request.code)
+    if not valid:
+        raise HTTPException(status_code=400, detail=f"策略代码未通过校验: {msg}")
+
+    # AST 安全扫描（与 WorkshopStrategyAdapter 一致）：高危拒绝
+    try:
+        from finhack_pro.workshop.strategy_adapter import WorkshopStrategyAdapter
+        WorkshopStrategyAdapter(request.code)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"策略代码未通过安全扫描: {e}")
+
+    strategy_id = f"gen_{uuid.uuid4().hex[:10]}"
+    gen_dir = Path("data/generated_strategies") / strategy_id
+    gen_dir.mkdir(parents=True, exist_ok=True)
+    (gen_dir / "strategy.py").write_text(request.code, encoding="utf-8")
+
+    from finhack_pro.workshop import StrategyManifest
+    manifest = StrategyManifest.from_dict({
+        "id": strategy_id,
+        "name": request.name,
+        "version": "0.1.0",
+        "author": "workshop",
+        "description": request.description or request.name,
+        "type": "strategy",
+        "entry": "strategy.py",
+        "entry_class": "",
+        "params_schema": StrategyManifest.default_params_schema(),
+    })
+    (gen_dir / "manifest.yaml").write_text(manifest.to_yaml(), encoding="utf-8")
+    logger.info(f"[Workshop] 策略已保存: {strategy_id} ({request.name})")
+    return APIResponse(message="策略已保存，可在回测面板选择", data={"strategy_id": strategy_id, "name": request.name})
+
+
+@router.post("/factors/save", response_model=APIResponse)
+async def save_factor(request: FactorSaveRequest):
+    """保存因子代码到 data/generated_factors（修复 saveFactor 空实现）"""
+    valid, msg = _validate_factor_code(request.code)
+    if not valid:
+        raise HTTPException(status_code=400, detail=f"因子代码未通过校验: {msg}")
+
+    factor_id = f"factor_{uuid.uuid4().hex[:10]}"
+    factor_dir = Path("data/generated_factors") / factor_id
+    factor_dir.mkdir(parents=True, exist_ok=True)
+    (factor_dir / "factor.py").write_text(request.code, encoding="utf-8")
+    (factor_dir / "manifest.yaml").write_text(
+        f"id: {factor_id}\nname: {request.name}\ntype: factor\nentry: factor.py\n", encoding="utf-8")
+    logger.info(f"[Workshop] 因子已保存: {factor_id} ({request.name})")
+    return APIResponse(message="因子已保存", data={"factor_id": factor_id, "name": request.name})
 
 
 @router.get("/factor-categories", response_model=APIResponse)

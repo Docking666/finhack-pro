@@ -2627,7 +2627,13 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
                 return;
             }
             try {
-                window.__alpineApp.showToast('策略已保存', 'success');
+                const resp = await API.post('/api/strategy/save', {
+                    code,
+                    name: this.strategyResult && this.strategyResult.name ? this.strategyResult.name : '自定义策略',
+                });
+                if (resp.success) {
+                    window.__alpineApp.showToast('策略已保存，可在回测面板选择: ' + (resp.data && resp.data.strategy_id), 'success');
+                }
             } catch (e) {
                 window.__alpineApp.showToast('保存失败: ' + e.message, 'error');
             }
@@ -2640,7 +2646,13 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
                 return;
             }
             try {
-                window.__alpineApp.showToast('因子已保存', 'success');
+                const resp = await API.post('/api/strategy/factors/save', {
+                    code,
+                    name: this.factorResult && this.factorResult.name ? this.factorResult.name : '自定义因子',
+                });
+                if (resp.success) {
+                    window.__alpineApp.showToast('因子已保存: ' + (resp.data && resp.data.factor_id), 'success');
+                }
             } catch (e) {
                 window.__alpineApp.showToast('保存失败: ' + e.message, 'error');
             }

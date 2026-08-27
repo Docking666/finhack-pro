@@ -80,13 +80,14 @@ class WorkshopStrategyAdapter(BaseStrategy):
         symbol: 标的代码（用于 Signal.symbol）
     """
 
-    def __init__(self, code: str, symbol: str = "600519.SH", params: Optional[Dict[str, Any]] = None):
+    def __init__(self, code: str, symbol: str = "", params: Optional[Dict[str, Any]] = None):
         super().__init__()
         self._code = code
         self._symbol = symbol
         self._params = params or {}
         self._signals: List[Signal] = []
         self._strategy: Any = None
+        self._new_api: bool = False  # True=新 API(on_bar(context,bar)->List[Signal])；False=旧 API
         self.bars: List[BarData] = []
         self.position = LegacyPosition()
 
@@ -134,6 +135,20 @@ class WorkshopStrategyAdapter(BaseStrategy):
             raise StrategySecurityError(
                 "未找到策略类：请确保代码定义了继承 BaseStrategy 的类"
             )
+
+        # 检测 API 形态：on_bar 双参(新 API, 返回 List[Signal]) vs 单参(旧 API, self.buy/sell)
+        import inspect as _inspect
+
+        try:
+            _sig = _inspect.signature(strategy_cls.on_bar)
+            _pos_params = [
+                p for p in _sig.parameters.values()
+                if p.name != "self"
+                and p.kind not in (_inspect.Parameter.VAR_POSITIONAL, _inspect.Parameter.VAR_KEYWORD)
+            ]
+            self._new_api = len(_pos_params) >= 2
+        except (ValueError, TypeError):
+            self._new_api = False
 
         try:
             self._strategy = strategy_cls() if not self._params else strategy_cls(**self._params)
@@ -183,19 +198,34 @@ class WorkshopStrategyAdapter(BaseStrategy):
             setter(self._params)
 
     def on_bar(self, context: Context, bar: BarData) -> List[Signal]:
-        """新 API on_bar → 转旧 API 单参数调用，收集 buy/sell 信号"""
+        """新 API on_bar → 按策略 API 形态分发：新 API 直接返回信号；旧 API 桥接"""
         if self._strategy is None:
             self._load()
+        if not self._symbol:
+            self._symbol = bar.symbol  # 首次以实际标的为准
 
-        # 维护旧 API 的 self.bars 与 self.position（桥接到适配器自身）
-        self.bars.append(bar)
-        if hasattr(self._strategy, "bars"):
-            self._strategy.bars = self.bars
-        if hasattr(self._strategy, "position"):
-            self._strategy.position = self.position
-
-        # 旧 API 的 self.buy/self.sell 重定向到适配器（通过闭包绑定）
         legacy = self._strategy
+
+        # ---- 新 API：on_bar(context, bar) -> List[Signal] ----
+        if self._new_api:
+            try:
+                signals = legacy.on_bar(context, bar) or []
+                # 规范化：确保 Symbol 对象带 strategy_name
+                for sig in signals:
+                    if not getattr(sig, "strategy_name", ""):
+                        sig.strategy_name = "workshop"
+                return list(signals)
+            except Exception as e:
+                logger.warning(f"策略 on_bar 执行异常: {e}")
+                return []
+
+        # ---- 旧 API：单参 on_bar(bar) + self.buy/sell 桥接 ----
+        self.bars.append(bar)
+        if hasattr(legacy, "bars"):
+            legacy.bars = self.bars
+        if hasattr(legacy, "position"):
+            legacy.position = self.position
+
         self._signals.clear()
         self._bind_legacy_actions(legacy)
 
