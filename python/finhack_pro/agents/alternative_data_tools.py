@@ -140,20 +140,31 @@ class FetchExchangeNoticesTool(BaseTool):
             
             notices = []
             
-            # 获取公告数据
-            # 注意：akshare的公告接口可能需要调整
+            # 获取公告数据（SDD 实测：akshare 1.18 的 stock_zh_a_disclosure_report_cninfo
+            # 必须按具体代码查（symbol 不支持"全部"，传"全部"抛 KeyError），
+            # 返回东财公告：代码/简称/公告标题/公告时间/公告链接）
             try:
-                # 尝试获取个股公告
-                df = ak.stock_notice_report(symbol=symbol.replace(".SH", "").replace(".SZ", ""))
+                code = symbol.replace(".SH", "").replace(".SZ", "").strip()
+                end = datetime.now()
+                start = end - timedelta(days=days)
+                df = ak.stock_zh_a_disclosure_report_cninfo(
+                    symbol=code,
+                    market="沪深京",
+                    start_date=start.strftime("%Y%m%d"),
+                    end_date=end.strftime("%Y%m%d"),
+                )
                 if df is not None and not df.empty:
                     for _, row in df.head(20).iterrows():
+                        title = str(row.get("公告标题", ""))
+                        link = str(row.get("公告链接", ""))
                         notice = {
-                            "id": hashlib.md5(str(row.get("标题", "")).encode()).hexdigest()[:8],
-                            "title": str(row.get("标题", "")),
-                            "type": str(row.get("类型", "公告")),
-                            "publish_time": str(row.get("发布时间", "")),
-                            "content": str(row.get("内容", ""))[:500],
-                            "source": "exchange",
+                            "id": hashlib.md5((link or title).encode()).hexdigest()[:8],
+                            "title": title,
+                            "type": str(row.get("公告类型", "公告")) or "公告",
+                            "publish_time": str(row.get("公告时间", "")),
+                            "content": title,  # 接口无正文，以标题代
+                            "source": "eastmoney_notice",
+                            "url": link,
                         }
                         notices.append(notice)
             except Exception as e:
@@ -206,6 +217,7 @@ class FetchSentimentDataTool(BaseTool):
                 "symbol": symbol,
                 "hot_rank": None,
                 "discussion_count": 0,
+                "rank_change": 0,
                 "sentiment_score": 0.5,
                 "spike_detected": False,
                 "trend": "stable",
@@ -213,24 +225,33 @@ class FetchSentimentDataTool(BaseTool):
                 "posts": [],
             }
             
-            # 尝试获取股吧热度
+            # 获取真实股吧关注度（SDD 实测：stock_comment_em 返回全市场 5195 只
+            # 股票的股吧人气：关注指数/目前排名/排名变化；个股级舆情数据源）
             try:
-                # 东方财富股吧热度
-                df = ak.stock_zh_a_spot_em()
-                if df is not None and not df.empty:
-                    code = symbol.replace(".SH", "").replace(".SZ", "")
-                    row = df[df["代码"] == code]
-                    if not row.empty:
-                        # 获取相关数据
-                        sentiment_data["hot_rank"] = int(row.iloc[0].get("排名", 0))
-                        sentiment_data["summary"] = f"当前热度排名: {sentiment_data['hot_rank']}"
-            except Exception:
-                pass
-            
-            # 检测舆情爆发
-            if sentiment_data["discussion_count"] > 1000:
-                sentiment_data["spike_detected"] = True
-                sentiment_data["trend"] = "rising"
+                code = symbol.replace(".SH", "").replace(".SZ", "").strip()
+                df = ak.stock_comment_em()
+                if df is not None and not df.empty and code:
+                    row_df = df[df["代码"].astype(str).str.zfill(6) == code]
+                    if not row_df.empty:
+                        row = row_df.iloc[0]
+                        sentiment_data["hot_rank"] = int(row.get("目前排名", 0) or 0)
+                        sentiment_data["discussion_count"] = int(row.get("关注指数", 0) or 0)
+                        sentiment_data["rank_change"] = int(row.get("上升", 0) or 0)
+                        # 舆情爆发检测：排名大幅上升（热度突增的主信号）或极端热度。
+                        # 注意不能只看关注指数绝对值——白马股（如茅台）关注指数常年
+                        # 90+，不代表舆情爆发；排名快速上升才是爆发信号。
+                        if sentiment_data["rank_change"] >= 500 or sentiment_data["discussion_count"] >= 98:
+                            sentiment_data["spike_detected"] = True
+                            sentiment_data["trend"] = "rising"
+                        parts = [
+                            f"股吧关注指数={sentiment_data['discussion_count']}",
+                            f"全市场人气排名={sentiment_data['hot_rank']}",
+                        ]
+                        if sentiment_data["rank_change"] != 0:
+                            parts.append(f"排名{'上升' if sentiment_data['rank_change'] > 0 else '下降'}{abs(sentiment_data['rank_change'])}")
+                        sentiment_data["summary"] = "，".join(parts)
+            except Exception as e:
+                logger.warning(f"股吧关注度接口调用失败: {e}")
             
             return sentiment_data
             
