@@ -239,7 +239,8 @@ def get_config(config_path: Optional[str] = None, force_reload: bool = False) ->
     """获取全局配置实例
 
     Args:
-        config_path: 配置文件路径；为None时依次尝试 FINHACK_CONFIG 环境变量，
+        config_path: 配置文件路径；为None时依次尝试 FINHACK_CONFIG 环境变量、
+                     默认配置文件（cwd/config/default.yaml），
                      仍无则使用纯默认配置（不读任何 YAML）
         force_reload: 是否强制重新加载配置
 
@@ -249,6 +250,12 @@ def get_config(config_path: Optional[str] = None, force_reload: bool = False) ->
     global _global_config
     if _global_config is None or force_reload:
         path = config_path or os.environ.get("FINHACK_CONFIG")
+        if not path:
+            # 默认配置文件：与 ConfigService._resolve_default_config_path 保持一致，
+            # 避免 WorkshopCloud 等模块在无 FINHACK_CONFIG 时读不到 workshop.base_url 等配置
+            cwd_path = Path.cwd() / "config" / "default.yaml"
+            if cwd_path.exists():
+                path = str(cwd_path)
         if path:
             # from_yaml 内部处理文件不存在（warning + 纯默认）
             _global_config = FinhackProConfig.from_yaml(path)

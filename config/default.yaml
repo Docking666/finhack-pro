@@ -26,3 +26,9 @@ risk:
   var_confidence: 0.95
   stop_loss_pct: 0.05
   take_profit_pct: 0.10
+
+workshop:
+  # CloudBase 网关地址：/api/workshop 前缀由网关剥除，/api 前缀到达云函数 workshop-api
+  base_url: "https://ad-to-earn-d8goxvb2q25d96fc2-1463991490.ap-shanghai.app.tcloudbase.com/api/workshop/api"
+  timeout: 30
+  workshop_dir: "data/workshop"
