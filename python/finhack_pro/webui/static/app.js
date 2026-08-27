@@ -416,9 +416,22 @@ function app() {
 
         async loadPage(name) {
             if (this._loadedPages[name]) return this._loadedPages[name];
-            const html = await loadPageTemplate(name);
-            this._loadedPages[name] = html;
-            return html;
+            // 【竞态根治】缓存 Promise 而非结果字符串：Alpine x-html 响应式重估会
+            // 触发重复调用 loadPage，若各自 await 模板加载，会二次注入 HTML → 页面
+            // 重建 → 旧组件实例的延迟 setTimeout(initChart) 在新 canvas 上覆盖建空图
+            // （权益曲线空白的跨实例竞态根源）。缓存 Promise 后重复调用共享同一加载。
+            const p = loadPageTemplate(name)
+                .then(html => {
+                    this._loadedPages[name] = html;
+                    return html;
+                })
+                .catch(err => {
+                    // 加载失败：清缓存允许重试
+                    delete this._loadedPages[name];
+                    throw err;
+                });
+            this._loadedPages[name] = p;
+            return p;
         },
 
         // 加载系统数据
@@ -848,9 +861,10 @@ function backtestPage() {
             await Promise.all([this.loadStrategies(), this.loadHistory()]);
             // 回测页模板经 x-html 异步注入，Alpine init 时 canvas 可能尚未挂载，
             // 仅靠 $nextTick 会漏建图表 → 权益曲线永远空白。延时重试确保创建。
-            this.$nextTick(() => this.initChart());
-            setTimeout(() => this.initChart(), 300);
-            setTimeout(() => this.initChart(), 1000);
+            // 用 ensureChart（含实例健康校验 + Chart.js 缺失 toast 提示）而非裸 initChart。
+            this.$nextTick(() => this.ensureChart());
+            setTimeout(() => this.ensureChart(), 300);
+            setTimeout(() => this.ensureChart(), 1000);
         },
 
         async loadStrategies() {
@@ -891,6 +905,16 @@ function backtestPage() {
             if (typeof Chart === 'undefined') return;
             const canvas = document.getElementById('equity-chart');
             if (!canvas) return;
+
+            // 【跨实例竞态根治】陈旧 Alpine 实例的延迟 setTimeout(initChart, 1000)
+            // 在页面重建后的新 canvas 上执行时，this.equityChart 可能持有旧 canvas
+            // 上的图表：数据守卫会误判"已有数据"而 return，或 destroy 后在新 canvas
+            // 上建空图。先校验 canvas 归属：chart 不在当前 DOM canvas 上 → 销毁重置。
+            if (this.equityChart && this.equityChart.canvas !== canvas) {
+                console.log('[initChart] Stale chart on different canvas, destroying');
+                try { this.equityChart.destroy(); } catch (_) { /* ignore */ }
+                this.equityChart = null;
+            }
 
             // 【关键修复】若已存在带数据的图表（renderEquityChart 已建好），不再销毁重建。
             // 旧代码无条件 destroy + 建空图，与 renderEquityChart 形成竞态：
@@ -1175,6 +1199,9 @@ function backtestPage() {
             }
             if (typeof Chart === 'undefined') {
                 console.warn('[renderEquityChart] Chart.js not loaded');
+                try {
+                    window.__alpineApp && window.__alpineApp.showToast('图表库(Chart.js)加载失败，权益曲线无法显示', 'error');
+                } catch (_) { /* ignore */ }
                 return;
             }
 
