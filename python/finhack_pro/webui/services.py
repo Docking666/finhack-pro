@@ -682,6 +682,7 @@ class BacktestService:
                 equity_curve=equity_curve,
                 trades=[t.model_dump() for t in trades],
                 benchmark_curve=benchmark_curve,
+                daily_returns=[round(r, 6) for r in getattr(backtest_result, "daily_returns", [])],
             )
 
             logger.info(f"[Backtest {task_id}] 回测完成: 总收益 {metrics.total_return}%, 交易次数 {metrics.total_trades}")
@@ -715,6 +716,7 @@ class BacktestService:
                     "equity_curve": equity_curve,
                     "benchmark_curve": benchmark_curve,
                     "trades": [t.model_dump() for t in trades],
+                    "daily_returns": [round(r, 6) for r in getattr(backtest_result, "daily_returns", [])],
                 })
 
             logger.info(f"回测任务完成: {task_id}, 收益率={metrics.total_return}%")

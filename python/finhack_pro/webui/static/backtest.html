@@ -129,6 +129,18 @@
         </div>
     </div>
 
+    <!-- 收益率与回撤曲线 -->
+    <div class="lg:col-span-2 bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+        <h3 class="text-sm font-medium text-white mb-3">每日收益率与回撤</h3>
+        <div class="relative" style="height: 220px;">
+            <canvas id="returns-chart"></canvas>
+            <!-- 空态提示：未运行回测时展示 -->
+            <div x-show="!Object.keys(metrics).length" class="absolute inset-0 flex items-center justify-center text-sm text-gray-500 pointer-events-none">
+                运行回测后展示每日收益率（柱）与回撤（面积）
+            </div>
+        </div>
+    </div>
+
     <!-- 交易记录 -->
     <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
         <div class="flex items-center justify-between mb-3">

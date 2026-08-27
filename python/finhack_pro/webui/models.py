@@ -224,6 +224,7 @@ class BacktestResult(BaseModel):
     equity_curve: List[Dict[str, Any]] = Field(default_factory=list)
     trades: List[TradeRecord] = Field(default_factory=list)
     benchmark_curve: List[Dict[str, Any]] = Field(default_factory=list)
+    daily_returns: List[float] = Field(default_factory=list, description="每日收益率序列（与 equity_curve 对齐）")
 
 
 # ============================================================

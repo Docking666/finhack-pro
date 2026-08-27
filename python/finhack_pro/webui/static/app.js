@@ -852,6 +852,7 @@ function backtestPage() {
         history: [],
         tradePage: 1,
         equityChart: null,
+        returnsChart: null,
         currentTaskId: null,
         exporting: false,
         currentResult: null,
@@ -1143,6 +1144,7 @@ function backtestPage() {
                     if (data.equity_curve && data.equity_curve.length > 0) {
                         console.log('[WS backtest_completed] Rendering chart from WS event:', data.equity_curve.length, 'points');
                         this.renderEquityChart(data);
+                        this.renderReturnsChart(data);
                         if (data.trades) {
                             this.trades = data.trades;
                         }
@@ -1174,6 +1176,7 @@ function backtestPage() {
                     if (result.equity_curve && result.equity_curve.length > 0) {
                         console.log('[fetchResult] Rendering chart with', result.equity_curve.length, 'data points');
                         this.renderEquityChart(result);
+                        this.renderReturnsChart(result);
                     } else {
                         console.warn('[fetchResult] No equity_curve data');
                     }
@@ -1216,7 +1219,32 @@ function backtestPage() {
             const equityData = result.equity_curve.map(p => p.equity);
             const benchData = (result.benchmark_curve || []).map(p => p.equity);
 
+            // 2.1 买卖点标记：按 trade.date 对齐 labels 下标，Chart.js 原生
+            //     pointRadius/pointStyle/pointBackgroundColor 数组实现（零新依赖）。
+            //     买入=红色三角、卖出=绿色菱形（中国红涨绿跌惯例）。
+            const labelIndex = new Map(labels.map((d, i) => [d, i]));
+            const pointRadius = new Array(labels.length).fill(0);
+            const pointStyle = new Array(labels.length).fill('circle');
+            const pointBg = new Array(labels.length).fill('transparent');
+            const pointBorder = new Array(labels.length).fill('transparent');
+            for (const t of (result.trades || [])) {
+                const idx = labelIndex.get(t.date ? String(t.date).substring(0, 10) : '');
+                if (idx === undefined) continue;
+                if (t.direction === 'buy') {
+                    pointRadius[idx] = 5;
+                    pointStyle[idx] = 'triangle';
+                    pointBg[idx] = '#ef4444';      // 买入 红
+                    pointBorder[idx] = '#fecaca';
+                } else {
+                    pointRadius[idx] = 5;
+                    pointStyle[idx] = 'rectRot';    // 菱形
+                    pointBg[idx] = '#22c55e';      // 卖出 绿
+                    pointBorder[idx] = '#bbf7d0';
+                }
+            }
+
             console.log('[renderEquityChart] labels:', labels.length, 'equity:', equityData.length, 'bench:', benchData.length,
+                        'buy/sell markers:', pointStyle.filter(s => s !== 'circle').length,
                         'first equity:', equityData[0], 'last equity:', equityData[equityData.length - 1]);
 
             // 3. 创建新图表（数据直接注入，避免空图表→更新的时序窗口）
@@ -1234,7 +1262,11 @@ function backtestPage() {
                                 backgroundColor: 'rgba(59, 130, 246, 0.1)',
                                 fill: true,
                                 tension: 0.3,
-                                pointRadius: 0,
+                                pointRadius: pointRadius,
+                                pointStyle: pointStyle,
+                                pointBackgroundColor: pointBg,
+                                pointBorderColor: pointBorder,
+                                pointBorderWidth: 1.5,
                                 borderWidth: 2,
                             },
                             {
@@ -1288,6 +1320,112 @@ function backtestPage() {
                 console.log('[renderEquityChart] Chart created successfully with data');
             } catch (e) {
                 console.error('[renderEquityChart] Error creating chart:', e);
+            }
+        },
+
+        /**
+         * 渲染每日收益率（柱）+ 回撤（面积）组合图
+         * 数据来源：daily_returns（后端已算，经 API/WS 透出）+ equity_curve 派生回撤
+         */
+        renderReturnsChart(result) {
+            const canvas = document.getElementById('returns-chart');
+            if (!canvas || !canvas.isConnected) {
+                console.warn('[renderReturnsChart] canvas not available');
+                return;
+            }
+            if (typeof Chart === 'undefined') {
+                console.warn('[renderReturnsChart] Chart.js not loaded');
+                try {
+                    window.__alpineApp && window.__alpineApp.showToast('图表库(Chart.js)加载失败，收益率曲线无法显示', 'error');
+                } catch (_) { /* ignore */ }
+                return;
+            }
+
+            // 1. 销毁旧实例
+            if (this.returnsChart) {
+                try { this.returnsChart.destroy(); } catch (e) { /* ignore */ }
+                this.returnsChart = null;
+            }
+
+            // 2. 数据：labels 与权益图对齐；收益率转 %；回撤从权益派生（峰值回撤，负值显示）
+            const labels = result.equity_curve.map(p => p.date ? String(p.date).substring(0, 10) : '');
+            const dailyReturns = (result.daily_returns || []).map(r => Number((r * 100).toFixed(3)));
+            let peak = -Infinity;
+            const drawdowns = result.equity_curve.map(p => {
+                if (p.equity > peak) peak = p.equity;
+                return peak > 0 ? -Number(((peak - p.equity) / peak * 100).toFixed(3)) : 0;
+            });
+
+            console.log('[renderReturnsChart] labels:', labels.length,
+                        'daily:', dailyReturns.length, 'drawdown pts:', drawdowns.length);
+
+            // 3. 建图：每日收益率柱状（左轴）+ 回撤面积（右轴）
+            try {
+                const ctx = canvas.getContext('2d');
+                this.returnsChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: '每日收益率(%)',
+                                type: 'bar',
+                                data: dailyReturns,
+                                yAxisID: 'y',
+                                backgroundColor: dailyReturns.map(v => v >= 0 ? 'rgba(34, 197, 94, 0.6)' : 'rgba(239, 68, 68, 0.6)'),
+                                borderWidth: 0,
+                                order: 2,
+                            },
+                            {
+                                label: '回撤(%)',
+                                type: 'line',
+                                data: drawdowns,
+                                yAxisID: 'y2',
+                                borderColor: '#f59e0b',
+                                backgroundColor: 'rgba(245, 158, 11, 0.15)',
+                                fill: true,
+                                tension: 0.3,
+                                pointRadius: 0,
+                                borderWidth: 1.5,
+                                order: 1,
+                            },
+                        ],
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { intersect: false, mode: 'index' },
+                        plugins: {
+                            legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
+                            tooltip: {
+                                backgroundColor: '#1e293b',
+                                titleColor: '#e2e8f0',
+                                bodyColor: '#94a3b8',
+                                borderColor: '#334155',
+                                borderWidth: 1,
+                            },
+                        },
+                        scales: {
+                            x: {
+                                ticks: { color: '#64748b', font: { size: 10 }, maxTicksLimit: 8 },
+                                grid: { color: 'rgba(51, 65, 85, 0.3)' },
+                            },
+                            y: {
+                                position: 'left',
+                                ticks: { color: '#64748b', font: { size: 10 }, callback: v => v + '%' },
+                                grid: { color: 'rgba(51, 65, 85, 0.3)' },
+                            },
+                            y2: {
+                                position: 'right',
+                                grid: { drawOnChartArea: false },
+                                ticks: { color: '#f59e0b', font: { size: 10 }, callback: v => v + '%' },
+                            },
+                        },
+                    },
+                });
+                console.log('[renderReturnsChart] Chart created successfully');
+            } catch (e) {
+                console.error('[renderReturnsChart] Error creating chart:', e);
             }
         },
 
