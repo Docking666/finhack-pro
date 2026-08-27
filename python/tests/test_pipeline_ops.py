@@ -191,3 +191,80 @@ class TestCooperativeCancel:
         svc.set_coordinator(coord)
         runs = svc._scan_disk_pipeline_runs()
         assert any(r["run_id"] == "run_x" and r["status"] == "cancelled" for r in runs)
+
+
+# ============================================================
+# 环境指纹漂移与 resume_on_drift
+# ============================================================
+
+
+class TestEnvFingerprint:
+    def test_fingerprint_diff_reports_drift_fields(self, tmp_path):
+        """_fingerprint_diff 列出漂移字段（agent.字段: 旧值 → 新值）"""
+        import finhack_pro.agents.coordinator as _mod
+
+        coord = _make_light_coordinator(str(tmp_path))
+        run_dir = tmp_path / "run_drift"
+        run_dir.mkdir()
+
+        # 保存的旧指纹：deepseek 配置
+        (run_dir / "env_fingerprint.json").write_text(json.dumps({
+            "version": 1,
+            "agents": {
+                "market_analyzer": {
+                    "model": "deepseek-v4-flash", "temperature": 0.0,
+                    "provider": "openai", "base_url": "https://api.deepseek.com/v1",
+                },
+                "news_analyst": {
+                    "model": "deepseek-v4-flash", "temperature": 0.3,
+                    "provider": "openai", "base_url": "https://api.deepseek.com/v1",
+                },
+            },
+            "prompts": {},
+        }), encoding="utf-8")
+
+        # 当前配置：orcarouter + 温度 0.0（与旧指纹 model/base_url/temperature 均不同）
+        current = {
+            "version": 1,
+            "agents": {
+                "market_analyzer": {
+                    "model": "orcarouter/free", "temperature": 0.0,
+                    "provider": "openai", "base_url": "https://api.orcarouter.ai/v1",
+                },
+                "news_analyst": {
+                    "model": "orcarouter/free", "temperature": 0.0,
+                    "provider": "openai", "base_url": "https://api.orcarouter.ai/v1",
+                },
+            },
+            "prompts": {},
+        }
+
+        def _fake_compute(self):
+            return current
+
+        # 用 mock 替换 _compute_env_fingerprint（避免依赖真实 agents），用后恢复
+        _orig = _mod.AgentCoordinator._compute_env_fingerprint
+        _mod.AgentCoordinator._compute_env_fingerprint = _fake_compute
+        try:
+            diff = coord._fingerprint_diff("run_drift")
+        finally:
+            _mod.AgentCoordinator._compute_env_fingerprint = _orig
+
+        assert "market_analyzer.model" in diff
+        assert "deepseek-v4-flash" in diff and "orcarouter/free" in diff
+        assert "news_analyst.temperature" in diff
+
+    @pytest.mark.asyncio
+    async def test_run_analysis_pipeline_passes_resume_on_drift(self, tmp_path):
+        """resume_on_drift 请求级参数透传到 impl"""
+        coord = _make_light_coordinator(str(tmp_path))
+        captured = {}
+
+        async def _fake_impl(**kwargs):
+            captured["resume_on_drift"] = kwargs.get("resume_on_drift")
+            return {"symbol": kwargs.get("symbol", "")}
+
+        coord._run_analysis_pipeline_impl = _fake_impl
+        await coord.run_analysis_pipeline(symbol="600519.SH", run_id="run_r", resume=True, resume_on_drift=True)
+        assert captured["resume_on_drift"] is True
+        assert coord._pipeline_active is False

@@ -664,6 +664,35 @@ class AgentCoordinator:
             self._logger.warning(f"[Pipeline {run_id}] 环境指纹校验失败: {e}")
             return False
 
+    def _fingerprint_diff(self, run_id: str) -> str:
+        """返回指纹漂移的字段明细（agent → 字段 → 旧值/新值），供错误信息定位"""
+        import json as _json
+
+        run_dir = self._get_pipeline_dir(run_id)
+        path = os.path.join(run_dir, "env_fingerprint.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                saved = _json.load(f)
+        except Exception:
+            return ""
+        current = self._compute_env_fingerprint()
+
+        lines: List[str] = []
+        saved_agents = saved.get("agents") or {}
+        current_agents = current.get("agents") or {}
+        for name in sorted(set(saved_agents) | set(current_agents)):
+            s = saved_agents.get(name) or {}
+            c = current_agents.get(name) or {}
+            for key in ("model", "temperature", "provider", "base_url"):
+                if s.get(key) != c.get(key):
+                    lines.append(f"{name}.{key}: {s.get(key)!r} → {c.get(key)!r}")
+        saved_prompts = saved.get("prompts") or {}
+        current_prompts = current.get("prompts") or {}
+        for name in sorted(set(saved_prompts) | set(current_prompts)):
+            if saved_prompts.get(name) != current_prompts.get(name):
+                lines.append(f"{name}.prompt: 内容变更")
+        return "；".join(lines)
+
     def _get_resume_plan(self, run_id: str) -> Dict[str, Any]:
         """扫描 run 目录，返回 {input_snapshot, done_steps, pending_steps, state}"""
         run_dir = self._get_pipeline_dir(run_id)
@@ -784,6 +813,7 @@ class AgentCoordinator:
         resume: bool = True,
         event_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
         cancel_check: Optional[Callable[[], None]] = None,
+        resume_on_drift: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """运行完整的分析流水线
 
@@ -834,13 +864,19 @@ class AgentCoordinator:
                         f"run_id '{run_id}' 已存在且 resume=False，拒绝覆盖冻结产物；"
                         f"如需续跑请传 resume=True"
                     )
-                # 环境指纹校验：漂移则拒绝恢复（除非配置 resume_on_drift）
+                # 环境指纹校验：漂移则拒绝恢复（除非 resume_on_drift：请求级优先，其次全局配置）
                 if not self._check_env_fingerprint(run_id):
-                    resume_on_drift = self.config.get("pipeline", {}).get("resume_on_drift", False)
-                    if not resume_on_drift:
+                    _resume_on_drift = (
+                        resume_on_drift
+                        if resume_on_drift is not None
+                        else self.config.get("pipeline", {}).get("resume_on_drift", False)
+                    )
+                    if not _resume_on_drift:
+                        _diff = self._fingerprint_diff(run_id)
                         raise EnvironmentDriftError(
-                            f"run_id '{run_id}' 环境指纹漂移（模型/温度/prompt 变更），"
-                            f"无法安全续跑；请改用新 run_id 或设置 pipeline.resume_on_drift=true"
+                            f"run_id '{run_id}' 环境指纹漂移（模型/温度/prompt 变更），无法安全续跑；"
+                            f"请改用新 run_id 或设置 pipeline.resume_on_drift=true"
+                            + (f"。变更明细：{_diff}" if _diff else "")
                         )
                     self._logger.warning(f"[Pipeline {run_id}] 环境指纹漂移，resume_on_drift=true，降级继续")
                     result["resume_drift_warning"] = "环境指纹漂移，已按 resume_on_drift 配置继续"
@@ -1487,6 +1523,7 @@ class AgentCoordinator:
         resume: bool = True,
         event_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
         cancel_check: Optional[Callable[[], None]] = None,
+        resume_on_drift: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """执行分析流水线（并发隔离门面）
 
@@ -1496,6 +1533,9 @@ class AgentCoordinator:
 
         cancel_check: 协作式取消回调（每步骤边界调用一次，抛
         PipelineCancelledError 中止流水线并落盘 cancelled 状态）。
+
+        resume_on_drift: 续跑时环境指纹漂移是否强制继续。None → 跟随
+        config pipeline.resume_on_drift；True/False → 请求级覆盖。
         """
         if self._pipeline_active:
             raise PipelineBusyError(
@@ -1513,6 +1553,7 @@ class AgentCoordinator:
                 resume=resume,
                 event_callback=event_callback,
                 cancel_check=cancel_check,
+                resume_on_drift=resume_on_drift,
             )
         finally:
             self._pipeline_active = False

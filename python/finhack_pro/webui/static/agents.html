@@ -93,6 +93,22 @@
                         </button>
                     </div>
                 </template>
+                <template x-if="!pipelineRunning && pendingDriftRun">
+                    <div class="flex items-center gap-2 bg-amber-900/20 border border-amber-700/50 rounded-lg px-3 py-1.5">
+                        <span class="text-xs text-amber-300">
+                            LLM 配置已变更，续跑将按新配置重跑未完成步骤
+                            <span class="font-mono text-amber-400" x-text="pendingDriftRun.run_id"></span>
+                        </span>
+                        <button @click="forceResumePipeline()"
+                                class="px-2.5 py-0.5 bg-amber-600 hover:bg-amber-500 text-white text-xs rounded transition-colors">
+                            强制续跑
+                        </button>
+                        <button @click="pendingDriftRun = null"
+                                class="px-2 py-0.5 text-amber-400/70 hover:text-amber-300 text-xs rounded transition-colors">
+                            取消
+                        </button>
+                    </div>
+                </template>
             </div>
         </div>
     </div>

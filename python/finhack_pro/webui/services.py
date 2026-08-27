@@ -888,6 +888,7 @@ class AgentService:
                     resume=request.resume,
                     event_callback=_pipeline_event_cb,
                     cancel_check=_cancel_check,
+                    resume_on_drift=getattr(request, "resume_on_drift", None),
                 )
 
                 logger.info(f"[Pipeline {run_id}] Coordinator流水线完成")

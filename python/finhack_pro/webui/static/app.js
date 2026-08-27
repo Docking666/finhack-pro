@@ -1208,7 +1208,17 @@ function backtestPage() {
                 return;
             }
 
-            // 1. 销毁旧实例（无论状态如何）
+            // 1. 销毁旧实例（无论状态如何）：
+            //    ① canvas 上任何残留实例（跨实例/模板二次注入残留 → 否则
+            //       Chart.js 抛 "Canvas is already in use" 被静默 catch → 空白）
+            //    ② 本实例持有的引用
+            if (typeof Chart.getChart === 'function') {
+                const existing = Chart.getChart(canvas);
+                if (existing) {
+                    console.log('[renderEquityChart] Destroying stale chart on canvas');
+                    try { existing.destroy(); } catch (e) { /* ignore */ }
+                }
+            }
             if (this.equityChart) {
                 try { this.equityChart.destroy(); } catch (e) { /* ignore */ }
                 this.equityChart = null;
@@ -1341,7 +1351,14 @@ function backtestPage() {
                 return;
             }
 
-            // 1. 销毁旧实例
+            // 1. 销毁旧实例：canvas 残留实例（跨实例竞态）+ 本实例引用
+            if (typeof Chart.getChart === 'function') {
+                const existing = Chart.getChart(canvas);
+                if (existing) {
+                    console.log('[renderReturnsChart] Destroying stale chart on canvas');
+                    try { existing.destroy(); } catch (e) { /* ignore */ }
+                }
+            }
             if (this.returnsChart) {
                 try { this.returnsChart.destroy(); } catch (e) { /* ignore */ }
                 this.returnsChart = null;
@@ -1555,6 +1572,8 @@ function agentsPage() {
                 && r.run_id !== this.currentRunId);
             return run || null;
         },
+        // 续跑遇环境指纹漂移（LLM 配置已变更）→ 二次确认后强制续跑
+        pendingDriftRun: null,
 
         async init() {
             window.__agentsPage = this;
@@ -1621,7 +1640,7 @@ function agentsPage() {
             }
         },
 
-        async runPipeline(runId = null) {
+        async runPipeline(runId = null, extra = {}) {
             if (!this.pipelineSymbol.trim()) {
                 window.__alpineApp.showToast('请输入标的代码', 'warning');
                 return;
@@ -1638,6 +1657,7 @@ function agentsPage() {
                 // 模块化续跑：复用 run_id，已完成步骤保留、未完成模块从头重跑
                 payload.run_id = runId;
                 payload.resume = true;
+                Object.assign(payload, extra || {});
             }
 
             try {
@@ -1645,6 +1665,7 @@ function agentsPage() {
                 if (resp.success) {
                     // 记录本次发起的 run_id，事件流只展示本任务（防混淆）
                     this.currentRunId = resp.data && resp.data.run_id;
+                    this.pendingDriftRun = null;
                     window.__alpineApp.showToast(runId ? '已从断点续跑' : '分析流水线已启动', 'info');
                 }
             } catch (e) {
@@ -1684,6 +1705,16 @@ function agentsPage() {
                 this.pipelineSymbol = run.symbol;
             }
             await this.runPipeline(run.run_id);
+        },
+
+        // 强制续跑：环境指纹漂移（LLM 配置已变更）时按新配置重跑未完成步骤
+        async forceResumePipeline() {
+            const run = this.pendingDriftRun;
+            if (!run || !run.run_id) return;
+            if (run.symbol) {
+                this.pipelineSymbol = run.symbol;
+            }
+            await this.runPipeline(run.run_id, { resume_on_drift: true });
         },
 
         handleWSMessage(data) {
@@ -1771,16 +1802,24 @@ function agentsPage() {
                 case 'pipeline_error':
                     this.pipelineRunning = false;
                     this.thinkingMessage = '';
+                    const errMsg = data.error || '未知错误';
+                    // 环境指纹漂移：LLM 配置已变更 → 提供"强制续跑"入口（按新配置重跑未完成步骤）
+                    if (errMsg.includes('环境指纹漂移')) {
+                        this.pendingDriftRun = {
+                            run_id: data.run_id || this.currentRunId,
+                            symbol: this.pipelineSymbol,
+                        };
+                    }
                     // 记录错误消息到思考区
                     this.thoughtMessages.push({
                         step: 99,
                         agent_id: 'system',
                         agent_name: '系统错误',
-                        content: '## ❌ 流水线执行失败\n\n```\n' + (data.error || '未知错误') + '\n```',
+                        content: '## ❌ 流水线执行失败\n\n```\n' + errMsg + '\n```',
                         duration_ms: 0,
                     });
                     this.loadData();
-                    window.__alpineApp.showToast('分析流水线失败: ' + (data.error || '未知错误'), 'error');
+                    window.__alpineApp.showToast('分析流水线失败: ' + errMsg, 'error');
                     break;
 
                 case 'pipeline_cancelled':

@@ -250,6 +250,7 @@ class PipelineRunRequest(BaseModel):
     current_price: Optional[float] = None
     run_id: Optional[str] = Field(None, description="流水线运行ID（复用则续跑；为空生成新ID）")
     resume: bool = Field(True, description="run_id 已存在时是否允许恢复")
+    resume_on_drift: bool = Field(False, description="续跑时环境指纹漂移（模型/温度/prompt 变更）是否强制继续")
 
 
 class PipelineStepResult(BaseModel):
