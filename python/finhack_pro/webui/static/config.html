@@ -268,7 +268,7 @@
     <!-- 操作按钮 -->
     <div class="flex gap-3">
         <button @click="saveConfig()" :disabled="saving"
-                class="px-6 py-2 bg-accent hover:bg-accent/85 disabled:bg-accent/70 text-white text-sm rounded-sm transition-colors flex items-center gap-2">
+                class="px-6 py-2 bg-accent hover:bg-accent/85 disabled:bg-accent/70 text-accent-fg text-sm rounded-sm transition-colors flex items-center gap-2">
             <template x-if="!saving">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M5 13l4 4L19 7"></path></svg>
             </template>

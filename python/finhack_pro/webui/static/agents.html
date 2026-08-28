@@ -34,7 +34,7 @@
                            class="bg-inset border border-line rounded-sm px-3 py-1.5 text-sm text-white focus:border-accent focus:outline-none w-36">
                 </div>
                 <button @click="runPipeline()" :disabled="pipelineRunning"
-                        class="px-4 py-1.5 bg-accent hover:bg-accent/85 disabled:bg-accent/70 text-white text-sm rounded-sm transition-colors flex items-center gap-2">
+                        class="px-4 py-1.5 bg-accent hover:bg-accent/85 disabled:bg-accent/70 text-accent-fg text-sm rounded-sm transition-colors flex items-center gap-2">
                     <template x-if="!pipelineRunning">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path></svg>
                     </template>
@@ -88,7 +88,7 @@
                             <span x-text="pendingRun.steps_completed"></span>/<span x-text="pendingRun.steps_total || 7"></span> 步)
                         </span>
                         <button @click="resumePipeline(pendingRun)"
-                                class="px-2.5 py-0.5 bg-accent/80 hover:bg-accent text-white text-xs rounded-sm transition-colors">
+                                class="px-2.5 py-0.5 bg-accent/80 hover:bg-accent text-accent-fg text-xs rounded-sm transition-colors">
                             续跑
                         </button>
                     </div>
