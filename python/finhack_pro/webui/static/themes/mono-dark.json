@@ -1,0 +1,45 @@
+{
+  "id": "mono-dark",
+  "name": "极简暗色",
+  "version": "1.0",
+  "author": "finhack",
+  "type": "builtin",
+  "mode": "dark",
+  "scheme": "cn",
+  "wallpaper": null,
+  "tokens": {
+    "bg-base": "#0B0C0E",
+    "bg-surface": "#15181C",
+    "bg-elevated": "#1D2126",
+    "bg-inset": "#0F1114",
+
+    "line": "#34383F",
+    "line-strong": "#4A5058",
+    "line-subtle": "#23262B",
+
+    "fg": "#E8EAED",
+    "fg-muted": "#9AA0A6",
+    "fg-subtle": "#6B7280",
+
+    "accent": "#E8EAED",
+    "accent-fg": "#0B0C0E",
+    "accent-soft": "rgba(232,234,237,.10)",
+
+    "up": "#E5484D",
+    "down": "#17A34A",
+    "up-soft": "rgba(229,72,77,.14)",
+    "down-soft": "rgba(23,163,74,.14)",
+
+    "ok": "#3DD68C",
+    "warn": "#E8A33D",
+    "danger": "#F2555A",
+
+    "chart-line": "#E8EAED",
+    "chart-line2": "#6B7280",
+    "chart-grid": "rgba(52,56,63,.85)",
+    "chart-axis": "#9AA0A6",
+    "chart-tip-bg": "#1D2126",
+    "chart-tip-line": "#34383F"
+  },
+  "customCss": null
+}

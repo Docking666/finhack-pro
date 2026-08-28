@@ -79,3 +79,4 @@ node_modules/
 # Runtime data (fetcher cache + pipeline artifacts under python/)
 python/data/cache/
 python/data/pipeline/
+data/themes/

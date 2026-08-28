@@ -1,9 +1,9 @@
 <!-- API配置页面模板 -->
 <div class="fade-in space-y-4" x-data="configPage()">
     <!-- LLM配置 -->
-    <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+    <div class="bg-surface rounded-sm p-4 border border-line">
         <h3 class="text-sm font-medium text-white mb-4 flex items-center gap-2">
-            <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+            <svg class="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
             LLM配置
         </h3>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -12,7 +12,7 @@
                 <label class="block text-xs text-gray-400 mb-1">服务商</label>
                 <div class="flex gap-2">
                     <select x-model="providerSelection" @change="applyProviderPreset('llm')"
-                            class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                            class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
                         <template x-for="(p, key) in PROVIDER_PRESETS" :key="key">
                             <option :value="key" x-text="p.label"></option>
                         </template>
@@ -27,9 +27,9 @@
                 <label class="block text-xs text-gray-400 mb-1">API Key</label>
                 <div class="relative">
                     <input type="password" x-model="config.llm.openai_api_key" placeholder="sk-..."
-                           class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none pr-10">
+                           class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none pr-10">
                     <button @click="togglePassword($event)" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
                     </button>
                 </div>
                 <p class="mt-1 text-xs text-gray-500">兼容 OpenAI 格式的所有服务商（DeepSeek、通义千问、智谱、OrcaRouter 等）</p>
@@ -39,10 +39,10 @@
             <div>
                 <label class="block text-xs text-gray-400 mb-1">API 基础地址 (Base URL)</label>
                 <input type="text" x-model="config.llm.openai_base_url" placeholder="https://api.openai.com/v1"
-                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                       class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
                 <p class="mt-1 text-xs text-gray-500">OrcaRouter: https://api.orcarouter.ai/v1（一个 Key 切换所有模型）</p>
                 <button @click="testConnection('openai', 'openai')" :disabled="testing.openai"
-                        class="mt-1.5 text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
+                        class="mt-1.5 text-xs text-accent hover:text-accent flex items-center gap-1">
                     <template x-if="!testing.openai"><span>测试连接</span></template>
                     <template x-if="testing.openai"><span class="spinner !w-3 !h-3 !border-2"></span></template>
                 </button>
@@ -53,7 +53,7 @@
             <div>
                 <label class="block text-xs text-gray-400 mb-1">模型名称</label>
                 <input type="text" x-model="config.llm.model" placeholder="例如: gpt-4o、deepseek-chat、glm-4-flash、orcarouter/auto"
-                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                       class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
                 <p class="mt-1 text-xs text-gray-500">支持任意符合 OpenAI 格式的模型</p>
             </div>
 
@@ -61,7 +61,7 @@
             <div>
                 <label class="block text-xs text-gray-400 mb-1">Temperature: <span x-text="config.llm.temperature" class="text-white"></span></label>
                 <input type="range" x-model.number="config.llm.temperature" min="0" max="2" step="0.1"
-                       class="w-full h-2 bg-[#334155] rounded-lg appearance-none cursor-pointer accent-blue-500">
+                       class="w-full h-2 bg-elevated rounded-sm appearance-none cursor-pointer accent-accent">
                 <div class="flex justify-between text-xs text-gray-600 mt-1">
                     <span>精确 (0)</span>
                     <span>创意 (2)</span>
@@ -72,31 +72,31 @@
             <div>
                 <label class="block text-xs text-gray-400 mb-1">Max Tokens</label>
                 <input type="number" x-model.number="config.llm.max_tokens" min="1" max="128000"
-                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                       class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
             </div>
         </div>
     </div>
 
     <!-- Agent 独立 LLM 配置 -->
-    <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+    <div class="bg-surface rounded-sm p-4 border border-line">
         <h3 class="text-sm font-medium text-white mb-1 flex items-center gap-2">
-            <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+            <svg class="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
             Agent 独立模型配置
         </h3>
         <p class="text-xs text-gray-500 mb-4">每个 Agent 可单独设置模型 / API Key / Base URL，留空则跟随全局 LLM 配置。多 Agent 可多模型、多 API 来源。</p>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <template x-for="agentCfg in agentConfigs" :key="agentCfg.name">
-                <div class="bg-[#0f172a] rounded-lg p-3 border border-[#334155]/60">
+                <div class="bg-inset rounded-sm p-3 border border-line/60">
                     <div class="flex items-center justify-between mb-2">
                         <div class="flex items-center gap-2">
-                            <div class="w-5 h-5 rounded flex items-center justify-center text-xs font-bold"
+                            <div class="w-5 h-5 rounded-sm flex items-center justify-center text-xs font-semibold"
                                  :style="'background: ' + getAgentColor(agentCfg.name) + '30; color: ' + getAgentColor(agentCfg.name)"
                                  x-text="agentCfg.name.charAt(0).toUpperCase()"></div>
                             <span class="text-sm font-medium text-gray-200" x-text="agentCfg.label"></span>
                         </div>
-                        <span class="text-[10px] px-1.5 py-0.5 rounded"
-                              :class="agentCfg.followGlobal ? 'bg-gray-800 text-gray-400' : 'bg-purple-900/50 text-purple-300'"
+                        <span class="text-[10px] px-1.5 py-0.5 rounded-sm"
+                              :class="agentCfg.followGlobal ? 'bg-elevated text-gray-400' : 'bg-elevated text-accent'"
                               x-text="agentCfg.followGlobal ? '跟随全局' : '独立配置'"></span>
                     </div>
 
@@ -105,7 +105,7 @@
                         <div>
                             <label class="block text-[10px] text-gray-500 mb-0.5">服务商</label>
                             <select x-model="agentCfg.providerSel" @change="applyProviderPreset('agent', agentCfg)"
-                                    class="w-full bg-[#1e293b] border border-[#334155] rounded px-2 py-1 text-xs text-white focus:border-purple-500 focus:outline-none">
+                                    class="w-full bg-surface border border-line rounded-sm px-2 py-1 text-xs text-white focus:border-accent focus:outline-none">
                                 <option value="">跟随全局</option>
                                 <template x-for="(p, key) in PROVIDER_PRESETS" :key="key">
                                     <option :value="key" x-text="p.label"></option>
@@ -116,7 +116,7 @@
                         <div>
                             <label class="block text-[10px] text-gray-500 mb-0.5">模型名称</label>
                             <input type="text" x-model="agentCfg.model" placeholder="跟随全局"
-                                   class="w-full bg-[#1e293b] border border-[#334155] rounded px-2 py-1 text-xs text-white focus:border-purple-500 focus:outline-none">
+                                   class="w-full bg-surface border border-line rounded-sm px-2 py-1 text-xs text-white focus:border-accent focus:outline-none">
                         </div>
                     </div>
 
@@ -124,19 +124,19 @@
                         <div>
                             <label class="block text-[10px] text-gray-500 mb-0.5">API Key</label>
                             <input type="password" x-model="agentCfg.openai_api_key" placeholder="跟随全局"
-                                   class="w-full bg-[#1e293b] border border-[#334155] rounded px-2 py-1 text-xs text-white focus:border-purple-500 focus:outline-none">
+                                   class="w-full bg-surface border border-line rounded-sm px-2 py-1 text-xs text-white focus:border-accent focus:outline-none">
                         </div>
                         <div>
                             <label class="block text-[10px] text-gray-500 mb-0.5">Base URL</label>
                             <input type="text" x-model="agentCfg.openai_base_url" placeholder="跟随全局"
-                                   class="w-full bg-[#1e293b] border border-[#334155] rounded px-2 py-1 text-xs text-white focus:border-purple-500 focus:outline-none">
+                                   class="w-full bg-surface border border-line rounded-sm px-2 py-1 text-xs text-white focus:border-accent focus:outline-none">
                         </div>
                     </div>
 
                     <div class="flex items-center gap-3">
                         <label class="flex items-center gap-1.5 text-[10px] text-gray-500 cursor-pointer">
                             <input type="checkbox" x-model="agentCfg.followGlobal" @change="syncFollowGlobal(agentCfg)"
-                                   class="accent-purple-500 w-3 h-3"> 跟随全局
+                                   class="accent-accent w-3 h-3"> 跟随全局
                         </label>
                         <button @click="clearAgentOverride(agentCfg)" class="text-[10px] text-gray-600 hover:text-gray-400">清除覆盖</button>
                     </div>
@@ -146,9 +146,9 @@
     </div>
 
     <!-- 数据源配置 -->
-    <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+    <div class="bg-surface rounded-sm p-4 border border-line">
         <h3 class="text-sm font-medium text-white mb-4 flex items-center gap-2">
-            <svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path></svg>
+            <svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path></svg>
             数据源配置
         </h3>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -156,7 +156,7 @@
             <div>
                 <label class="block text-xs text-gray-400 mb-1">数据源</label>
                 <select x-model="config.data.source"
-                        class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                        class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
                     <option value="akshare">AkShare（免费，无需 Token）</option>
                     <option value="tushare">Tushare（需要 Token）</option>
                 </select>
@@ -170,7 +170,7 @@
             <div>
                 <label class="block text-xs text-gray-400 mb-1">数据目录</label>
                 <input type="text" x-model="config.data.data_dir" placeholder="./data"
-                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                       class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
             </div>
 
             <!-- Tushare Token（仅 Tushare 显示） -->
@@ -178,9 +178,9 @@
                 <label class="block text-xs text-gray-400 mb-1">Tushare Token</label>
                 <div class="relative">
                     <input type="password" x-model="config.data.tushare_token" placeholder="输入Tushare Token"
-                           class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none pr-10">
+                           class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none pr-10">
                     <button @click="togglePassword($event)" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
                     </button>
                 </div>
             </div>
@@ -189,7 +189,7 @@
             <div class="md:col-span-2">
                 <button @click="testDataSource(config.data.source)"
                         :disabled="testing[config.data.source]"
-                        class="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
+                        class="text-xs text-accent hover:text-accent flex items-center gap-1">
                     <template x-if="!testing[config.data.source]"><span>测试连接（{{config.data.source === 'akshare' ? 'AkShare' : 'Tushare'}}）</span></template>
                     <template x-if="testing[config.data.source]"><span class="spinner !w-3 !h-3 !border-2"></span></template>
                 </button>
@@ -201,66 +201,66 @@
     </div>
 
     <!-- 风控参数配置 -->
-    <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+    <div class="bg-surface rounded-sm p-4 border border-line">
         <h3 class="text-sm font-medium text-white mb-4 flex items-center gap-2">
-            <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"></path></svg>
+            <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"></path></svg>
             风控参数配置
         </h3>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
                 <label class="block text-xs text-gray-400 mb-1">最大仓位比例 (%)</label>
                 <input type="number" x-model.number="config.risk.max_position_pct" min="0" max="100" step="1"
-                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                       class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
             </div>
             <div>
                 <label class="block text-xs text-gray-400 mb-1">最大回撤限制 (%)</label>
                 <input type="number" x-model.number="config.risk.max_drawdown_pct" min="0" max="100" step="1"
-                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                       class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
             </div>
             <div>
                 <label class="block text-xs text-gray-400 mb-1">日亏损限制 (%)</label>
                 <input type="number" x-model.number="config.risk.max_daily_loss_pct" min="0" max="100" step="1"
-                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                       class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
             </div>
             <div>
                 <label class="block text-xs text-gray-400 mb-1">VaR置信度</label>
                 <input type="number" x-model.number="config.risk.var_confidence" min="0" max="1" step="0.01"
-                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                       class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
             </div>
             <div>
                 <label class="block text-xs text-gray-400 mb-1">止损比例 (%)</label>
                 <input type="number" x-model.number="config.risk.stop_loss_pct" min="0" max="100" step="1"
-                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                       class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
             </div>
             <div>
                 <label class="block text-xs text-gray-400 mb-1">止盈比例 (%)</label>
                 <input type="number" x-model.number="config.risk.take_profit_pct" min="0" max="100" step="1"
-                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                       class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
             </div>
         </div>
     </div>
 
     <!-- 执行参数配置 -->
-    <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+    <div class="bg-surface rounded-sm p-4 border border-line">
         <h3 class="text-sm font-medium text-white mb-4 flex items-center gap-2">
-            <svg class="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+            <svg class="w-4 h-4 text-warn" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
             执行参数配置
         </h3>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
                 <label class="block text-xs text-gray-400 mb-1">滑点 (基点)</label>
                 <input type="number" x-model.number="config.backtest.slippage" min="0" step="0.1"
-                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                       class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
             </div>
             <div>
                 <label class="block text-xs text-gray-400 mb-1">佣金率</label>
                 <input type="number" x-model.number="config.backtest.commission_rate" min="0" step="0.0001"
-                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                       class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
             </div>
             <div>
                 <label class="block text-xs text-gray-400 mb-1">印花税率</label>
                 <input type="number" x-model.number="config.backtest.stamp_tax_rate" min="0" step="0.0001"
-                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                       class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
             </div>
         </div>
     </div>
@@ -268,23 +268,23 @@
     <!-- 操作按钮 -->
     <div class="flex gap-3">
         <button @click="saveConfig()" :disabled="saving"
-                class="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white text-sm rounded-lg transition-colors flex items-center gap-2">
+                class="px-6 py-2 bg-accent hover:bg-accent/85 disabled:bg-accent/70 text-white text-sm rounded-sm transition-colors flex items-center gap-2">
             <template x-if="!saving">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M5 13l4 4L19 7"></path></svg>
             </template>
             <template x-if="saving"><span class="spinner !w-4 !h-4 !border-2"></span></template>
             <span x-text="saving ? '保存中...' : '保存配置'"></span>
         </button>
         <button @click="resetConfig()"
-                class="px-6 py-2 bg-[#334155] hover:bg-[#475569] text-white text-sm rounded-lg transition-colors">
+                class="px-6 py-2 bg-elevated hover:bg-line-strong text-white text-sm rounded-sm transition-colors">
             重置
         </button>
     </div>
 
     <!-- 策略分享 -->
-    <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+    <div class="bg-surface rounded-sm p-4 border border-line">
         <h3 class="text-sm font-medium text-white mb-4 flex items-center gap-2">
-            <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"></path></svg>
+            <svg class="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"></path></svg>
             策略分享
         </h3>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -292,7 +292,7 @@
             <div>
                 <label class="block text-xs text-gray-400 mb-1">分享当前策略配置</label>
                 <button @click="shareStrategy()" :disabled="sharing"
-                        class="w-full px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800 text-white text-sm rounded-lg transition-colors flex items-center justify-center gap-2">
+                        class="w-full px-4 py-2 bg-accent hover:bg-accent/85 disabled:bg-accent/70 text-accent-fg text-sm rounded-sm transition-colors flex items-center justify-center gap-2">
                     <template x-if="!sharing"><span>生成分享码</span></template>
                     <template x-if="sharing"><span class="spinner !w-4 !h-4 !border-2"></span></template>
                 </button>
@@ -300,8 +300,8 @@
                     <label class="block text-xs text-gray-400 mb-1">分享码</label>
                     <div class="flex gap-2">
                         <input type="text" x-model="shareCode" readonly
-                               class="flex-1 bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-xs text-white font-mono">
-                        <button @click="copyShareCode()" class="px-3 py-2 bg-[#334155] hover:bg-[#475569] text-white text-xs rounded-lg">
+                               class="flex-1 bg-inset border border-line rounded-sm px-3 py-2 text-xs text-white font-mono">
+                        <button @click="copyShareCode()" class="px-3 py-2 bg-elevated hover:bg-line-strong text-white text-xs rounded-sm">
                             复制
                         </button>
                     </div>
@@ -312,15 +312,76 @@
                 <label class="block text-xs text-gray-400 mb-1">导入分享的策略</label>
                 <div class="flex gap-2">
                     <input type="text" x-model="importCode" placeholder="粘贴分享码..."
-                           class="flex-1 bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-xs text-white font-mono">
+                           class="flex-1 bg-inset border border-line rounded-sm px-3 py-2 text-xs text-white font-mono">
                     <button @click="importStrategy()" :disabled="importing || !importCode"
-                            class="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-green-800 text-white text-xs rounded-lg transition-colors">
+                            class="px-4 py-2 bg-ok hover:bg-ok/85 disabled:bg-green-800 text-white text-xs rounded-sm transition-colors">
                         <template x-if="!importing"><span>导入</span></template>
                         <template x-if="importing"><span class="spinner !w-3 !h-3 !border-2"></span></template>
                     </button>
                 </div>
-                <p x-show="importError" class="mt-1 text-xs text-red-400" x-text="importError"></p>
-                <p x-show="importSuccess" class="mt-1 text-xs text-green-400" x-text="importSuccess"></p>
+                <p x-show="importError" class="mt-1 text-xs text-danger" x-text="importError"></p>
+                <p x-show="importSuccess" class="mt-1 text-xs text-ok" x-text="importSuccess"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 界面设置：主题 / 明暗 / 涨跌配色 / 壁纸 -->
+    <div class="bg-surface rounded-sm p-4 border border-line">
+        <h3 class="text-sm font-medium text-white mb-4 flex items-center gap-2">
+            界面设置
+        </h3>
+        <div class="space-y-4">
+            <!-- 主题选择 -->
+            <div>
+                <label class="block text-xs text-gray-400 mb-1.5">主题</label>
+                <select x-model="themeId" @change="applyTheme(themeId, theme, scheme)"
+                        class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm focus:border-accent focus:outline-none">
+                    <template x-for="t in themes" :key="t.id">
+                        <option :value="t.id" x-text="t.name + (t.type === 'builtin' ? '（内置）' : '（自定义）')"></option>
+                    </template>
+                </select>
+                <p class="text-xs text-gray-500 mt-1">偏好仅保存在本浏览器。自定义主题可将主题 JSON 放入 data/themes/ 目录。</p>
+            </div>
+
+            <!-- 明暗模式 -->
+            <div>
+                <label class="block text-xs text-gray-400 mb-1.5">明暗模式</label>
+                <div class="flex gap-2">
+                    <button type="button" @click="applyTheme(themeId, 'dark', scheme)"
+                            :class="theme === 'dark' ? 'bg-accent text-accent-fg' : 'bg-elevated text-gray-400'"
+                            class="flex-1 px-3 py-2 text-sm rounded-sm border border-line transition-colors">暗色</button>
+                    <button type="button" @click="applyTheme(themeId, 'light', scheme)"
+                            :class="theme === 'light' ? 'bg-accent text-accent-fg' : 'bg-elevated text-gray-400'"
+                            class="flex-1 px-3 py-2 text-sm rounded-sm border border-line transition-colors">纯白</button>
+                </div>
+            </div>
+
+            <!-- 涨跌配色 -->
+            <div>
+                <label class="block text-xs text-gray-400 mb-1.5">涨跌配色</label>
+                <div class="flex gap-2">
+                    <button type="button" @click="setScheme('cn')"
+                            :class="scheme === 'cn' ? 'bg-accent text-accent-fg' : 'bg-elevated text-gray-400'"
+                            class="flex-1 px-3 py-2 text-sm rounded-sm border border-line transition-colors">
+                        涨红跌绿（A股）
+                    </button>
+                    <button type="button" @click="setScheme('us')"
+                            :class="scheme === 'us' ? 'bg-accent text-accent-fg' : 'bg-elevated text-gray-400'"
+                            class="flex-1 px-3 py-2 text-sm rounded-sm border border-line transition-colors">
+                        涨绿跌红（欧美）
+                    </button>
+                </div>
+                <p class="text-xs text-gray-500 mt-1">仅影响涨跌与盈亏的显示配色，不参与策略计算。</p>
+            </div>
+
+            <!-- 壁纸 -->
+            <div>
+                <label class="block text-xs text-gray-400 mb-1.5">壁纸（可选）</label>
+                <input type="file" accept=".jpg,.jpeg,.png,.webp" @change="uploadWallpaper($event)"
+                       class="w-full text-xs text-gray-400">
+                <p class="text-xs text-gray-500 mt-1">支持 jpg / png / webp，单张 ≤5MB。</p>
+                <p x-show="wallpaperMsg" class="text-xs mt-1"
+                   :class="wallpaperOk ? 'text-ok' : 'text-danger'" x-text="wallpaperMsg"></p>
             </div>
         </div>
     </div>

@@ -3,10 +3,10 @@
     <!-- Agent状态卡片 -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <template x-for="agent in agentList" :key="agent.agent_id">
-            <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155] hover:border-[#475569] transition-colors">
+            <div class="bg-surface rounded-sm p-4 border border-line hover:border-line-strong transition-colors">
                 <div class="flex items-center justify-between mb-2">
                     <div class="flex items-center gap-2">
-                        <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold"
+                        <div class="w-8 h-8 rounded-sm flex items-center justify-center text-sm font-semibold"
                              :style="'background: ' + getAgentColor(agent.agent_id) + '20; color: ' + getAgentColor(agent.agent_id)"
                              x-text="agent.name.charAt(0)"></div>
                         <div>
@@ -15,8 +15,8 @@
                         </div>
                     </div>
                     <span class="flex items-center gap-1.5">
-                        <span class="w-2 h-2 rounded-full" :class="agent.status === 'running' ? 'bg-green-500 pulse-dot' : 'bg-gray-500'"></span>
-                        <span class="text-xs" :class="agent.status === 'running' ? 'text-green-400' : 'text-gray-500'" x-text="agent.status === 'running' ? '运行中' : '空闲'"></span>
+                        <span class="w-2 h-2 rounded-full" :class="agent.status === 'running' ? 'bg-ok pulse-dot' : 'bg-gray-500'"></span>
+                        <span class="text-xs" :class="agent.status === 'running' ? 'text-ok' : 'text-gray-500'" x-text="agent.status === 'running' ? '运行中' : '空闲'"></span>
                     </span>
                 </div>
             </div>
@@ -24,19 +24,19 @@
     </div>
 
     <!-- 运行分析流水线 -->
-    <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+    <div class="bg-surface rounded-sm p-4 border border-line">
         <div class="flex items-center justify-between">
             <h3 class="text-sm font-medium text-white">分析流水线</h3>
             <div class="flex items-center gap-3">
                 <div class="flex items-center gap-2">
                     <label class="text-xs text-gray-400">标的代码:</label>
                     <input type="text" x-model="pipelineSymbol" placeholder="600519.SH"
-                           class="bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none w-36">
+                           class="bg-inset border border-line rounded-sm px-3 py-1.5 text-sm text-white focus:border-accent focus:outline-none w-36">
                 </div>
                 <button @click="runPipeline()" :disabled="pipelineRunning"
-                        class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white text-sm rounded-lg transition-colors flex items-center gap-2">
+                        class="px-4 py-1.5 bg-accent hover:bg-accent/85 disabled:bg-accent/70 text-white text-sm rounded-sm transition-colors flex items-center gap-2">
                     <template x-if="!pipelineRunning">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path></svg>
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path></svg>
                     </template>
                     <template x-if="pipelineRunning"><span class="spinner !w-4 !h-4 !border-2"></span></template>
                     <span x-text="pipelineRunning ? '运行中...' : '运行分析流水线'"></span>
@@ -49,17 +49,17 @@
             <div class="flex items-center gap-2 mb-3">
                 <template x-for="(step, idx) in pipelineSteps" :key="idx">
                     <div class="flex items-center gap-2">
-                        <div class="flex items-center gap-1.5 px-2 py-1 rounded text-xs"
-                             :class="step.status === 'completed' ? 'bg-green-900/50 text-green-400' : step.status === 'running' ? 'bg-blue-900/50 text-blue-400' : step.status === 'failed' ? 'bg-red-900/50 text-red-400' : step.status === 'skipped' ? 'bg-gray-800 text-gray-400' : 'bg-[#0f172a] text-gray-500'">
+                        <div class="flex items-center gap-1.5 px-2 py-1 rounded-sm text-xs"
+                             :class="step.status === 'completed' ? 'bg-elevated text-ok' : step.status === 'running' ? 'bg-elevated text-accent' : step.status === 'failed' ? 'bg-elevated text-danger' : step.status === 'skipped' ? 'bg-elevated text-gray-400' : 'bg-inset text-gray-500'">
                             <template x-if="step.status === 'running'"><span class="spinner !w-3 !h-3 !border-2"></span></template>
                             <template x-if="step.status === 'completed'">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M5 13l4 4L19 7"></path></svg>
                             </template>
                             <template x-if="step.status === 'failed'">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M6 18L18 6M6 6l12 12"></path></svg>
                             </template>
                             <template x-if="step.status === 'skipped'">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6l5-3-5-3z"></path></svg>
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M10 9v6l5-3-5-3z"></path></svg>
                             </template>
                             <span x-text="step.agent_name"></span>
                             <span class="opacity-70"
@@ -74,37 +74,37 @@
             <div class="flex items-center gap-3">
                 <template x-if="pipelineRunning && currentRunId">
                     <button @click="cancelPipeline()"
-                            class="px-3 py-1 bg-red-600/80 hover:bg-red-600 text-white text-xs rounded-lg transition-colors flex items-center gap-1.5">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                            class="px-3 py-1 bg-danger/80 hover:bg-danger text-white text-xs rounded-sm transition-colors flex items-center gap-1.5">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M6 18L18 6M6 6l12 12"></path></svg>
                         <span>取消流水线</span>
                     </button>
                 </template>
                 <template x-if="!pipelineRunning && pendingRun">
-                    <div class="flex items-center gap-2 bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-1.5">
-                        <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+                    <div class="flex items-center gap-2 bg-inset border border-line rounded-sm px-3 py-1.5">
+                        <span class="w-2 h-2 rounded-full bg-warn"></span>
                         <span class="text-xs text-gray-400">
                             未完成任务 <span class="text-gray-300 font-mono" x-text="pendingRun.run_id"></span>
                             (<span x-text="pendingRun.status === 'running' ? '进行中' : pendingRun.status === 'failed' ? '失败' : '待执行'"></span>,
                             <span x-text="pendingRun.steps_completed"></span>/<span x-text="pendingRun.steps_total || 7"></span> 步)
                         </span>
                         <button @click="resumePipeline(pendingRun)"
-                                class="px-2.5 py-0.5 bg-blue-600/80 hover:bg-blue-600 text-white text-xs rounded transition-colors">
+                                class="px-2.5 py-0.5 bg-accent/80 hover:bg-accent text-white text-xs rounded-sm transition-colors">
                             续跑
                         </button>
                     </div>
                 </template>
                 <template x-if="!pipelineRunning && pendingDriftRun">
-                    <div class="flex items-center gap-2 bg-amber-900/20 border border-amber-700/50 rounded-lg px-3 py-1.5">
-                        <span class="text-xs text-amber-300">
+                    <div class="flex items-center gap-2 bg-elevated border border-warn/50 rounded-sm px-3 py-1.5">
+                        <span class="text-xs text-warn">
                             LLM 配置已变更，续跑将按新配置重跑未完成步骤
-                            <span class="font-mono text-amber-400" x-text="pendingDriftRun.run_id"></span>
+                            <span class="font-mono text-warn" x-text="pendingDriftRun.run_id"></span>
                         </span>
                         <button @click="forceResumePipeline()"
-                                class="px-2.5 py-0.5 bg-amber-600 hover:bg-amber-500 text-white text-xs rounded transition-colors">
+                                class="px-2.5 py-0.5 bg-accent hover:bg-accent/85 text-accent-fg text-xs rounded-sm transition-colors">
                             强制续跑
                         </button>
                         <button @click="pendingDriftRun = null"
-                                class="px-2 py-0.5 text-amber-400/70 hover:text-amber-300 text-xs rounded transition-colors">
+                                class="px-2 py-0.5 text-warn/70 hover:text-warn text-xs rounded-sm transition-colors">
                             取消
                         </button>
                     </div>
@@ -114,8 +114,8 @@
     </div>
 
     <!-- 思考过程展示区 -->
-    <div class="bg-[#1e293b] rounded-lg border border-[#334155] flex flex-col" style="height: 500px;">
-        <div class="px-4 py-2 border-b border-[#334155] flex items-center justify-between">
+    <div class="bg-surface rounded-sm border border-line flex flex-col" style="height: 500px;">
+        <div class="px-4 py-2 border-b border-line flex items-center justify-between">
             <h3 class="text-sm font-medium text-white">Agent思考过程</h3>
             <button x-show="thoughtMessages.length > 0" @click="thoughtMessages = []; pipelineSteps = []"
                     class="text-xs text-gray-500 hover:text-gray-300">清空</button>
@@ -132,28 +132,28 @@
                 <div class="fade-in">
                     <!-- Agent头部 -->
                     <div class="flex items-center gap-2 mb-1">
-                        <div class="w-5 h-5 rounded flex items-center justify-center text-xs font-bold"
+                        <div class="w-5 h-5 rounded-sm flex items-center justify-center text-xs font-semibold"
                              :style="'background: ' + getAgentColor(msg.agent_id) + '30; color: ' + getAgentColor(msg.agent_id)"
                              x-text="msg.agent_name.charAt(0)"></div>
                         <span class="text-xs font-medium" :style="'color: ' + getAgentColor(msg.agent_id)" x-text="msg.agent_name"></span>
                         <span x-show="msg.step >= 1 && msg.step <= 7" class="text-xs text-gray-600">Step {{msg.step}}/7</span>
-                        <span x-show="msg.step < 1 || msg.step > 7" class="text-xs text-red-400">系统</span>
+                        <span x-show="msg.step < 1 || msg.step > 7" class="text-xs text-gray-500">系统</span>
                         <span x-show="msg.duration_ms" class="text-xs text-gray-600" x-text="msg.duration_ms + 'ms'"></span>
                     </div>
 
                     <!-- 思考内容(Markdown渲染) -->
-                    <div class="ml-7 p-3 rounded-lg bg-[#0f172a] border border-[#334155]/50 markdown-content text-sm text-gray-300"
+                    <div class="ml-7 p-3 rounded-sm bg-inset border border-line/50 markdown-content text-sm text-gray-300"
                          x-html="renderMarkdown(msg.content)"></div>
 
                     <!-- 完整推理过程（可折叠，LLM 思维链/reasoning_content） -->
                     <div x-show="msg.reasoning" class="ml-7 mt-1">
                         <details class="group reasoning-details">
-                            <summary class="text-xs text-gray-500 hover:text-gray-200 cursor-pointer select-none inline-flex items-center gap-1 py-1 px-2 rounded hover:bg-[#334155]/40 transition-colors">
+                            <summary class="text-xs text-gray-500 hover:text-gray-200 cursor-pointer select-none inline-flex items-center gap-1 py-1 px-2 rounded-sm hover:bg-elevated/40 transition-colors">
                                 <span class="transition-transform group-open:rotate-90 inline-block">›</span>
                                 <span x-text="'推理过程 (' + msg.reasoning.length + ' 字)'"></span>
                                 <span class="text-gray-600" x-text="msg.reasoning.length > 300 ? '，点击展开可滚动查看' : ''"></span>
                             </summary>
-                            <div class="mt-1 p-3 rounded-lg bg-[#0b1220] border border-[#334155]/40 text-xs text-gray-400 whitespace-pre-wrap max-h-72 overflow-y-auto reasoning-scroll"
+                            <div class="mt-1 p-3 rounded-sm bg-inset border border-line/40 text-xs text-gray-400 whitespace-pre-wrap max-h-72 overflow-y-auto reasoning-scroll"
                                  x-text="msg.reasoning"></div>
                         </details>
                     </div>
@@ -163,21 +163,21 @@
             <!-- 加载状态 -->
             <div x-show="pipelineRunning && thinkingMessage" class="fade-in">
                 <div class="flex items-center gap-2 mb-1">
-                    <div class="w-5 h-5 rounded bg-blue-600/30 flex items-center justify-center">
+                    <div class="w-5 h-5 rounded-sm bg-accent/30 flex items-center justify-center">
                         <span class="spinner !w-3 !h-3 !border-2"></span>
                     </div>
-                    <span class="text-xs text-blue-400" x-text="thinkingMessage"></span>
+                    <span class="text-xs text-accent" x-text="thinkingMessage"></span>
                 </div>
             </div>
         </div>
     </div>
 
     <!-- 最终决策 -->
-    <div x-show="finalSignal" class="bg-[#1e293b] rounded-lg p-4 border border-blue-600/50">
+    <div x-show="finalSignal" class="bg-surface rounded-sm p-4 border border-accent/50">
         <h3 class="text-sm font-medium text-white mb-2">最终决策</h3>
         <div class="flex items-center gap-4">
-            <div class="px-3 py-1.5 rounded-lg text-sm font-bold"
-                 :class="finalSignal.direction === 'long' ? 'bg-green-900/50 text-green-400' : finalSignal.direction === 'short' ? 'bg-red-900/50 text-red-400' : 'bg-gray-800 text-gray-400'"
+            <div class="px-3 py-1.5 rounded-sm text-sm font-semibold"
+                 :class="finalSignal.direction === 'long' ? 'bg-up-soft text-up' : finalSignal.direction === 'short' ? 'bg-down-soft text-down' : 'bg-elevated text-gray-400'"
                  x-text="finalSignal.direction === 'long' ? '做多' : finalSignal.direction === 'short' ? '做空' : '观望'"></div>
             <div>
                 <div class="text-xs text-gray-400">置信度: <span class="text-white" x-text="(finalSignal.confidence * 100).toFixed(0) + '%'"></span></div>
@@ -187,12 +187,12 @@
     </div>
 
     <!-- 流水线日志面板 -->
-    <div class="bg-[#1e293b] rounded-lg border border-[#334155]">
-        <div class="px-4 py-2 border-b border-[#334155] flex items-center justify-between">
+    <div class="bg-surface rounded-sm border border-line">
+        <div class="px-4 py-2 border-b border-line flex items-center justify-between">
             <h3 class="text-sm font-medium text-white">流水线日志</h3>
             <div class="flex items-center gap-2">
                 <span class="text-xs text-gray-500" x-text="pipelineHistory.length + ' 条记录'"></span>
-                <button @click="loadPipelineLogs()" class="text-xs text-blue-400 hover:text-blue-300">刷新</button>
+                <button @click="loadPipelineLogs()" class="text-xs text-accent hover:text-accent">刷新</button>
             </div>
         </div>
 
@@ -200,7 +200,7 @@
             暂无流水线日志。运行分析流水线后，这里会展示每个 Agent 的执行过程和思考结果。
         </div>
 
-        <div x-show="pipelineHistory.length > 0" class="divide-y divide-[#334155]/50">
+        <div x-show="pipelineHistory.length > 0" class="divide-y divide-line/50">
             <template x-for="record in pipelineHistory.slice().reverse().slice(0, 10)" :key="record.run_id">
                 <div class="px-4 py-3">
                     <!-- 运行摘要行(可点击展开) -->
@@ -208,10 +208,10 @@
                         <div class="flex items-center gap-3">
                             <svg class="w-3.5 h-3.5 text-gray-500 transition-transform" :class="expandedLogs.includes(record.run_id) ? 'rotate-90' : ''"
                                  fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M9 5l7 7-7 7"></path>
                             </svg>
                             <div class="w-2 h-2 rounded-full"
-                                 :class="record.status === 'completed' ? 'bg-green-500' : record.status === 'running' ? 'bg-blue-500' : record.status === 'cancelled' ? 'bg-gray-500' : 'bg-red-500'"></div>
+                                 :class="record.status === 'completed' ? 'bg-ok' : record.status === 'running' ? 'bg-accent' : record.status === 'cancelled' ? 'bg-gray-500' : 'bg-danger'"></div>
                             <span class="text-sm text-white font-mono" x-text="record.symbol"></span>
                             <span class="text-xs text-gray-500" x-text="formatTime(record.start_time)"></span>
                         </div>
@@ -219,21 +219,21 @@
                             <span class="text-xs text-gray-400">
                                 <span class="text-green-400" x-text="record.steps_completed"></span>/<span x-text="record.steps_total || 7"></span> 步
                             </span>
-                            <span class="px-2 py-0.5 rounded text-xs"
-                                  :class="record.status === 'completed' ? 'bg-green-900/50 text-green-400' : record.status === 'running' ? 'bg-blue-900/50 text-blue-400' : record.status === 'cancelled' ? 'bg-gray-800 text-gray-400' : 'bg-red-900/50 text-red-400'"
+                            <span class="px-2 py-0.5 rounded-sm text-xs"
+                                  :class="record.status === 'completed' ? 'bg-elevated text-ok' : record.status === 'running' ? 'bg-elevated text-accent' : record.status === 'cancelled' ? 'bg-elevated text-gray-400' : 'bg-elevated text-danger'"
                                   x-text="record.status === 'completed' ? '完成' : record.status === 'running' ? '运行中' : record.status === 'cancelled' ? '已取消' : record.status === 'pending' ? '待执行' : '失败'"></span>
                         </div>
                     </div>
 
                     <!-- 展开详情: 各步骤日志 -->
                     <div x-show="expandedLogs.includes(record.run_id)" class="mt-3 ml-5 space-y-2">
-                        <div x-show="record.error" class="p-2.5 rounded-lg bg-red-900/20 border border-red-900/40 text-xs text-red-300">
+                        <div x-show="record.error" class="p-2.5 rounded-sm bg-elevated border border-danger/40 text-xs text-danger">
                             <span class="font-medium">错误:</span> <span x-text="record.error"></span>
                         </div>
 
                         <template x-if="(record.steps || []).length > 0">
                             <template x-for="s in record.steps" :key="s.step">
-                                <div class="p-2.5 rounded-lg bg-[#0f172a] border border-[#334155]/50">
+                                <div class="p-2.5 rounded-sm bg-inset border border-line/50">
                                     <div class="flex items-center justify-between mb-1">
                                         <div class="flex items-center gap-2">
                                             <span class="text-xs font-medium text-gray-200" x-text="s.agent_name"></span>
@@ -241,8 +241,8 @@
                                         </div>
                                         <div class="flex items-center gap-2">
                                             <span x-show="s.duration_ms" class="text-[10px] text-gray-500" x-text="s.duration_ms + 'ms'"></span>
-                                            <span class="px-1.5 py-0.5 rounded text-[10px]"
-                                                  :class="s.status === 'completed' ? 'bg-green-900/50 text-green-400' : s.status === 'running' ? 'bg-blue-900/50 text-blue-400' : s.status === 'skipped' ? 'bg-gray-800 text-gray-400' : 'bg-red-900/50 text-red-400'"
+                                            <span class="px-1.5 py-0.5 rounded-sm text-[10px]"
+                                                  :class="s.status === 'completed' ? 'bg-elevated text-ok' : s.status === 'running' ? 'bg-elevated text-accent' : s.status === 'skipped' ? 'bg-elevated text-gray-400' : 'bg-elevated text-danger'"
                                                   x-text="s.status === 'completed' ? '完成' : s.status === 'running' ? '运行中' : s.status === 'skipped' ? '跳过' : '失败'"></span>
                                         </div>
                                     </div>

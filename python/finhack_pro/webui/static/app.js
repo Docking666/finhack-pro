@@ -16,6 +16,37 @@
 // ============================================================
 
 /**
+ * 读取主题 CSS 变量，供 Chart.js 等无法直接使用 CSS 变量的场景。
+ *
+ * 主题变量以 "R G B" 分量格式存储（为了支持 Tailwind 的 /50 透明度修饰符），
+ * 这里还原成 rgb() 字符串；本身已是完整颜色值的（如 rgba(...)）则原样返回。
+ * 换主题后需配合 repaintCharts() 重绘图表。
+ */
+function TK(name, fallback) {
+    var v = '';
+    try {
+        v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    } catch (e) {
+        v = '';
+    }
+    if (!v) return fallback || '#808080';
+    return v.indexOf(' ') > -1 ? 'rgb(' + v + ')' : v;
+}
+
+// Chart.js 实例注册表：图表颜色在 JS 配置里固化，不走 CSS 变量，
+// 换主题后必须逐个重绘（见 repaintCharts）。用 class 继承包装以保留静态方法。
+window.__charts = new Set();
+if (typeof Chart !== 'undefined') {
+    const _BaseChart = Chart;
+    window.Chart = class extends _BaseChart {
+        constructor(ctx, config) {
+            super(ctx, config);
+            window.__charts.add(this);
+        }
+    };
+}
+
+/**
  * 格式化运行时间(秒 -> 可读字符串)
  */
 function formatUptime(seconds) {
@@ -87,15 +118,15 @@ function renderMarkdown(content) {
  */
 function getAgentColor(agentId) {
     const colors = {
-        'market_analyzer': '#3b82f6',     // 蓝色
-        'news_analyst': '#8b5cf6',        // 紫色
-        'fundamental_analyst': '#06b6d4', // 青色
-        'micro_event_agent': '#ec4899',   // 粉色 - 微观事件
-        'strategy_generator': '#f59e0b',  // 橙色
-        'risk_manager': '#ef4444',        // 红色
-        'trade_executor': '#10b981',      // 绿色
+        'market_analyzer': TK('--chart-c1'),     // 蓝色
+        'news_analyst': TK('--chart-c2'),        // 紫色
+        'fundamental_analyst': TK('--chart-c3'), // 青色
+        'micro_event_agent': TK('--chart-c4'),   // 粉色 - 微观事件
+        'strategy_generator': TK('--chart-c5'),  // 橙色
+        'risk_manager': TK('--chart-c6'),        // 红色
+        'trade_executor': TK('--chart-c7'),      // 绿色
     };
-    return colors[agentId] || '#6b7280';
+    return colors[agentId] || TK('--chart-c8');
 }
 
 /**
@@ -358,13 +389,15 @@ function app() {
     return {
         // 导航
         currentPage: 'dashboard',
+        // 图标由 index.html 顶部的 <symbol> sprite 提供，按 id 引用（#i-<id>），
+        // 继承 currentColor，主题切换时自动变色，无需重新注入。
         navItems: [
-            { id: 'dashboard', label: '仪表盘', icon: '📊' },
-            { id: 'config', label: 'API配置', icon: '⚙️' },
-            { id: 'backtest', label: '回测面板', icon: '📈' },
-            { id: 'agents', label: 'Agent监控', icon: '🤖' },
-            { id: 'workshop', label: '策略工坊', icon: '🛠️' },
-            { id: 'memory', label: '记忆浏览器', icon: '🧠' },
+            { id: 'dashboard', label: '仪表盘' },
+            { id: 'config', label: 'API配置' },
+            { id: 'backtest', label: '回测面板' },
+            { id: 'agents', label: 'Agent监控' },
+            { id: 'workshop', label: '策略工坊' },
+            { id: 'memory', label: '记忆浏览器' },
         ],
 
         // 系统状态
@@ -386,6 +419,14 @@ function app() {
         // 页面模板缓存
         _loadedPages: {},
 
+        // 主题与配色（纯视图层偏好，存 localStorage，不进后端配置）
+        theme: 'dark',
+        scheme: 'cn',
+        themeId: 'mono-dark',
+        themes: [],
+        wallpaperMsg: '',
+        wallpaperOk: false,
+
         get currentPageTitle() {
             const item = this.navItems.find(n => n.id === this.currentPage);
             return item ? item.label : '';
@@ -393,6 +434,9 @@ function app() {
 
         async init() {
             window.__alpineApp = this;
+
+            // 初始化主题：首屏已由 index.html 同步脚本用快照注入，这里做异步校准
+            this.initTheme();
 
             // 加载系统数据
             await this.loadSystemData();
@@ -402,6 +446,177 @@ function app() {
 
             // 定期刷新数据
             setInterval(() => this.loadSystemData(), 30000);
+        },
+
+        // ---------- 主题与配色 ----------
+        _lsGet(key) {
+            try { return localStorage.getItem(key); } catch (e) { return null; }
+        },
+
+        _lsSet(key, val) {
+            try { localStorage.setItem(key, val); } catch (e) { /* 隐私模式下忽略 */ }
+        },
+
+        initTheme() {
+            this.theme = this._lsGet('fh.theme.mode') || 'dark';
+            this.scheme = this._lsGet('fh.scheme') || 'cn';
+            this.themeId = this._lsGet('fh.theme.id')
+                || (this.theme === 'dark' ? 'mono-dark' : 'mono-light');
+            this.refreshThemes(true);
+        },
+
+        async refreshThemes(apply) {
+            try {
+                const res = await fetch('/api/themes');
+                const json = await res.json();
+                if (json && json.success) this.themes = json.data.items || [];
+            } catch (e) {
+                return; // 主题服务不可用时沿用 CSS 内置默认值
+            }
+            if (apply) await this.applyTheme(this.themeId, this.theme, this.scheme);
+        },
+
+        async applyTheme(themeId, mode, scheme) {
+            try {
+                const res = await fetch('/api/themes/' + encodeURIComponent(themeId));
+                const json = await res.json();
+                if (!json || !json.success || !json.data) return;
+
+                const data = json.data;
+                const tokens = data.tokens || {};
+                if (window.__fhApplyTokens) window.__fhApplyTokens(tokens);
+                this._applyWallpaper(data.wallpaper);
+
+                const nextMode = mode || data.mode || 'dark';
+                const nextScheme = scheme || data.scheme || 'cn';
+                const root = document.documentElement;
+                root.dataset.theme = nextMode;
+                root.dataset.scheme = nextScheme;
+                root.classList.toggle('dark', nextMode === 'dark');
+
+                this.themeId = themeId;
+                this.theme = nextMode;
+                this.scheme = nextScheme;
+
+                // 快照供首屏同步注入（防闪烁），同时记住用户选择
+                this._lsSet('fh.theme.tokens', JSON.stringify(tokens));
+                this._lsSet('fh.theme.id', themeId);
+                this._lsSet('fh.theme.mode', nextMode);
+                this._lsSet('fh.scheme', nextScheme);
+
+                // 自定义样式仅对非内置主题生效（内置主题保持纯净）
+                this._applyCustomCss(data.type === 'builtin' ? null : data.customCss);
+                this.repaintCharts();
+            } catch (e) {
+                // 主题拉取失败不应阻断主流程，沿用 CSS 内置默认
+            }
+        },
+
+        toggleTheme() {
+            const next = this.theme === 'dark' ? 'light' : 'dark';
+            const isBuiltin = this.themeId === 'mono-dark' || this.themeId === 'mono-light';
+            const target = isBuiltin ? (next === 'dark' ? 'mono-dark' : 'mono-light') : this.themeId;
+            this.applyTheme(target, next, this.scheme);
+        },
+
+        toggleScheme() {
+            this.applyTheme(this.themeId, this.theme, this.scheme === 'cn' ? 'us' : 'cn');
+        },
+
+        setScheme(scheme) {
+            if (this.scheme === scheme) return;
+            this.applyTheme(this.themeId, this.theme, scheme);
+        },
+
+        async uploadWallpaper(event) {
+            const input = event.target;
+            const file = input.files && input.files[0];
+            if (!file) return;
+
+            this.wallpaperMsg = '上传中...';
+            this.wallpaperOk = false;
+            const form = new FormData();
+            form.append('file', file);
+            try {
+                const res = await fetch('/api/themes/wallpaper', { method: 'POST', body: form });
+                const json = await res.json();
+                if (json && json.success) {
+                    this.wallpaperOk = true;
+                    this.wallpaperMsg = '已上传：' + json.data.url + '（在主题文件的 wallpaper.url 中引用即可生效）';
+                } else {
+                    this.wallpaperOk = false;
+                    this.wallpaperMsg = (json && json.message) || (json && json.detail) || '上传失败';
+                }
+            } catch (e) {
+                this.wallpaperOk = false;
+                this.wallpaperMsg = '上传失败：' + (e && e.message ? e.message : '网络错误');
+            } finally {
+                input.value = '';
+            }
+        },
+
+        _applyCustomCss(css) {
+            let el = document.getElementById('fh-theme-custom-css');
+            if (!css) {
+                if (el) el.remove();
+                return;
+            }
+            if (!el) {
+                el = document.createElement('style');
+                el.id = 'fh-theme-custom-css';
+                document.head.appendChild(el);
+            }
+            el.textContent = css;
+        },
+
+        _applyWallpaper(wp) {
+            const root = document.documentElement;
+            const keys = ['--wallpaper-url', '--wallpaper-size', '--wallpaper-repeat',
+                          '--wallpaper-position', '--wallpaper-overlay', '--wallpaper-blur'];
+            if (!wp || !wp.url) {
+                keys.forEach(k => root.style.removeProperty(k));
+                return;
+            }
+            const mode = wp.mode || 'cover';
+            root.style.setProperty('--wallpaper-url', `url("${wp.url}")`);
+            root.style.setProperty('--wallpaper-size',
+                mode === 'contain' ? 'contain' : (mode === 'tile' ? 'auto' : 'cover'));
+            root.style.setProperty('--wallpaper-repeat', mode === 'tile' ? 'repeat' : 'no-repeat');
+            root.style.setProperty('--wallpaper-position', wp.position || 'center');
+            // 默认 0.5 遮罩，避免壁纸喧宾夺主影响文字可读性
+            root.style.setProperty('--wallpaper-overlay', String(wp.overlay != null ? wp.overlay : 0.5));
+            root.style.setProperty('--wallpaper-blur', `${wp.blur || 0}px`);
+        },
+
+        repaintCharts() {
+            // Chart.js 的颜色固化在 JS 配置里，换主题后必须逐一把新值写回再重绘
+            const charts = window.__charts;
+            if (!charts || !charts.size) return;
+            charts.forEach(ch => {
+                try {
+                    const o = ch.options;
+                    if (o && o.plugins) {
+                        if (o.plugins.legend && o.plugins.legend.labels) {
+                            o.plugins.legend.labels.color = TK('--chart-axis');
+                        }
+                        const tip = o.plugins.tooltip;
+                        if (tip) {
+                            tip.backgroundColor = TK('--chart-tip-bg');
+                            tip.titleColor = TK('--chart-line');
+                            tip.bodyColor = TK('--chart-axis');
+                            tip.borderColor = TK('--chart-tip-line');
+                        }
+                    }
+                    if (o && o.scales) {
+                        Object.keys(o.scales).forEach(k => {
+                            const s = o.scales[k];
+                            if (s.ticks) s.ticks.color = TK('--chart-axis');
+                            if (s.grid) s.grid.color = TK('--chart-grid');
+                        });
+                    }
+                    ch.update('none');
+                } catch (e) { /* 单个图表异常不影响其他图表 */ }
+            });
         },
 
         navigate(pageId) {
@@ -948,7 +1163,7 @@ function backtestPage() {
                         {
                             label: '策略权益',
                             data: [],
-                            borderColor: '#3b82f6',
+                            borderColor: TK('--chart-line'),
                             backgroundColor: 'rgba(59, 130, 246, 0.1)',
                             fill: true,
                             tension: 0.3,
@@ -958,7 +1173,7 @@ function backtestPage() {
                         {
                             label: '基准',
                             data: [],
-                            borderColor: '#6b7280',
+                            borderColor: TK('--chart-line2'),
                             backgroundColor: 'transparent',
                             borderDash: [5, 5],
                             tension: 0.3,
@@ -973,24 +1188,24 @@ function backtestPage() {
                     interaction: { intersect: false, mode: 'index' },
                     plugins: {
                         legend: {
-                            labels: { color: '#94a3b8', font: { size: 11 } },
+                            labels: { color: TK('--chart-axis'), font: { size: 11 } },
                         },
                         tooltip: {
-                            backgroundColor: '#1e293b',
-                            titleColor: '#e2e8f0',
-                            bodyColor: '#94a3b8',
-                            borderColor: '#334155',
+                            backgroundColor: TK('--chart-tip-bg'),
+                            titleColor: TK('--chart-line'),
+                            bodyColor: TK('--chart-axis'),
+                            borderColor: TK('--chart-tip-line'),
                             borderWidth: 1,
                         },
                     },
                     scales: {
                         x: {
-                            ticks: { color: '#64748b', font: { size: 10 }, maxTicksLimit: 10 },
+                            ticks: { color: TK('--chart-axis'), font: { size: 10 }, maxTicksLimit: 10 },
                             grid: { color: 'rgba(51, 65, 85, 0.3)' },
                         },
                         y: {
                             ticks: {
-                                color: '#64748b',
+                                color: TK('--chart-grid'),
                                 font: { size: 10 },
                                 // 自适应金额刻度（万/亿），避免恒定数据/空数据时显示错误的"0万"
                                 callback: (v) => {
@@ -1262,13 +1477,13 @@ function backtestPage() {
                 if (t.direction === 'buy') {
                     pointRadius[idx] = 5;
                     pointStyle[idx] = 'triangle';
-                    pointBg[idx] = '#ef4444';      // 买入 红
-                    pointBorder[idx] = '#fecaca';
+                    pointBg[idx] = TK('--up');      // 买入 红
+                    pointBorder[idx] = TK('--bg-surface');
                 } else {
                     pointRadius[idx] = 5;
                     pointStyle[idx] = 'rectRot';    // 菱形
-                    pointBg[idx] = '#22c55e';      // 卖出 绿
-                    pointBorder[idx] = '#bbf7d0';
+                    pointBg[idx] = TK('--down');      // 卖出 绿
+                    pointBorder[idx] = TK('--bg-surface');
                 }
             }
 
@@ -1287,7 +1502,7 @@ function backtestPage() {
                             {
                                 label: '策略权益',
                                 data: equityData,
-                                borderColor: '#3b82f6',
+                                borderColor: TK('--chart-line'),
                                 backgroundColor: 'rgba(59, 130, 246, 0.1)',
                                 fill: true,
                                 tension: 0.3,
@@ -1301,7 +1516,7 @@ function backtestPage() {
                             {
                                 label: '基准',
                                 data: benchData,
-                                borderColor: '#6b7280',
+                                borderColor: TK('--chart-line2'),
                                 backgroundColor: 'transparent',
                                 borderDash: [5, 5],
                                 tension: 0.3,
@@ -1315,23 +1530,23 @@ function backtestPage() {
                         maintainAspectRatio: false,
                         interaction: { intersect: false, mode: 'index' },
                         plugins: {
-                            legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
+                            legend: { labels: { color: TK('--chart-axis'), font: { size: 11 } } },
                             tooltip: {
-                                backgroundColor: '#1e293b',
-                                titleColor: '#e2e8f0',
-                                bodyColor: '#94a3b8',
-                                borderColor: '#334155',
+                                backgroundColor: TK('--chart-tip-bg'),
+                                titleColor: TK('--chart-line'),
+                                bodyColor: TK('--chart-axis'),
+                                borderColor: TK('--chart-tip-line'),
                                 borderWidth: 1,
                             },
                         },
                         scales: {
                             x: {
-                                ticks: { color: '#64748b', font: { size: 10 }, maxTicksLimit: 10 },
+                                ticks: { color: TK('--chart-axis'), font: { size: 10 }, maxTicksLimit: 10 },
                                 grid: { color: 'rgba(51, 65, 85, 0.3)' },
                             },
                             y: {
                                 ticks: {
-                                    color: '#64748b',
+                                    color: TK('--chart-grid'),
                                     font: { size: 10 },
                                     callback: (v) => {
                                         const n = Number(v);
@@ -1417,7 +1632,7 @@ function backtestPage() {
                                 type: 'line',
                                 data: drawdowns,
                                 yAxisID: 'y2',
-                                borderColor: '#f59e0b',
+                                borderColor: TK('--chart-c5'),
                                 backgroundColor: 'rgba(245, 158, 11, 0.15)',
                                 fill: true,
                                 tension: 0.3,
@@ -1432,29 +1647,29 @@ function backtestPage() {
                         maintainAspectRatio: false,
                         interaction: { intersect: false, mode: 'index' },
                         plugins: {
-                            legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
+                            legend: { labels: { color: TK('--chart-axis'), font: { size: 11 } } },
                             tooltip: {
-                                backgroundColor: '#1e293b',
-                                titleColor: '#e2e8f0',
-                                bodyColor: '#94a3b8',
-                                borderColor: '#334155',
+                                backgroundColor: TK('--chart-tip-bg'),
+                                titleColor: TK('--chart-line'),
+                                bodyColor: TK('--chart-axis'),
+                                borderColor: TK('--chart-tip-line'),
                                 borderWidth: 1,
                             },
                         },
                         scales: {
                             x: {
-                                ticks: { color: '#64748b', font: { size: 10 }, maxTicksLimit: 8 },
+                                ticks: { color: TK('--chart-axis'), font: { size: 10 }, maxTicksLimit: 8 },
                                 grid: { color: 'rgba(51, 65, 85, 0.3)' },
                             },
                             y: {
                                 position: 'left',
-                                ticks: { color: '#64748b', font: { size: 10 }, callback: v => v + '%' },
+                                ticks: { color: TK('--chart-axis'), font: { size: 10 }, callback: v => v + '%' },
                                 grid: { color: 'rgba(51, 65, 85, 0.3)' },
                             },
                             y2: {
                                 position: 'right',
                                 grid: { drawOnChartArea: false },
-                                ticks: { color: '#f59e0b', font: { size: 10 }, callback: v => v + '%' },
+                                ticks: { color: TK('--chart-c5'), font: { size: 10 }, callback: v => v + '%' },
                             },
                         },
                     },
@@ -1834,7 +2049,7 @@ function agentsPage() {
                         step: 99,
                         agent_id: 'system',
                         agent_name: '系统错误',
-                        content: '## ❌ 流水线执行失败\n\n```\n' + errMsg + '\n```',
+                        content: '## 流水线执行失败\n\n```\n' + errMsg + '\n```',
                         duration_ms: 0,
                     });
                     this.loadData();
@@ -2780,7 +2995,7 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
                     datasets: [{
                         label: '策略权益',
                         data,
-                        borderColor: '#3b82f6',
+                        borderColor: TK('--chart-line'),
                         backgroundColor: 'rgba(59,130,246,0.1)',
                         fill: true,
                         pointRadius: 0,
@@ -2791,10 +3006,10 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
-                        x: { ticks: { color: '#94a3b8', maxTicksLimit: 8 }, grid: { color: 'rgba(51,65,85,0.4)' } },
-                        y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,0.4)' } },
+                        x: { ticks: { color: TK('--chart-axis'), maxTicksLimit: 8 }, grid: { color: TK('--chart-grid') } },
+                        y: { ticks: { color: TK('--chart-axis') }, grid: { color: TK('--chart-grid') } },
                     },
-                    plugins: { legend: { labels: { color: '#e2e8f0' } } },
+                    plugins: { legend: { labels: { color: TK('--chart-line') } } },
                 },
             });
         },

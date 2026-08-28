@@ -27,6 +27,11 @@ from loguru import logger
 
 from finhack_pro.webui.api_routes import router as api_router
 from finhack_pro.webui.export_routes import router as export_router
+from finhack_pro.webui.theme_routes import (
+    WALLPAPER_DIR,
+    ensure_dirs,
+    router as theme_router,
+)
 from finhack_pro.webui.services import (
     AgentService,
     BacktestService,
@@ -99,6 +104,7 @@ def create_app(config_path: Optional[str] = None) -> FastAPI:
     app.include_router(export_router)
     app.include_router(strategy_router)
     app.include_router(workshop_router)
+    app.include_router(theme_router)
     app.include_router(ws_router)
 
     # ---- 静态文件目录 ----
@@ -107,6 +113,13 @@ def create_app(config_path: Optional[str] = None) -> FastAPI:
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
     else:
         logger.warning(f"静态文件目录不存在: {static_dir}")
+
+    # ---- 用户壁纸目录（主题系统使用，运行时创建）----
+    try:
+        ensure_dirs()
+        app.mount("/themes/wallpapers", StaticFiles(directory=str(WALLPAPER_DIR)), name="wallpapers")
+    except Exception as exc:  # pragma: no cover - 挂载失败不应阻断启动
+        logger.warning(f"壁纸目录挂载失败: {exc}")
 
     # ---- 页面路由 ----
     @app.get("/", response_class=FileResponse)

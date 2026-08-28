@@ -2,19 +2,19 @@
 <div class="fade-in space-y-4" x-data="memoryPage()">
     <!-- 记忆统计概览 -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+        <div class="bg-surface rounded-sm p-4 border border-line">
             <div class="text-xs text-gray-500">总记忆数</div>
-            <div class="text-2xl font-bold text-white mt-1" x-text="stats.total_memories">0</div>
+            <div class="text-2xl font-semibold text-white mt-1" x-text="stats.total_memories">0</div>
         </div>
-        <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+        <div class="bg-surface rounded-sm p-4 border border-line">
             <div class="text-xs text-gray-500">累计存储</div>
-            <div class="text-2xl font-bold text-white mt-1" x-text="stats.total_entries_ever">0</div>
+            <div class="text-2xl font-semibold text-white mt-1" x-text="stats.total_entries_ever">0</div>
         </div>
-        <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+        <div class="bg-surface rounded-sm p-4 border border-line">
             <div class="text-xs text-gray-500 mb-2">类型分布</div>
             <div class="flex flex-wrap gap-1">
                 <template x-for="(count, type) in stats.by_type" :key="type">
-                    <span class="px-2 py-0.5 rounded text-xs bg-[#0f172a] text-gray-300" x-text="type + ': ' + count"></span>
+                    <span class="px-2 py-0.5 rounded-sm text-xs bg-inset text-gray-300" x-text="type + ': ' + count"></span>
                 </template>
                 <span x-show="Object.keys(stats.by_type).length === 0" class="text-xs text-gray-500">暂无数据</span>
             </div>
@@ -22,12 +22,12 @@
     </div>
 
     <!-- 搜索过滤栏 -->
-    <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+    <div class="bg-surface rounded-sm p-4 border border-line">
         <div class="flex flex-wrap items-end gap-3">
             <div>
                 <label class="block text-xs text-gray-400 mb-1">类型筛选</label>
                 <select x-model="searchParams.memory_type" @change="searchMemories()"
-                        class="bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none">
+                        class="bg-inset border border-line rounded-sm px-3 py-1.5 text-sm text-white focus:border-accent focus:outline-none">
                     <option value="">全部类型</option>
                     <option value="market_observation">市场观察</option>
                     <option value="analysis_report">分析报告</option>
@@ -44,12 +44,12 @@
             <div class="flex-1 min-w-[200px]">
                 <label class="block text-xs text-gray-400 mb-1">关键词搜索</label>
                 <input type="text" x-model="searchParams.keywords" @keyup.enter="searchMemories()" placeholder="输入关键词搜索..."
-                       class="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none">
+                       class="w-full bg-inset border border-line rounded-sm px-3 py-1.5 text-sm text-white focus:border-accent focus:outline-none">
             </div>
-            <button @click="searchMemories()" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-colors">
+            <button @click="searchMemories()" class="px-4 py-1.5 bg-accent hover:bg-accent/85 text-accent-fg text-sm rounded-sm transition-colors">
                 搜索
             </button>
-            <button @click="searchParams = {memory_type: '', keywords: ''}; loadRecent()" class="px-4 py-1.5 bg-[#334155] hover:bg-[#475569] text-white text-sm rounded-lg transition-colors">
+            <button @click="searchParams = {memory_type: '', keywords: ''}; loadRecent()" class="px-4 py-1.5 bg-elevated hover:bg-line-strong text-white text-sm rounded-sm transition-colors">
                 重置
             </button>
         </div>
@@ -59,16 +59,16 @@
     <div class="space-y-2">
         <div x-show="memories.length > 0">
             <template x-for="entry in memories" :key="entry.id">
-                <div class="bg-[#1e293b] rounded-lg p-4 border border-[#334155] hover:border-[#475569] transition-colors">
+                <div class="bg-surface rounded-sm p-4 border border-line hover:border-line-strong transition-colors">
                     <div class="flex items-start justify-between">
                         <div class="flex-1">
                             <!-- 头部信息 -->
                             <div class="flex items-center gap-2 mb-2 flex-wrap">
-                                <span class="px-2 py-0.5 rounded text-xs"
+                                <span class="px-2 py-0.5 rounded-sm text-xs"
                                       :class="getMemoryTypeColor(entry.memory_type)"
                                       x-text="getMemoryTypeName(entry.memory_type)"></span>
-                                <span class="px-2 py-0.5 rounded text-xs"
-                                      :class="entry.importance === 'critical' ? 'bg-red-900/50 text-red-400' : entry.importance === 'high' ? 'bg-orange-900/50 text-orange-400' : entry.importance === 'medium' ? 'bg-blue-900/50 text-blue-400' : 'bg-gray-800 text-gray-400'"
+                                <span class="px-2 py-0.5 rounded-sm text-xs"
+                                      :class="entry.importance === 'critical' ? 'bg-elevated text-danger' : entry.importance === 'high' ? 'bg-elevated text-warn' : entry.importance === 'medium' ? 'bg-elevated text-accent' : 'bg-elevated text-gray-400'"
                                       x-text="getImportanceName(entry.importance)"></span>
                                 <span class="text-xs text-gray-500" x-text="entry.agent_id"></span>
                                 <span class="text-xs text-gray-600" x-text="formatTime(entry.timestamp)"></span>
@@ -78,13 +78,13 @@
                             <!-- 标签 -->
                             <div x-show="entry.tags && entry.tags.length > 0" class="flex flex-wrap gap-1 mt-2">
                                 <template x-for="tag in entry.tags" :key="tag">
-                                    <span class="px-1.5 py-0.5 rounded text-xs bg-[#0f172a] text-gray-500" x-text="tag"></span>
+                                    <span class="px-1.5 py-0.5 rounded-sm text-xs bg-inset text-gray-500" x-text="tag"></span>
                                 </template>
                             </div>
                         </div>
                         <!-- 删除按钮 -->
                         <button @click="deleteMemory(entry.id)" class="ml-3 text-gray-600 hover:text-red-400 transition-colors flex-shrink-0" title="删除">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                         </button>
                     </div>
                 </div>
@@ -92,8 +92,8 @@
         </div>
 
         <!-- 空状态 -->
-        <div x-show="memories.length === 0 && !loading" class="bg-[#1e293b] rounded-lg p-8 border border-[#334155] text-center">
-            <svg class="w-12 h-12 text-gray-600 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"></path></svg>
+        <div x-show="memories.length === 0 && !loading" class="bg-surface rounded-sm p-8 border border-line text-center">
+            <svg class="w-12 h-12 text-gray-600 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"></path></svg>
             <div class="text-gray-500 text-sm">暂无记忆数据</div>
             <div class="text-gray-600 text-xs mt-1">运行分析流水线后将自动生成记忆</div>
         </div>

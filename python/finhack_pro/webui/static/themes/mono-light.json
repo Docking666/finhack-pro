@@ -1,0 +1,45 @@
+{
+  "id": "mono-light",
+  "name": "极简纯白",
+  "version": "1.0",
+  "author": "finhack",
+  "type": "builtin",
+  "mode": "light",
+  "scheme": "cn",
+  "wallpaper": null,
+  "tokens": {
+    "bg-base": "#F2F3F4",
+    "bg-surface": "#FFFFFF",
+    "bg-elevated": "#FFFFFF",
+    "bg-inset": "#F8F9FA",
+
+    "line": "#DCDDDF",
+    "line-strong": "#C4C6C9",
+    "line-subtle": "#EBECEE",
+
+    "fg": "#17181A",
+    "fg-muted": "#5F6368",
+    "fg-subtle": "#8A8F98",
+
+    "accent": "#17181A",
+    "accent-fg": "#FFFFFF",
+    "accent-soft": "rgba(23,24,26,.06)",
+
+    "up": "#C62C32",
+    "down": "#12833C",
+    "up-soft": "rgba(198,44,50,.10)",
+    "down-soft": "rgba(18,131,60,.10)",
+
+    "ok": "#0F9D58",
+    "warn": "#B26A00",
+    "danger": "#D93A40",
+
+    "chart-line": "#17181A",
+    "chart-line2": "#8A8F98",
+    "chart-grid": "rgba(220,221,223,1)",
+    "chart-axis": "#5F6368",
+    "chart-tip-bg": "#FFFFFF",
+    "chart-tip-line": "#DCDDDF"
+  },
+  "customCss": null
+}

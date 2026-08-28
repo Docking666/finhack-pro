@@ -11,17 +11,94 @@
             darkMode: 'class',
             theme: {
                 extend: {
+                    // 拉丁/数字用 IBM Plex，中文回落系统栈（不引 CJK 子集，体积过大）
+                    fontFamily: {
+                        sans: ['IBM Plex Sans', '-apple-system', 'BlinkMacSystemFont',
+                               'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', 'sans-serif'],
+                        mono: ['IBM Plex Mono', 'ui-monospace', 'Menlo', 'Consolas', 'monospace'],
+                    },
+                    // 实色 token 以 "R G B" 分量格式存储，配合 rgb(var(--x) / <alpha-value>)
+                    // 才能支持 Tailwind 透明度修饰符（如 bg-surface/50）；
+                    // 主题文件里仍写 hex（对用户友好），由注入器转换。soft 类本身是半透明值，直接用 var()。
                     colors: {
-                        dark: {
-                            bg: '#0f172a',
-                            card: '#1e293b',
-                            border: '#334155',
-                            hover: '#334155',
-                        }
+                        accent: 'rgb(var(--accent) / <alpha-value>)',
+                        'accent-fg': 'rgb(var(--accent-fg) / <alpha-value>)',
+                        up: 'rgb(var(--up) / <alpha-value>)', down: 'rgb(var(--down) / <alpha-value>)',
+                        'up-soft': 'var(--up-soft)', 'down-soft': 'var(--down-soft)',
+                        ok: 'rgb(var(--ok) / <alpha-value>)', warn: 'rgb(var(--warn) / <alpha-value>)',
+                        danger: 'rgb(var(--danger) / <alpha-value>)',
+                        surface: 'rgb(var(--bg-surface) / <alpha-value>)',
+                        elevated: 'rgb(var(--bg-elevated) / <alpha-value>)',
+                        inset: 'rgb(var(--bg-inset) / <alpha-value>)',
+                        base: 'rgb(var(--bg-base) / <alpha-value>)',
+                        line: 'rgb(var(--line) / <alpha-value>)',
+                        'line-strong': 'rgb(var(--line-strong) / <alpha-value>)',
+                        'line-subtle': 'rgb(var(--line-subtle) / <alpha-value>)',
+                    },
+                    // 关键：text-gray-* 与 bg-gray-* 语义冲突（同为 gray 色阶但用途相反），
+                    // 必须分开映射，否则会出现"文字变背景色"或"背景变文字色"。
+                    textColor: {
+                        gray: {
+                            50: 'rgb(var(--fg) / <alpha-value>)', 100: 'rgb(var(--fg) / <alpha-value>)',
+                            200: 'rgb(var(--fg) / <alpha-value>)', 300: 'rgb(var(--fg) / <alpha-value>)',
+                            400: 'rgb(var(--fg-muted) / <alpha-value>)', 500: 'rgb(var(--fg-subtle) / <alpha-value>)',
+                            600: 'rgb(var(--fg-subtle) / <alpha-value>)', 700: 'rgb(var(--fg-subtle) / <alpha-value>)',
+                            800: 'rgb(var(--fg-subtle) / <alpha-value>)', 900: 'rgb(var(--fg-subtle) / <alpha-value>)'
+                        },
+                        white: 'rgb(var(--fg) / <alpha-value>)', black: 'rgb(var(--bg-base) / <alpha-value>)',
+                    },
+                    backgroundColor: {
+                        gray: {
+                            50: 'rgb(var(--bg-elevated) / <alpha-value>)', 100: 'rgb(var(--bg-elevated) / <alpha-value>)',
+                            200: 'rgb(var(--line-strong) / <alpha-value>)', 300: 'rgb(var(--line-strong) / <alpha-value>)',
+                            400: 'rgb(var(--line-strong) / <alpha-value>)', 500: 'rgb(var(--line-strong) / <alpha-value>)',
+                            600: 'rgb(var(--bg-elevated) / <alpha-value>)', 700: 'rgb(var(--bg-elevated) / <alpha-value>)',
+                            800: 'rgb(var(--bg-inset) / <alpha-value>)', 900: 'rgb(var(--bg-inset) / <alpha-value>)'
+                        },
+                        white: 'rgb(var(--bg-surface) / <alpha-value>)', black: 'rgb(var(--bg-base) / <alpha-value>)',
+                    },
+                    borderColor: {
+                        gray: {
+                            DEFAULT: 'rgb(var(--line) / <alpha-value>)', 50: 'rgb(var(--line-subtle) / <alpha-value>)',
+                            100: 'rgb(var(--line-subtle) / <alpha-value>)', 200: 'rgb(var(--line-subtle) / <alpha-value>)',
+                            300: 'rgb(var(--line) / <alpha-value>)', 400: 'rgb(var(--line) / <alpha-value>)',
+                            500: 'rgb(var(--line) / <alpha-value>)', 600: 'rgb(var(--line-strong) / <alpha-value>)',
+                            700: 'rgb(var(--line-strong) / <alpha-value>)', 800: 'rgb(var(--line-strong) / <alpha-value>)',
+                            900: 'rgb(var(--line-strong) / <alpha-value>)'
+                        },
+                        white: 'rgb(var(--fg) / <alpha-value>)', black: 'rgb(var(--bg-base) / <alpha-value>)',
                     }
                 }
             }
         }
+    </script>
+    <!-- 主题首屏同步注入（防闪烁）：优先用 localStorage 中的 token 快照，异步校准由 app.js 完成 -->
+    <script>
+        // hex -> "R G B" 分量，使 Tailwind 透明度修饰符可用；rgba() 等原样保留（供 app.js 复用）
+        window.__fhToCssValue = function (v) {
+            v = String(v == null ? '' : v).trim();
+            var m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(v);
+            if (!m) return v;
+            var h = m[1];
+            if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+            return parseInt(h.slice(0, 2), 16) + ' ' + parseInt(h.slice(2, 4), 16) + ' ' + parseInt(h.slice(4, 6), 16);
+        };
+        window.__fhApplyTokens = function (tokens) {
+            var r = document.documentElement;
+            for (var k in tokens) {
+                if (Object.prototype.hasOwnProperty.call(tokens, k)) {
+                    r.style.setProperty('--' + k, window.__fhToCssValue(tokens[k]));
+                }
+            }
+        };
+        (function () {
+            var r = document.documentElement, s = null;
+            try { s = JSON.parse(localStorage.getItem('fh.theme.tokens') || 'null'); } catch (e) { s = null; }
+            if (s && typeof s === 'object') window.__fhApplyTokens(s);
+            r.dataset.theme = localStorage.getItem('fh.theme.mode') || 'dark';
+            r.dataset.scheme = localStorage.getItem('fh.scheme') || 'cn';
+            r.classList.toggle('dark', r.dataset.theme === 'dark');
+        })();
     </script>
     <!-- Alpine.js CDN -->
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
@@ -29,15 +106,115 @@
     <script src="/static/vendor/chart.umd.min.js"></script>
     <!-- Marked.js（本地 vendor，Markdown渲染） -->
     <script src="/static/vendor/marked.min.js"></script>
+    <!-- 仅预加载 400/500 两个字重（首屏文本主体），600 只用于标题，接受一次 FOUT 以省带宽 -->
+    <link rel="preload" href="/static/vendor/fonts/ibm-plex-sans-400.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/static/vendor/fonts/ibm-plex-sans-500.woff2" as="font" type="font/woff2" crossorigin>
     <style>
+        /* ===== 字体：IBM Plex 拉丁/数字子集，中文走系统栈 ===== */
+        @font-face {
+            font-family: 'IBM Plex Sans'; font-style: normal; font-weight: 400; font-display: swap;
+            src: url('/static/vendor/fonts/ibm-plex-sans-400.woff2') format('woff2');
+            unicode-range: U+0000-00FF, U+2000-206F, U+20A0-20BF;
+        }
+        @font-face {
+            font-family: 'IBM Plex Sans'; font-style: normal; font-weight: 500; font-display: swap;
+            src: url('/static/vendor/fonts/ibm-plex-sans-500.woff2') format('woff2');
+            unicode-range: U+0000-00FF, U+2000-206F, U+20A0-20BF;
+        }
+        @font-face {
+            font-family: 'IBM Plex Sans'; font-style: normal; font-weight: 600; font-display: swap;
+            src: url('/static/vendor/fonts/ibm-plex-sans-600.woff2') format('woff2');
+            unicode-range: U+0000-00FF, U+2000-206F, U+20A0-20BF;
+        }
+        @font-face {
+            font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 400; font-display: swap;
+            src: url('/static/vendor/fonts/ibm-plex-mono-400.woff2') format('woff2');
+            unicode-range: U+0000-00FF, U+2000-206F, U+20A0-20BF;
+        }
+        @font-face {
+            font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 500; font-display: swap;
+            src: url('/static/vendor/fonts/ibm-plex-mono-500.woff2') format('woff2');
+            unicode-range: U+0000-00FF, U+2000-206F, U+20A0-20BF;
+        }
+
+        /* ===== 主题变量：fallback 默认值（= mono-dark），运行时由主题文件覆盖 =====
+           实色一律存为 "R G B" 分量格式，才能配合 rgb(var(--x) / <alpha-value>)
+           使用 Tailwind 的透明度修饰符（bg-surface/50 等）。soft 类本身是半透明值，保持原样。 */
+        :root {
+            --bg-base: 11 12 14; --bg-surface: 21 24 28; --bg-elevated: 29 33 38; --bg-inset: 15 17 20;
+            --line: 52 56 63; --line-strong: 74 80 88; --line-subtle: 35 38 43;
+            --fg: 232 234 237; --fg-muted: 154 160 166; --fg-subtle: 107 114 128;
+            --accent: 232 234 237; --accent-fg: 11 12 14; --accent-soft: rgba(232,234,237,.10);
+            --up: 229 72 77; --down: 23 163 74;
+            --up-soft: rgba(229,72,77,.14); --down-soft: rgba(23,163,74,.14);
+            --ok: 61 214 140; --warn: 232 163 61; --danger: 242 85 90;
+            --chart-line: 232 234 237; --chart-line2: 107 114 128; --chart-grid: rgba(52,56,63,.85);
+            --chart-axis: 154 160 166; --chart-tip-bg: 29 33 38; --chart-tip-line: 52 56 63;
+            /* 图表系列色 / Agent 身份色：低饱和，避免彩虹感破坏黑白基调。主题文件可覆盖。 */
+            --chart-c1: 107 140 174; --chart-c2: 140 123 174; --chart-c3: 95 158 168; --chart-c4: 199 123 152;
+            --chart-c5: 201 154 91; --chart-c6: 197 107 107; --chart-c7: 95 158 130; --chart-c8: 122 128 136;
+        }
+        [data-theme="light"] {
+            --bg-base: 242 243 244; --bg-surface: 255 255 255; --bg-elevated: 255 255 255; --bg-inset: 248 249 250;
+            --line: 220 221 223; --line-strong: 196 198 201; --line-subtle: 235 236 238;
+            --fg: 23 24 26; --fg-muted: 95 99 104; --fg-subtle: 138 143 152;
+            --accent: 23 24 26; --accent-fg: 255 255 255; --accent-soft: rgba(23,24,26,.06);
+            --up: 198 44 50; --down: 18 131 60;
+            --up-soft: rgba(198,44,50,.10); --down-soft: rgba(18,131,60,.10);
+            --ok: 15 157 88; --warn: 178 106 0; --danger: 217 58 64;
+            --chart-line: 23 24 26; --chart-line2: 138 143 152; --chart-grid: rgba(220,221,223,1);
+            --chart-axis: 95 99 104; --chart-tip-bg: 255 255 255; --chart-tip-line: 220 221 223;
+            --chart-c1: 74 106 138; --chart-c2: 107 90 142; --chart-c3: 61 122 133; --chart-c4: 158 90 120;
+            --chart-c5: 143 107 51; --chart-c6: 158 74 74; --chart-c7: 61 122 94; --chart-c8: 90 96 104;
+        }
+        /* 涨跌配色方向：cn=涨红跌绿（默认） / us=涨绿跌红 */
+        [data-scheme="us"] {
+            --up: 23 163 74; --down: 229 72 77;
+            --up-soft: rgba(23,163,74,.14); --down-soft: rgba(229,72,77,.14);
+        }
+        [data-theme="light"][data-scheme="us"] {
+            --up: 18 131 60; --down: 198 44 50;
+            --up-soft: rgba(18,131,60,.10); --down-soft: rgba(198,44,50,.10);
+        }
+
+        /* 数字统一等宽对齐，防刷新时数字列跳动 */
+        .font-mono, .num { font-variant-numeric: tabular-nums; }
+
+        /* 状态灯：外环隔离，避免与涨跌语义色混淆 */
+        .status-dot {
+            width: 8px; height: 8px; border-radius: 9999px; flex-shrink: 0;
+            box-shadow: 0 0 0 2px var(--bg-surface);
+        }
+
+        /* 壁纸层：主题文件提供 wallpaper.url 时显示，位于内容之下、页面底色之上。
+           无壁纸时 --wallpaper-url 未定义，background-image 回落 none，不产生任何渲染。 */
+        .app-wallpaper {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            pointer-events: none;
+            background-image: var(--wallpaper-url, none);
+            background-size: var(--wallpaper-size, cover);
+            background-position: var(--wallpaper-position, center);
+            background-repeat: var(--wallpaper-repeat, no-repeat);
+            filter: blur(var(--wallpaper-blur, 0px));
+        }
+        /* 遮罩：保证壁纸之上文字仍有足够对比度 */
+        .app-wallpaper::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: rgb(var(--bg-base) / var(--wallpaper-overlay, 0));
+        }
+
         /* 自定义滚动条 */
         ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: #1e293b; }
-        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        ::-webkit-scrollbar-track { background: var(--bg-surface); }
+        ::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--fg-subtle); }
 
         /* 加载动画 */
-        .spinner { border: 3px solid #334155; border-top: 3px solid #3b82f6; border-radius: 50%; width: 24px; height: 24px; animation: spin 0.8s linear infinite; }
+        .spinner { border: 3px solid var(--line); border-top: 3px solid var(--accent); border-radius: 50%; width: 24px; height: 24px; animation: spin 0.8s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
         /* 脉冲动画 */
@@ -55,10 +232,10 @@
         .markdown-content h3 { font-size: 1rem; }
         .markdown-content p { margin: 0.25em 0; }
         .markdown-content ul, .markdown-content ol { padding-left: 1.5em; margin: 0.25em 0; }
-        .markdown-content code { background: #0f172a; padding: 0.125em 0.375em; border-radius: 4px; font-size: 0.875rem; }
-        .markdown-content pre { background: #0f172a; padding: 0.75em; border-radius: 6px; overflow-x: auto; margin: 0.5em 0; }
+        .markdown-content code { background: var(--bg-inset); padding: 0.125em 0.375em; border-radius: 4px; font-size: 0.875rem; }
+        .markdown-content pre { background: var(--bg-inset); padding: 0.75em; border-radius: 6px; overflow-x: auto; margin: 0.5em 0; }
         .markdown-content pre code { background: none; padding: 0; }
-        .markdown-content blockquote { border-left: 3px solid #3b82f6; padding-left: 0.75em; color: #94a3b8; margin: 0.5em 0; }
+        .markdown-content blockquote { border-left: 3px solid var(--line-strong); padding-left: 0.75em; color: var(--fg-muted); margin: 0.5em 0; }
 
         /* Toast通知 */
         .toast-enter { animation: toastIn 0.3s ease-out; }
@@ -66,50 +243,91 @@
         @keyframes toastIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
         @keyframes toastOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
 
-        /* 导航激活状态 */
-        .nav-item.active { background: rgba(59, 130, 246, 0.15); color: #3b82f6; border-right: 3px solid #3b82f6; }
-        .nav-item:hover:not(.active) { background: rgba(51, 65, 85, 0.5); }
+        /* 导航激活状态：左侧竖条（比蓝色填充更克制，也更易扫读） */
+        .nav-item.active { background: var(--accent-soft); color: var(--fg); border-left: 2px solid var(--accent); }
+        .nav-item { border-left: 2px solid transparent; }
+        .nav-item:hover:not(.active) { background: var(--bg-elevated); }
 
         /* 思考流打字效果 */
-        .typing-cursor::after { content: '|'; animation: blink 1s infinite; color: #3b82f6; }
+        .typing-cursor::after { content: '|'; animation: blink 1s infinite; color: var(--accent); }
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
         /* 推理过程折叠区滚动条（深色面板内可见） */
         .reasoning-scroll::-webkit-scrollbar { width: 6px; }
-        .reasoning-scroll::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
-        .reasoning-scroll::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        .reasoning-scroll::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 3px; }
+        .reasoning-scroll::-webkit-scrollbar-thumb:hover { background: var(--fg-subtle); }
         .reasoning-scroll::-webkit-scrollbar-track { background: transparent; }
     </style>
 </head>
-<body class="bg-[#0f172a] text-gray-200 min-h-screen" x-data="app()" x-init="init()">
+<body class="bg-base text-gray-300 min-h-screen" x-data="app()" x-init="init()">
+
+    <!-- 壁纸层（主题提供 wallpaper.url 时生效，否则不渲染） -->
+    <div class="app-wallpaper" aria-hidden="true"></div>
+
+    <!-- 图标 sprite：线性风格，stroke 1.25，继承 currentColor，主题切换自动变色 -->
+    <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+        <symbol id="i-dashboard" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7.5" height="7.5" rx="1"/>
+            <rect x="13.5" y="3" width="7.5" height="7.5" rx="1"/>
+            <rect x="3" y="13.5" width="7.5" height="7.5" rx="1"/>
+            <rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1"/>
+        </symbol>
+        <symbol id="i-config" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 7h16"/><circle cx="9" cy="7" r="2.2"/>
+            <path d="M4 17h16"/><circle cx="15" cy="17" r="2.2"/>
+        </symbol>
+        <symbol id="i-backtest" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 17l5-5 4 3 9-9"/><path d="M16 6h5v5"/>
+        </symbol>
+        <symbol id="i-agents" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="19" r="2.2"/><circle cx="19" cy="19" r="2.2"/>
+            <path d="M10.6 6.7 6.4 17M13.4 6.7 17.6 17M7.2 19h9.6"/>
+        </symbol>
+        <symbol id="i-workshop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="7" width="18" height="13" rx="2"/>
+            <path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/><path d="M3 12h18"/>
+        </symbol>
+        <symbol id="i-memory" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+            <ellipse cx="12" cy="6" rx="8" ry="3"/>
+            <path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/>
+            <path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>
+        </symbol>
+        <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/>
+        </symbol>
+        <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="4"/>
+            <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/>
+        </symbol>
+    </svg>
 
     <!-- Toast通知容器 -->
     <div class="fixed top-4 right-4 z-50 space-y-2" id="toast-container">
         <template x-for="toast in toasts" :key="toast.id">
-            <div class="toast-enter flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg max-w-sm"
+            <div class="toast-enter flex items-center gap-2 px-4 py-3 max-w-sm bg-surface border border-line rounded-sm shadow-lg border-l-2"
                  :class="{
-                    'bg-green-900/80 border border-green-700': toast.type === 'success',
-                    'bg-red-900/80 border border-red-700': toast.type === 'error',
-                    'bg-blue-900/80 border border-blue-700': toast.type === 'info',
-                    'bg-yellow-900/80 border border-yellow-700': toast.type === 'warning',
+                    'border-l-ok': toast.type === 'success',
+                    'border-l-danger': toast.type === 'error',
+                    'border-l-line-strong': toast.type === 'info',
+                    'border-l-warn': toast.type === 'warning',
                  }">
                 <span x-text="toast.message"></span>
-                <button @click="removeToast(toast.id)" class="ml-auto text-gray-400 hover:text-white">&times;</button>
+                <button @click="removeToast(toast.id)" class="ml-auto text-[var(--fg-subtle)] hover:text-[var(--fg)]">&times;</button>
             </div>
         </template>
     </div>
 
-    <!-- 主布局 -->
-    <div class="flex h-screen overflow-hidden">
+    <!-- 主布局（z-10 保证位于壁纸层之上） -->
+    <div class="relative z-10 flex h-screen overflow-hidden">
 
         <!-- 左侧导航栏 -->
-        <aside class="w-60 bg-[#1e293b] border-r border-[#334155] flex flex-col flex-shrink-0">
+        <aside class="w-60 bg-surface border-r border-line flex flex-col flex-shrink-0">
             <!-- Logo -->
-            <div class="p-4 border-b border-[#334155]">
+            <div class="p-4 border-b border-line">
                 <div class="flex items-center gap-2">
                     <div>
-                        <div class="font-semibold text-white text-sm">FinHack Pro</div>
-                        <div class="text-xs text-gray-500">多智能体量化交易</div>
+                        <div class="font-semibold text-white text-lg tracking-wide leading-tight">FINHACK PRO</div>
+                        <div class="text-xs text-gray-500 tracking-wide">多智能体量化交易</div>
                     </div>
                 </div>
             </div>
@@ -120,17 +338,30 @@
                     <button @click="navigate(item.id)"
                             class="nav-item w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-400 transition-colors"
                             :class="{ 'active': currentPage === item.id }">
-                        <span class="text-lg" x-text="item.icon"></span>
+                        <svg class="w-4 h-4 flex-shrink-0" aria-hidden="true"><use :href="'#i-' + item.id"></use></svg>
                         <span x-text="item.label"></span>
-                        <span x-show="item.badge" class="ml-auto bg-blue-600 text-white text-xs px-1.5 py-0.5 rounded-full" x-text="item.badge"></span>
+                        <span x-show="item.badge" class="ml-auto bg-elevated text-gray-300 text-xs px-1.5 py-0.5 rounded-full" x-text="item.badge"></span>
                     </button>
                 </template>
             </nav>
 
+            <!-- 主题与配色快捷开关（阶段5接入逻辑） -->
+            <div class="px-3 py-2 border-t border-line flex items-center gap-2">
+                <button @click="toggleTheme && toggleTheme()"
+                        class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs rounded-sm border border-line text-gray-400 hover:bg-elevated transition-colors">
+                    <svg class="w-3.5 h-3.5" aria-hidden="true"><use :href="theme === 'light' ? '#i-sun' : '#i-moon'"></use></svg>
+                    <span x-text="theme === 'light' ? '纯白' : '暗色'"></span>
+                </button>
+                <button @click="toggleScheme && toggleScheme()"
+                        class="flex-1 flex items-center gap-2 px-2 py-1.5 text-xs rounded-sm border border-line text-gray-400 hover:bg-elevated transition-colors">
+                    <span x-text="scheme === 'us' ? '涨绿跌红' : '涨红跌绿'"></span>
+                </button>
+            </div>
+
             <!-- 底部系统状态 -->
-            <div class="p-4 border-t border-[#334155]">
+            <div class="p-4 border-t border-line">
                 <div class="flex items-center gap-2 text-xs">
-                    <span class="w-2 h-2 rounded-full pulse-dot" :class="systemStatus === 'healthy' ? 'bg-green-500' : 'bg-red-500'"></span>
+                    <span class="status-dot pulse-dot" :class="systemStatus === 'healthy' ? 'bg-ok' : 'bg-danger'"></span>
                     <span class="text-gray-400" x-text="systemStatus === 'healthy' ? '系统正常' : '系统异常'"></span>
                 </div>
                 <div class="text-xs text-gray-500 mt-1" x-text="'v' + systemInfo.version"></div>
@@ -141,13 +372,13 @@
         <div class="flex-1 flex flex-col overflow-hidden">
 
             <!-- 顶部状态栏 -->
-            <header class="h-12 bg-[#1e293b] border-b border-[#334155] flex items-center justify-between px-4 flex-shrink-0">
+            <header class="h-12 bg-surface border-b border-line flex items-center justify-between px-4 flex-shrink-0">
                 <div class="flex items-center gap-4">
                     <h1 class="text-sm font-medium text-white" x-text="currentPageTitle"></h1>
                 </div>
                 <div class="flex items-center gap-4 text-xs text-gray-400">
                     <div class="flex items-center gap-1.5">
-                        <span class="w-1.5 h-1.5 rounded-full" :class="wsConnected ? 'bg-green-500' : 'bg-red-500'"></span>
+                        <span class="status-dot" :class="wsConnected ? 'bg-ok' : 'bg-danger'"></span>
                         <span x-text="wsConnected ? 'WS已连接' : 'WS未连接'"></span>
                     </div>
                     <div x-text="'模式: ' + systemInfo.mode"></div>
