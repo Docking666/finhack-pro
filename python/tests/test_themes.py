@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -266,3 +268,34 @@ class TestWallpaperUpload:
         saved = tr.WALLPAPER_DIR / resp.data["filename"]
         assert saved.exists()
         saved.unlink()
+
+
+# ============================================================
+# 主题注入链路（前端）
+# ============================================================
+
+class TestThemeInjection:
+    """主题 token 到 CSS 变量的注入校验（前端侧）。
+
+    hex 转 "R G B" 分量的逻辑实现在 static/index.html 的内联脚本中，属于前端代码。
+    这里用 node 执行 theme_inject_check.js 里的真实实现，而不是在 Python 中
+    重新实现一遍，避免测试与实现脱节。node 不可用时跳过，不影响 Python 侧用例。
+    """
+
+    def test_token_injection_pipeline(self):
+        script = Path(__file__).parent / "theme_inject_check.js"
+        if not script.exists():
+            pytest.skip("theme_inject_check.js 缺失")
+        if shutil.which("node") is None:
+            pytest.skip("未安装 node，跳过前端注入链路校验")
+
+        proc = subprocess.run(
+            ["node", str(script)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=120,
+        )
+        assert proc.returncode == 0, (
+            "主题注入链路校验失败:" + "\n" + proc.stdout + "\n" + proc.stderr
+        )
