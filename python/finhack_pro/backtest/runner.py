@@ -75,6 +75,7 @@ class BacktestResult:
     trades: List[Dict[str, Any]] = field(default_factory=list)
     daily_returns: List[float] = field(default_factory=list)
     equity_curve: List[Dict[str, Any]] = field(default_factory=list)
+    signal_log: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class BacktestRunner:
@@ -242,6 +243,9 @@ class BacktestRunner:
         trades: List[Dict[str, Any]] = []
         equity_curve: List[Dict[str, Any]] = []
         daily_returns: List[float] = []
+        # 信号调试日志（阶段1）：逐 bar 记录指标值/信号/持仓，供"信号调试器"排查
+        # 条件为何触发/未触发。B1 修复后 bar.extra 对普通策略也有值。
+        signal_log: List[Dict[str, Any]] = []
 
         prev_value = initial_capital
 
@@ -271,6 +275,22 @@ class BacktestRunner:
 
             # 处理策略信号
             signals = strategy.on_bar(context, bar)
+
+            # 信号调试日志（阶段1）：快照指标值 + 信号摘要 + 持仓状态
+            signal_log.append({
+                "date": str(bar_date),
+                "extra": dict(bar.extra),
+                "signals": [
+                    {
+                        "direction": s.direction.value,
+                        "strategy_name": s.strategy_name or "",
+                        "price": round(s.price, 2),
+                    }
+                    for s in signals
+                ],
+                "position_volume": position_volume,
+                "total_value": round(portfolio.total_value, 2),
+            })
 
             for signal in signals:
                 if signal.direction == SignalDirection.BUY and position_volume == 0:
@@ -400,6 +420,7 @@ class BacktestRunner:
             trades=trades,
             daily_returns=[round(r, 6) for r in daily_returns],
             equity_curve=equity_curve,
+            signal_log=signal_log,
         )
 
         logger.info(

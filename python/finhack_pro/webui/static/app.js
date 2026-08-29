@@ -1074,6 +1074,31 @@ function backtestPage() {
         exporting: false,
         currentResult: null,
         validation: null,   // 策略验证报告（StrategyValidator 7 项）
+        signalLog: {
+            rows: [], allRows: [], total: 0, sampled: false,
+            extraKeys: [], strategies: [],
+            strategyFilter: '', directionFilter: '', onlyTriggered: false,
+            // 值格式化：null/NaN → —；数字 → 2 位小数；枚举串原样
+            fmt(v) {
+                if (v === null || v === undefined) return '—';
+                if (typeof v === 'number' && isFinite(v)) return Number(v).toFixed(2);
+                return String(v);
+            },
+            applyFilters() {
+                const rows = this.allRows.filter(row => {
+                    if (this.onlyTriggered && (!row.signals || !row.signals.length)) return false;
+                    if (this.directionFilter && (!row.signals || !row.signals.some(s => s.direction === this.directionFilter))) return false;
+                    if (this.strategyFilter && (!row.signals || !row.signals.some(s => (s.strategy_name || '') === this.strategyFilter))) return false;
+                    return true;
+                });
+                this.rows = rows;
+            },
+            async reload() {
+                if (window.__backtestPage && window.__backtestPage.currentTaskId) {
+                    await window.__backtestPage.loadSignalLog(window.__backtestPage.currentTaskId);
+                }
+            },
+        },
 
         async init() {
             window.__backtestPage = this;
@@ -1417,10 +1442,36 @@ function backtestPage() {
 
                     // 刷新历史
                     await this.loadHistory();
+                    // 拉取信号调试日志（单独端点，不进 WS 全量推送）
+                    await this.loadSignalLog(taskId);
                     window.__alpineApp.showToast('回测完成', 'success');
                 }
             } catch (e) {
                 console.error('获取回测结果失败:', e);
+            }
+        },
+
+        async loadSignalLog(taskId) {
+            try {
+                const resp = await API.get(`/api/backtest/${taskId}/signal_log`);
+                if (resp.success && resp.data) {
+                    const d = resp.data;
+                    this.signalLog.allRows = d.rows || [];
+                    this.signalLog.total = d.total || 0;
+                    this.signalLog.sampled = !!d.sampled;
+                    // 动态列：取首个非空行的 extra 键；策略列表：收集全部策略名
+                    const keys = new Set();
+                    const strats = new Set();
+                    for (const row of this.signalLog.allRows) {
+                        if (row.extra) Object.keys(row.extra).forEach(k => keys.add(k));
+                        if (row.signals) row.signals.forEach(s => { if (s.strategy_name) strats.add(s.strategy_name); });
+                    }
+                    this.signalLog.extraKeys = Array.from(keys);
+                    this.signalLog.strategies = Array.from(strats).sort();
+                    this.signalLog.applyFilters();
+                }
+            } catch (e) {
+                console.error('获取信号日志失败:', e);
             }
         },
 

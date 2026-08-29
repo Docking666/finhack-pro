@@ -228,6 +228,78 @@
         <div x-show="trades.length === 0" class="text-sm text-gray-500 py-4 text-center">暂无交易记录，请先运行回测</div>
     </div>
 
+    <!-- 信号日志（信号调试器） -->
+    <div class="bg-surface rounded-sm p-4 border border-line">
+        <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <h3 class="text-sm font-medium text-white">信号日志</h3>
+            <div class="flex items-center gap-3 text-xs">
+                <select x-model="signalLog.strategyFilter" @change="signalLog.applyFilters()"
+                        class="bg-elevated border border-line rounded-sm px-2 py-1 text-gray-300 text-xs">
+                    <option value="">全部策略</option>
+                    <template x-for="name in signalLog.strategies" :key="name">
+                        <option :value="name" x-text="name"></option>
+                    </template>
+                </select>
+                <select x-model="signalLog.directionFilter" @change="signalLog.applyFilters()"
+                        class="bg-elevated border border-line rounded-sm px-2 py-1 text-gray-300 text-xs">
+                    <option value="">全部方向</option>
+                    <option value="buy">买入</option>
+                    <option value="sell">卖出</option>
+                </select>
+                <label class="flex items-center gap-1 text-gray-400 cursor-pointer select-none">
+                    <input type="checkbox" x-model="signalLog.onlyTriggered" @change="signalLog.applyFilters()" class="accent-current">
+                    <span>只看触发</span>
+                </label>
+                <span class="text-gray-500" x-text="'共 ' + signalLog.total + ' 行' + (signalLog.sampled ? '（已抽样）' : '')"></span>
+                <button x-show="signalLog.total > 0" @click="signalLog.reload()"
+                        class="text-accent hover:underline">刷新</button>
+            </div>
+        </div>
+        <div x-show="signalLog.rows.length > 0" class="overflow-auto max-h-96">
+            <table class="w-full text-sm">
+                <thead class="sticky top-0 bg-surface">
+                    <tr class="text-gray-500 text-xs border-b border-line">
+                        <th class="text-left py-2 px-2">日期</th>
+                        <template x-for="key in signalLog.extraKeys" :key="key">
+                            <th class="text-right py-2 px-2 font-mono" x-text="key"></th>
+                        </template>
+                        <th class="text-left py-2 px-2">信号</th>
+                        <th class="text-right py-2 px-2">持仓</th>
+                        <th class="text-right py-2 px-2">总权益</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="(row, idx) in signalLog.rows" :key="row.date">
+                        <tr class="border-b border-line/50 hover:bg-elevated/30"
+                            :class="row.signals && row.signals.length ? 'bg-up-soft' : ''">
+                            <td class="py-1.5 px-2 text-gray-400" x-text="String(row.date).substring(0, 10)"></td>
+                            <template x-for="key in signalLog.extraKeys" :key="key">
+                                <td class="py-1.5 px-2 text-right font-mono text-white" x-text="signalLog.fmt(row.extra ? row.extra[key] : null)"></td>
+                            </template>
+                            <td class="py-1.5 px-2">
+                                <template x-if="row.signals && row.signals.length">
+                                    <div class="flex flex-wrap gap-1">
+                                        <template x-for="(sig, si) in row.signals" :key="si">
+                                            <span class="px-1.5 py-0.5 rounded-sm text-xs"
+                                                  :class="sig.direction === 'buy' ? 'bg-up-soft text-up' : 'bg-down-soft text-down'"
+                                                  x-text="(sig.direction === 'buy' ? '买' : '卖') + ' ' + (sig.strategy_name || '')"></span>
+                                        </template>
+                                    </div>
+                                </template>
+                                <span x-show="!row.signals || !row.signals.length" class="text-gray-600">—</span>
+                            </td>
+                            <td class="py-1.5 px-2 text-right text-gray-400" x-text="row.position_volume || 0"></td>
+                            <td class="py-1.5 px-2 text-right font-mono text-white" x-text="row.total_value != null ? Number(row.total_value).toLocaleString() : ''"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+        <div x-show="signalLog.rows.length === 0" class="text-sm text-gray-500 py-4 text-center">
+            运行回测后查看逐日指标值与信号触发详情
+        </div>
+    </div>
+
     <!-- 历史回测 -->
     <div class="bg-surface rounded-sm p-4 border border-line">
         <h3 class="text-sm font-medium text-white mb-3">历史回测</h3>

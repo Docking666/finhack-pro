@@ -303,6 +303,19 @@ async def get_backtest_result(request: Request, task_id: str):
     return APIResponse(data=result.model_dump())
 
 
+@router.get("/api/backtest/{task_id}/signal_log", response_model=APIResponse)
+async def get_backtest_signal_log(
+    request: Request, task_id: str, max_rows: int = Query(2000, ge=100, le=10000)
+):
+    """获取信号调试日志（阶段1）
+
+    逐 bar 指标值/信号/持仓快照；超过 max_rows 均匀抽样但信号行全保留。
+    单独端点拉取，避免回测结果全量推送体积膨胀。
+    """
+    backtest_svc = _get_backtest_service(request)
+    return APIResponse(data=backtest_svc.get_signal_log(task_id, max_rows=max_rows))
+
+
 @router.get("/api/backtest/history", response_model=APIResponse)
 async def get_backtest_history(request: Request, limit: int = Query(20, ge=1, le=100)):
     """获取历史回测列表"""

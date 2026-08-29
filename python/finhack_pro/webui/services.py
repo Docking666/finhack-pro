@@ -513,6 +513,8 @@ class BacktestService:
         self._tasks: Dict[str, Dict[str, Any]] = {}
         self._results: Dict[str, BacktestResult] = {}
         self._history: List[Dict[str, Any]] = []
+        # 信号调试日志（阶段1）：单独存储，不进 WS/结果全量推送，由专用 API 拉取
+        self._signal_logs: Dict[str, List[Dict[str, Any]]] = {}
 
     def create_task(self, request: BacktestRequest) -> BacktestStatus:
         """创建回测任务
@@ -793,6 +795,7 @@ class BacktestService:
             status.message = "回测完成"
             status.end_time = datetime.now().isoformat()
             self._results[task_id] = result
+            self._signal_logs[task_id] = getattr(backtest_result, "signal_log", []) or []
 
             # 添加到历史记录
             self._history.append({
@@ -844,6 +847,35 @@ class BacktestService:
     def get_task_result(self, task_id: str) -> Optional[BacktestResult]:
         """获取任务结果"""
         return self._results.get(task_id)
+
+    def get_signal_log(self, task_id: str, max_rows: int = 2000) -> Dict[str, Any]:
+        """获取信号调试日志（阶段1）
+
+        体积控制：超过 max_rows 行时均匀抽样，但**带信号的行全保留**
+        （调试器价值在于看到"触发/未触发"的全部上下文）。
+        """
+        log = self._signal_logs.get(task_id, [])
+        if not log:
+            return {"task_id": task_id, "sampled": False, "total": 0, "rows": []}
+
+        total = len(log)
+        triggered_idx = {i for i, row in enumerate(log) if row.get("signals")}
+        if total <= max_rows:
+            rows = log
+            sampled = False
+        else:
+            import math
+            step = math.ceil(total / max_rows)  # ceil 保证抽样后行数 ≤ max_rows
+            sampled_idx = set(range(0, total, step)) | triggered_idx
+            rows = [log[i] for i in sorted(sampled_idx)]
+            sampled = True
+
+        return {
+            "task_id": task_id,
+            "sampled": sampled,
+            "total": total,
+            "rows": rows,
+        }
 
     def get_history(self, limit: int = 20) -> List[Dict[str, Any]]:
         """获取历史回测记录"""
