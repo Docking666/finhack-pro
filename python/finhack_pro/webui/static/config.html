@@ -325,7 +325,7 @@
         </div>
     </div>
 
-    <!-- 界面设置：主题 / 明暗 / 涨跌配色 / 壁纸 -->
+    <!-- 界面设置：主题 / 涨跌配色 -->
     <div class="bg-surface rounded-sm p-4 border border-line">
         <h3 class="text-sm font-medium text-white mb-4 flex items-center gap-2">
             界面设置
@@ -341,19 +341,6 @@
                     </template>
                 </select>
                 <p class="text-xs text-gray-500 mt-1">偏好仅保存在本浏览器。自定义主题可将主题 JSON 放入 data/themes/ 目录。</p>
-            </div>
-
-            <!-- 明暗模式 -->
-            <div>
-                <label class="block text-xs text-gray-400 mb-1.5">明暗模式</label>
-                <div class="flex gap-2">
-                    <button type="button" @click="applyTheme(themeId, 'dark', scheme)"
-                            :class="theme === 'dark' ? 'bg-accent text-accent-fg' : 'bg-elevated text-gray-400'"
-                            class="flex-1 px-3 py-2 text-sm rounded-sm border border-line transition-colors">暗色</button>
-                    <button type="button" @click="applyTheme(themeId, 'light', scheme)"
-                            :class="theme === 'light' ? 'bg-accent text-accent-fg' : 'bg-elevated text-gray-400'"
-                            class="flex-1 px-3 py-2 text-sm rounded-sm border border-line transition-colors">纯白</button>
-                </div>
             </div>
 
             <!-- 涨跌配色 -->
@@ -374,12 +361,29 @@
                 <p class="text-xs text-gray-500 mt-1">仅影响涨跌与盈亏的显示配色，不参与策略计算。</p>
             </div>
 
-            <!-- 壁纸 -->
+            <!-- 壁纸（个性化背景：上传即生效 + 半透明蒙版 + 本浏览器持久化） -->
             <div>
-                <label class="block text-xs text-gray-400 mb-1.5">壁纸（可选）</label>
-                <input type="file" accept=".jpg,.jpeg,.png,.webp" @change="uploadWallpaper($event)"
-                       class="w-full text-xs text-gray-400">
-                <p class="text-xs text-gray-500 mt-1">支持 jpg / png / webp，单张 ≤5MB。</p>
+                <label class="block text-xs text-gray-400 mb-1.5">壁纸（个性化背景）</label>
+                <div class="flex items-center gap-2">
+                    <input type="file" accept=".jpg,.jpeg,.png,.webp" @change="uploadWallpaper($event)"
+                           class="text-xs text-gray-400 flex-1">
+                    <button type="button" @click="clearWallpaper()"
+                            class="flex-shrink-0 px-2.5 py-1.5 text-xs rounded-sm border border-line text-gray-400 hover:bg-elevated transition-colors">移除</button>
+                </div>
+                <p class="text-xs text-gray-500 mt-1">支持 jpg / png / webp，单张 ≤5MB；仅保存在本浏览器，切换主题后仍生效。</p>
+                <!-- 预览 -->
+                <div x-show="wallpaperPreviewUrl" class="mt-2">
+                    <img :src="wallpaperPreviewUrl" alt="壁纸预览"
+                         class="w-full h-24 object-cover rounded-sm border border-line">
+                </div>
+                <!-- 蒙版不透明度 -->
+                <div class="mt-2 flex items-center gap-2" x-show="wallpaperPreviewUrl">
+                    <label class="text-xs text-gray-400 w-24 flex-shrink-0">蒙版不透明度</label>
+                    <input type="range" min="0.25" max="0.8" step="0.05"
+                           x-model.number="wallpaperOverlay" @input="setWallpaperOverlay(wallpaperOverlay)"
+                           class="flex-1 accent-accent">
+                    <span class="text-xs text-gray-500 font-mono w-10 text-right" x-text="Math.round(wallpaperOverlay * 100) + '%'"></span>
+                </div>
                 <p x-show="wallpaperMsg" class="text-xs mt-1"
                    :class="wallpaperOk ? 'text-ok' : 'text-danger'" x-text="wallpaperMsg"></p>
             </div>

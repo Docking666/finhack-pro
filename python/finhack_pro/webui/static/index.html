@@ -345,19 +345,6 @@
                 </template>
             </nav>
 
-            <!-- 主题与配色快捷开关（阶段5接入逻辑） -->
-            <div class="px-3 py-2 border-t border-line flex items-center gap-2">
-                <button @click="toggleTheme && toggleTheme()"
-                        class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs rounded-sm border border-line text-gray-400 hover:bg-elevated transition-colors">
-                    <svg class="w-3.5 h-3.5" aria-hidden="true"><use :href="theme === 'light' ? '#i-sun' : '#i-moon'"></use></svg>
-                    <span x-text="theme === 'light' ? '纯白' : '暗色'"></span>
-                </button>
-                <button @click="toggleScheme && toggleScheme()"
-                        class="flex-1 flex items-center gap-2 px-2 py-1.5 text-xs rounded-sm border border-line text-gray-400 hover:bg-elevated transition-colors">
-                    <span x-text="scheme === 'us' ? '涨绿跌红' : '涨红跌绿'"></span>
-                </button>
-            </div>
-
             <!-- 底部系统状态 -->
             <div class="p-4 border-t border-line">
                 <div class="flex items-center gap-2 text-xs">

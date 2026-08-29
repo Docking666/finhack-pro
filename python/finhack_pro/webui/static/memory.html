@@ -64,8 +64,7 @@
                         <div class="flex-1">
                             <!-- 头部信息 -->
                             <div class="flex items-center gap-2 mb-2 flex-wrap">
-                                <span class="px-2 py-0.5 rounded-sm text-xs"
-                                      :class="getMemoryTypeColor(entry.memory_type)"
+                                <span class="px-2 py-0.5 rounded-sm text-xs bg-elevated text-gray-300 border border-line"
                                       x-text="getMemoryTypeName(entry.memory_type)"></span>
                                 <span class="px-2 py-0.5 rounded-sm text-xs"
                                       :class="entry.importance === 'critical' ? 'bg-elevated text-danger' : entry.importance === 'high' ? 'bg-elevated text-warn' : entry.importance === 'medium' ? 'bg-elevated text-accent' : 'bg-elevated text-gray-400'"
