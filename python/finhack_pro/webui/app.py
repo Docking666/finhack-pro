@@ -46,6 +46,38 @@ from finhack_pro.webui.theme_routes import (
 from finhack_pro.webui.workshop_routes import router as workshop_router
 from finhack_pro.webui.ws_routes import router as ws_router
 
+# 默认只允许「本机 + 私有网段」来源访问 WebUI。
+#
+# 背景：WebUI 没有鉴权，而配置里存着 LLM / 数据源的 API Key。原先是
+# allow_origins=["*"] + allow_credentials=True —— 这意味着用户浏览器里任意第三方
+# 页面（比如某个恶意站点）都能跨域读到本机 8000 端口的响应，简单请求即可命中、
+# 连预检都不需要。真正的威胁是公网上的任意站点，因此这里按来源做拦截。
+#
+# 私有网段（10.x / 192.168.x / 172.16-31.x）仍然放行：这些来源本来就能绕过 CORS
+# 直连后端（非浏览器的客户端不受同源策略约束），放行它们不会引入额外风险，
+# 但能保住局域网访问场景（app.py 默认绑 0.0.0.0）。
+#
+# 需要放开到公网来源时，用环境变量显式指定：
+#   FINHACK_WEBUI_ALLOW_ORIGINS=https://finhack.example.com
+#   FINHACK_WEBUI_ALLOW_ORIGINS=*     （等价旧行为，仅建议在可信网络使用）
+_LOCAL_ORIGIN_RE = (
+    r"^https?://("
+    r"localhost|127\.0\.0\.1|\[::1\]"
+    r"|10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+    r"|192\.168\.\d{1,3}\.\d{1,3}"
+    r"|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
+    r")(:\d+)?$"
+)
+
+
+def _cors_kwargs() -> dict:
+    """构建 CORS 中间件参数（优先读环境变量，默认仅限本机来源）"""
+    raw = os.environ.get("FINHACK_WEBUI_ALLOW_ORIGINS", "").strip()
+    if raw:
+        origins = [o.strip() for o in raw.split(",") if o.strip()]
+        return {"allow_origins": origins}
+    return {"allow_origin_regex": _LOCAL_ORIGIN_RE}
+
 
 def get_base_path():
     """获取应用基础路径（兼容PyInstaller打包）"""
@@ -83,12 +115,14 @@ def create_app(config_path: Optional[str] = None) -> FastAPI:
     )
 
     # ---- CORS中间件 ----
+    # 默认仅限 localhost / 127.0.0.1 来源（见 _cors_kwargs 注释）。
+    # 桌面端从 http://localhost:8000 加载，浏览器直连为 http://127.0.0.1:8000，均可命中。
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        **_cors_kwargs(),
     )
 
     # ---- 初始化服务 ----

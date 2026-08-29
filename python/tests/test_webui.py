@@ -1392,3 +1392,89 @@ class TestDataSourceTester:
         result = asyncio.run(tester.test_connection(source="wind"))
         assert result.success is False
         assert "不支持的数据源" in result.message
+
+
+# ============================================================================
+# CORS 来源白名单（WebUI 无鉴权，配置里存着 API Key，不能对任意站点开放）
+# ============================================================================
+
+
+class TestCorsOriginPolicy:
+    """默认仅放行本机与私有网段来源，拦截公网来源"""
+
+    def _allowed(self, origin: str) -> bool:
+        import re
+
+        from finhack_pro.webui.app import _LOCAL_ORIGIN_RE
+
+        return re.match(_LOCAL_ORIGIN_RE, origin) is not None
+
+    @pytest.mark.parametrize(
+        "origin",
+        [
+            "http://localhost:8000",
+            "http://localhost",
+            "http://127.0.0.1:8000",
+            "http://[::1]:8000",
+            "https://localhost:8000",
+        ],
+    )
+    def test_localhost_origins_allowed(self, origin):
+        """本机来源放行（桌面端从 http://localhost:8000 加载）"""
+        assert self._allowed(origin) is True
+
+    @pytest.mark.parametrize(
+        "origin",
+        [
+            "http://192.168.1.50:8000",
+            "http://10.0.0.7:8000",
+            "http://172.16.0.9:8000",
+            "http://172.31.255.254:8000",
+        ],
+    )
+    def test_private_lan_origins_allowed(self, origin):
+        """私有网段放行：保住局域网访问（app.py 默认绑 0.0.0.0）"""
+        assert self._allowed(origin) is True
+
+    @pytest.mark.parametrize(
+        "origin",
+        [
+            "http://evil.com",
+            "https://evil.com",
+            "http://8.8.8.8:8000",
+            "http://203.0.113.5:3000",
+            "http://172.32.0.1:8000",  # 172.32 已超出 172.16-31 私有段
+            "http://192.168.1.50.evil.com",  # 后缀伪装，不能命中
+            "http://localhost.evil.com",
+        ],
+    )
+    def test_public_origins_blocked(self, origin):
+        """公网来源必须拦截——否则任意站点都能跨域读到本机 API 响应"""
+        assert self._allowed(origin) is False
+
+    def test_default_kwargs_use_regex_not_wildcard(self):
+        """默认配置走 origin 正则，绝不回退成 allow_origins=['*']"""
+        from finhack_pro.webui.app import _cors_kwargs
+
+        kwargs = _cors_kwargs()
+        assert "allow_origin_regex" in kwargs
+        assert "allow_origins" not in kwargs
+        assert "*" not in kwargs["allow_origin_regex"]
+
+    def test_env_override_wins(self, monkeypatch):
+        """显式设置 FINHACK_WEBUI_ALLOW_ORIGINS 时按环境变量放行"""
+        from finhack_pro.webui.app import _cors_kwargs
+
+        monkeypatch.setenv(
+            "FINHACK_WEBUI_ALLOW_ORIGINS", "https://finhack.example.com, https://a.example.com"
+        )
+        assert _cors_kwargs() == {
+            "allow_origins": ["https://finhack.example.com", "https://a.example.com"]
+        }
+
+    def test_env_override_empty_falls_back_to_regex(self, monkeypatch):
+        """环境变量为空字符串时不能退化成放行所有来源"""
+        from finhack_pro.webui.app import _cors_kwargs
+
+        monkeypatch.setenv("FINHACK_WEBUI_ALLOW_ORIGINS", "   ")
+        assert "allow_origin_regex" in _cors_kwargs()

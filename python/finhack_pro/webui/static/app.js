@@ -3869,12 +3869,10 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
                     const list = Array.isArray(raw)
                         ? raw
                         : (raw && Array.isArray(raw.items) ? raw.items : []);
-                    // 云端字段是 package_id（不是 id），统一补 id 别名便于模板书写
-                    this.cloudPackages = list.map(p => ({
-                        ...p,
-                        id: p.package_id || p.id || '',
-                    }));
-                    this.cloudTotal = (raw && raw.total) || this.cloudPackages.length;
+                    // 云端字段是 package_id（不是 id），统一补 id 别名便于模板书写；
+                    // 并按 package_id 去重（同一包的多个版本只展示最新版）。
+                    this.cloudPackages = this._dedupeCloudPackages(list);
+                    this.cloudTotal = (raw && typeof raw.total === 'number') ? raw.total : list.length;
                 } else {
                     this.cloudError = resp.message || '云端市场加载失败';
                     this.cloudPackages = [];
@@ -3889,11 +3887,44 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
             }
         },
 
+        // 云端对"同一个包"按版本各存一行（package_id 相同、version 不同）。
+        // 应用商店视图只展示每个包的最新版本，否则会出现三张同名"动量突破策略"卡片；
+        // 同时统一生成 _key，避免 :key 用了重复的 package_id 导致 Alpine 渲染错乱。
+        _dedupeCloudPackages(list) {
+            const best = new Map();
+            for (const p of list || []) {
+                const pid = p.package_id || p.id || '';
+                if (!pid) continue;
+                const prev = best.get(pid);
+                if (!prev || this._versionGt(p.version, prev.version)) {
+                    best.set(pid, p);
+                }
+            }
+            return Array.from(best.values()).map(p => ({
+                ...p,
+                id: p.package_id || p.id || '',
+                _key: (p.package_id || p.id || '') + '@' + (p.version || '0'),
+            }));
+        },
+
+        // 语义化版本比较：1.10.0 > 1.2.0（逐段数值比较，非数字段降级为 0）
+        _versionGt(a, b) {
+            const pa = String(a || '0').split('.').map(n => parseInt(n, 10) || 0);
+            const pb = String(b || '0').split('.').map(n => parseInt(n, 10) || 0);
+            for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+                const x = pa[i] || 0;
+                const y = pb[i] || 0;
+                if (x !== y) return x > y;
+            }
+            return false;
+        },
+
         // 从云端详情里抽取源码正文（不同后端字段名不一致，逐个兜底）
         cloudDetailCode() {
             const d = this.cloudDetail;
             if (!d) return '';
-            for (const key of ['code', 'source', 'content', 'source_code']) {
+            // preview 是云端详情里真实存在的字段（多数包为空，因为只存了 zip）
+            for (const key of ['code', 'source', 'content', 'source_code', 'preview']) {
                 if (typeof d[key] === 'string' && d[key].trim()) return d[key];
             }
             const files = d.files;
@@ -3906,6 +3937,20 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
                 }
             }
             return '';
+        },
+
+        // 云端按 package_id 查询详情，同一个包存了多个版本时返回的不一定是列表里
+        // 展示的那个最新版本（实测 momentum 卡片 v1.2.0、详情返回 v1.0.0）。
+        // 不一致时明确提示，避免"看到 1.2.0、装到 1.0.0"的误解。
+        cloudDetailVersionNote() {
+            const d = this.cloudDetail;
+            if (!d || !d.version) return '';
+            const card = (this.cloudPackages || []).find(
+                p => (p.package_id || p.id) === this.cloudDetailId
+            );
+            if (!card || !card.version || card.version === d.version) return '';
+            return '卡片展示 v' + card.version + '，但云端按 package_id 查询返回的是 v' + d.version
+                 + '——安装将以 v' + d.version + ' 为准。';
         },
 
         async viewCloudPackage(packageId) {
