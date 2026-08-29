@@ -1,7 +1,7 @@
 <!-- 回测面板页面模板 -->
 <div class="fade-in space-y-4" x-data="backtestPage()">
     <!-- 回测参数表单 -->
-    <div class="bg-surface rounded-sm p-4 border border-line">
+    <div class="bg-surface rounded-sm p-4 border border-line" data-card-id="config_form">
         <h3 class="text-sm font-medium text-white mb-4">回测参数</h3>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
@@ -77,7 +77,7 @@
     <!-- 权益曲线图 + 回测指标 -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <!-- 权益曲线 -->
-        <div class="lg:col-span-2 bg-surface rounded-sm p-4 border border-line">
+        <div class="lg:col-span-2 bg-surface rounded-sm p-4 border border-line" data-card-id="equity_curve">
             <h3 class="text-sm font-medium text-white mb-3">权益曲线</h3>
             <div class="relative" style="height: 300px;">
                 <canvas id="equity-chart"></canvas>
@@ -89,7 +89,7 @@
         </div>
 
         <!-- 回测指标 -->
-        <div class="bg-surface rounded-sm p-4 border border-line">
+        <div class="bg-surface rounded-sm p-4 border border-line" data-card-id="metrics">
             <div class="flex items-center justify-between mb-3">
                 <h3 class="text-sm font-medium text-white">回测指标</h3>
                 <!-- 导出按钮 -->
@@ -199,7 +199,7 @@
     </div>
 
     <!-- 收益率与回撤曲线 -->
-    <div class="lg:col-span-2 bg-surface rounded-sm p-4 border border-line">
+    <div class="lg:col-span-2 bg-surface rounded-sm p-4 border border-line" data-card-id="returns_chart">
         <h3 class="text-sm font-medium text-white mb-3">每日收益率与回撤</h3>
         <div class="relative" style="height: 220px;">
             <canvas id="returns-chart"></canvas>
@@ -211,7 +211,7 @@
     </div>
 
     <!-- 交易记录 -->
-    <div class="bg-surface rounded-sm p-4 border border-line">
+    <div class="bg-surface rounded-sm p-4 border border-line" data-card-id="trades">
         <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-medium text-white">交易记录</h3>
             <span class="text-xs text-gray-500" x-text="'共 ' + trades.length + ' 条'"></span>
@@ -258,7 +258,7 @@
     </div>
 
     <!-- 参数热力图（阶段5） -->
-    <div class="bg-surface rounded-sm p-4 border border-line">
+    <div class="bg-surface rounded-sm p-4 border border-line" data-card-id="heatmap">
         <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
             <h3 class="text-sm font-medium text-white">参数热力图</h3>
             <div class="flex items-center gap-3 text-xs">
@@ -329,7 +329,7 @@
     </div>
 
     <!-- 信号日志（信号调试器） -->
-    <div class="bg-surface rounded-sm p-4 border border-line">
+    <div class="bg-surface rounded-sm p-4 border border-line" data-card-id="signal_log">
         <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
             <h3 class="text-sm font-medium text-white">信号日志</h3>
             <div class="flex items-center gap-3 text-xs">
@@ -401,7 +401,7 @@
     </div>
 
     <!-- 历史回测 -->
-    <div class="bg-surface rounded-sm p-4 border border-line">
+    <div class="bg-surface rounded-sm p-4 border border-line" data-card-id="history">
         <h3 class="text-sm font-medium text-white mb-3">历史回测</h3>
         <div x-show="history.length > 0">
             <table class="w-full text-sm">

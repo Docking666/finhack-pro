@@ -3,7 +3,7 @@
     <!-- 概览卡片 -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <!-- Agent数量 -->
-        <div class="bg-surface rounded-sm p-4 border border-line">
+        <div class="bg-surface rounded-sm p-4 border border-line" data-card-id="agent_count">
             <div class="flex items-center justify-between">
                 <div>
                     <div class="text-xs text-gray-500">Agent数量</div>
@@ -16,7 +16,7 @@
         </div>
 
         <!-- 记忆条数 -->
-        <div class="bg-surface rounded-sm p-4 border border-line">
+        <div class="bg-surface rounded-sm p-4 border border-line" data-card-id="memory_count">
             <div class="flex items-center justify-between">
                 <div>
                     <div class="text-xs text-gray-500">记忆条数</div>
@@ -29,7 +29,7 @@
         </div>
 
         <!-- 工具数 -->
-        <div class="bg-surface rounded-sm p-4 border border-line">
+        <div class="bg-surface rounded-sm p-4 border border-line" data-card-id="tool_count">
             <div class="flex items-center justify-between">
                 <div>
                     <div class="text-xs text-gray-500">可用工具</div>
@@ -42,7 +42,7 @@
         </div>
 
         <!-- 回测次数 -->
-        <div class="bg-surface rounded-sm p-4 border border-line">
+        <div class="bg-surface rounded-sm p-4 border border-line" data-card-id="backtest_count">
             <div class="flex items-center justify-between">
                 <div>
                     <div class="text-xs text-gray-500">回测次数</div>
@@ -58,7 +58,7 @@
     <!-- 快速操作 + 系统健康 -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <!-- 快速操作 -->
-        <div class="bg-surface rounded-sm p-4 border border-line">
+        <div class="bg-surface rounded-sm p-4 border border-line" data-card-id="quick_actions">
             <h3 class="text-sm font-medium text-white mb-3">快速操作</h3>
             <div class="space-y-2">
                 <button @click="navigate('agents'); setTimeout(() => { if(typeof runPipeline === 'function') runPipeline(); }, 300)"
@@ -80,7 +80,7 @@
         </div>
 
         <!-- 系统健康状态 -->
-        <div class="bg-surface rounded-sm p-4 border border-line">
+        <div class="bg-surface rounded-sm p-4 border border-line" data-card-id="health">
             <h3 class="text-sm font-medium text-white mb-3">系统健康状态</h3>
             <div class="space-y-2">
                 <template x-for="(status, name) in healthComponents" :key="name">
@@ -96,7 +96,7 @@
         </div>
 
         <!-- Agent状态概览 -->
-        <div class="bg-surface rounded-sm p-4 border border-line">
+        <div class="bg-surface rounded-sm p-4 border border-line" data-card-id="agent_status">
             <h3 class="text-sm font-medium text-white mb-3">Agent状态</h3>
             <div class="space-y-2" x-show="agentList.length > 0">
                 <template x-for="agent in agentList" :key="agent.agent_id">
@@ -114,7 +114,7 @@
     </div>
 
     <!-- 最近流水线执行记录 -->
-    <div class="bg-surface rounded-sm p-4 border border-line">
+    <div class="bg-surface rounded-sm p-4 border border-line" data-card-id="recent_pipeline">
         <h3 class="text-sm font-medium text-white mb-3">最近流水线执行</h3>
         <div x-show="pipelineHistory.length > 0">
             <table class="w-full text-sm">

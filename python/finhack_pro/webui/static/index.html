@@ -377,6 +377,13 @@
                     <h1 class="text-sm font-medium text-white" x-text="currentPageTitle"></h1>
                 </div>
                 <div class="flex items-center gap-4 text-xs text-gray-400">
+                    <button @click="toggleLayoutEdit()"
+                            class="px-2.5 py-1 rounded-sm border transition-colors"
+                            :class="editLayout ? 'border-accent text-accent bg-accent-soft' : 'border-line text-gray-400 hover:bg-elevated'">
+                        <span x-text="editLayout ? '完成布局' : '编辑布局'"></span>
+                    </button>
+                    <button x-show="editLayout" @click="resetLayout()"
+                            class="px-2.5 py-1 rounded-sm border border-line text-gray-400 hover:bg-elevated">恢复默认</button>
                     <div class="flex items-center gap-1.5">
                         <span class="status-dot" :class="wsConnected ? 'bg-ok' : 'bg-danger'"></span>
                         <span x-text="wsConnected ? 'WS已连接' : 'WS未连接'"></span>

@@ -33,6 +33,215 @@ function TK(name, fallback) {
     return v.indexOf(' ') > -1 ? 'rgb(' + v + ')' : v;
 }
 
+// ============================================================================
+// 布局可视化编辑（阶段7）：HTML5 原生 DnD 重排 + 宽度档 + 显隐
+// 覆盖仪表盘/回测页卡片，偏好按页存 localStorage（fh.layout.{page}）
+// ============================================================================
+const LayoutKit = {
+    page: '',
+    items: [],       // [{id, el}]
+    dragId: null,
+    editing: false,
+
+    init(page) {
+        this.page = page;
+        this.items = [];
+        document.querySelectorAll('[data-card-id]').forEach(el => {
+            const id = el.getAttribute('data-card-id');
+            if (!id) return;
+            this.items.push({ id, el });
+            this._injectToolbar(el, id);
+        });
+        this.applyPrefs();
+        if (this.editing) this.setEditing(true);
+    },
+
+    // 注入编辑工具条（仅编辑模式可见）：拖把手/宽度档/隐藏
+    _injectToolbar(el, id) {
+        if (el.querySelector('.layout-tools')) return;
+        const bar = document.createElement('div');
+        bar.className = 'layout-tools';
+        bar.style.cssText = 'display:none;align-items:center;gap:4px;margin-bottom:8px;font-size:11px;user-select:none;';
+        bar.innerHTML = `
+            <span class="layout-drag" draggable="true" title="拖动排序"
+                  style="cursor:grab;padding:0 6px;font-size:14px;line-height:1;color:var(--fg-subtle);">⠿</span>
+            <button data-w="full" title="全宽" style="width:22px;height:20px;line-height:16px;text-align:center;border:1px solid var(--line);border-radius:2px;background:var(--bg-elevated);color:var(--fg-muted);cursor:pointer;font-size:10px;">▬</button>
+            <button data-w="two" title="2/3 宽" style="width:22px;height:20px;line-height:16px;text-align:center;border:1px solid var(--line);border-radius:2px;background:var(--bg-elevated);color:var(--fg-muted);cursor:pointer;font-size:10px;">▮</button>
+            <button data-w="half" title="1/2 宽" style="width:22px;height:20px;line-height:16px;text-align:center;border:1px solid var(--line);border-radius:2px;background:var(--bg-elevated);color:var(--fg-muted);cursor:pointer;font-size:10px;">▯</button>
+            <button data-w="third" title="1/3 宽" style="width:22px;height:20px;line-height:16px;text-align:center;border:1px solid var(--line);border-radius:2px;background:var(--bg-elevated);color:var(--fg-muted);cursor:pointer;font-size:10px;">▭</button>
+            <button data-hide="1" title="隐藏（可在恢复默认找回）" style="width:22px;height:20px;line-height:16px;text-align:center;border:1px solid var(--line);border-radius:2px;background:var(--bg-elevated);color:var(--fg-muted);cursor:pointer;font-size:10px;margin-left:4px;">✕</button>
+        `;
+        el.prepend(bar);
+
+        bar.querySelectorAll('button[data-w]').forEach(btn => {
+            btn.addEventListener('click', () => this.setWidth(id, btn.dataset.w));
+        });
+        bar.querySelector('button[data-hide]').addEventListener('click', () => this.hide(id));
+
+        // DnD：把手可拖，整卡作为放置目标（同容器重排）
+        const handle = bar.querySelector('.layout-drag');
+        handle.addEventListener('dragstart', e => {
+            this.dragId = id;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', id);
+        });
+        handle.addEventListener('dragend', () => { this.dragId = null; });
+        el.addEventListener('dragover', e => {
+            if (this.dragId && this.dragId !== id) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                el.style.outline = '2px dashed var(--accent)';
+            }
+        });
+        el.addEventListener('dragleave', () => { el.style.outline = this.editing ? '1px dashed var(--line-strong)' : ''; });
+        el.addEventListener('drop', e => {
+            e.preventDefault();
+            el.style.outline = this.editing ? '1px dashed var(--line-strong)' : '';
+            if (this.dragId && this.dragId !== id) this.moveBefore(this.dragId, id);
+        });
+    },
+
+    setEditing(on) {
+        this.editing = on;
+        document.querySelectorAll('.layout-tools').forEach(b => { b.style.display = on ? 'flex' : 'none'; });
+        document.querySelectorAll('[data-card-id]').forEach(el => {
+            el.style.outline = on ? '1px dashed var(--line-strong)' : '';
+        });
+    },
+
+    _containerCols(el) {
+        const parent = el.parentElement;
+        if (!parent) return 1;
+        const tpl = getComputedStyle(parent).gridTemplateColumns || '';
+        const cols = tpl.split(' ').filter(s => s.trim() && s !== 'none').length;
+        return cols || 1;
+    },
+
+    setWidth(id, w) {
+        const item = this.items.find(i => i.id === id);
+        if (!item) return;
+        const el = item.el;
+        const cols = this._containerCols(el);
+        const spanMap = {
+            full: 0,   // 0 → 1 / -1
+            two: Math.max(1, Math.ceil(cols * 2 / 3)),
+            half: Math.max(1, Math.ceil(cols / 2)),
+            third: Math.max(1, Math.ceil(cols / 3)),
+        };
+        const span = spanMap[w] !== undefined ? spanMap[w] : 1;
+        el.style.gridColumn = w === 'full' ? '1 / -1' : `span ${span} / span ${span}`;
+        item._width = w;
+        this._save();
+        this._resizeCharts();
+    },
+
+    hide(id) {
+        const item = this.items.find(i => i.id === id);
+        if (!item) return;
+        item.el.style.display = 'none';
+        this._save();
+        this._resizeCharts();
+    },
+
+    moveBefore(fromId, beforeId) {
+        const from = this.items.find(i => i.id === fromId);
+        const before = this.items.find(i => i.id === beforeId);
+        if (!from || !before) return;
+        if (from.el.parentElement !== before.el.parentElement) return;  // 同容器重排
+        before.el.parentElement.insertBefore(from.el, before.el);
+        this._save();
+        this._resizeCharts();
+    },
+
+    reset() {
+        try { localStorage.removeItem('fh.layout.' + this.page); } catch (_) {}
+        // 清空内联样式，恢复 DOM 原始顺序（按 data-card-id 在文档中的原序）
+        const order = Array.from(document.querySelectorAll('[data-card-id]'))
+            .sort((a, b) => (a._origIndex || 0) - (b._origIndex || 0));
+        // 原序已在首次 init 时记录到 _origIndex
+        document.querySelectorAll('[data-card-id]').forEach(el => {
+            el.style.gridColumn = '';
+            el.style.display = '';
+        });
+        // 按原序重排（逐父容器）
+        const parents = new Set(this.items.map(i => i.el.parentElement));
+        parents.forEach(parent => {
+            const els = Array.from(parent.querySelectorAll('[data-card-id]'))
+                .sort((a, b) => (a._origIndex || 0) - (b._origIndex || 0));
+            els.forEach(el => parent.appendChild(el));
+        });
+        this._resizeCharts();
+    },
+
+    applyPrefs() {
+        let prefs = null;
+        try {
+            const raw = localStorage.getItem('fh.layout.' + this.page);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                prefs = Array.isArray(parsed) ? parsed : (parsed.cards || null);
+            }
+        } catch (_) { prefs = null; }
+        if (!prefs) {
+            // 无偏好：记录原序索引
+            document.querySelectorAll('[data-card-id]').forEach((el, i) => { el._origIndex = i; });
+            return;
+        }
+        // 记录原序
+        document.querySelectorAll('[data-card-id]').forEach((el, i) => { el._origIndex = i; });
+        const map = new Map(prefs.map(p => [p.id, p]));
+        // 1) 重排（逐父容器，按偏好顺序）
+        const parents = new Set(this.items.map(i => i.el.parentElement));
+        parents.forEach(parent => {
+            const idsInParent = prefs.filter(p => parent.querySelector(`[data-card-id="${p.id}"]`));
+            idsInParent.forEach((p, idx) => {
+                const el = parent.querySelector(`[data-card-id="${p.id}"]`);
+                if (!el) return;
+                if (idx === 0) parent.prepend(el);
+                else {
+                    const prev = parent.querySelector(`[data-card-id="${idsInParent[idx - 1].id}"]`);
+                    if (prev && prev !== el) prev.after(el);
+                }
+            });
+        });
+        // 2) 宽度/显隐
+        for (const item of this.items) {
+            const p = map.get(item.id);
+            if (!p) continue;
+            item.el.style.display = p.visible === false ? 'none' : '';
+            if (p.width && p.width !== 'auto') {
+                item._width = p.width;
+                const cols = this._containerCols(item.el);
+                const spanMap = {
+                    full: 0, two: Math.max(1, Math.ceil(cols * 2 / 3)),
+                    half: Math.max(1, Math.ceil(cols / 2)), third: Math.max(1, Math.ceil(cols / 3)),
+                };
+                const span = spanMap[p.width] !== undefined ? spanMap[p.width] : 1;
+                item.el.style.gridColumn = p.width === 'full' ? '1 / -1' : `span ${span} / span ${span}`;
+            }
+        }
+    },
+
+    _save() {
+        try {
+            const cards = this.items.map(i => ({
+                id: i.id,
+                visible: i.el.style.display !== 'none',
+                width: i._width || 'auto',
+            }));
+            localStorage.setItem('fh.layout.' + this.page, JSON.stringify({ version: 1, cards }));
+        } catch (_) { /* localStorage 不可用则忽略 */ }
+    },
+
+    _resizeCharts() {
+        try {
+            if (typeof Chart !== 'undefined' && Chart.instances) {
+                Object.values(Chart.instances).forEach(c => { try { c.resize(); } catch (_) {} });
+            }
+        } catch (_) {}
+    },
+};
+
 // Chart.js 实例注册表：图表颜色在 JS 配置里固化，不走 CSS 变量，
 // 换主题后必须逐个重绘（见 repaintCharts）。用 class 继承包装以保留静态方法。
 window.__charts = new Set();
@@ -389,6 +598,8 @@ function app() {
     return {
         // 导航
         currentPage: 'dashboard',
+        // 布局编辑（阶段7）：编辑模式 + 恢复默认
+        editLayout: false,
         // 图标由 index.html 顶部的 <symbol> sprite 提供，按 id 引用（#i-<id>），
         // 继承 currentColor，主题切换时自动变色，无需重新注入。
         navItems: [
@@ -437,6 +648,10 @@ function app() {
 
             // 初始化主题：首屏已由 index.html 同步脚本用快照注入，这里做异步校准
             this.initTheme();
+
+            // 布局系统（阶段7）：默认页 dashboard 模板注入后初始化
+            setTimeout(() => LayoutKit.init('dashboard'), 200);
+            setTimeout(() => LayoutKit.init('dashboard'), 800);
 
             // 加载系统数据
             await this.loadSystemData();
@@ -627,6 +842,23 @@ function app() {
             if (pageId === 'memory') {
                 setTimeout(() => this.loadMemoryData(), 100);
             }
+            // 布局初始化（阶段7）：模板注入后卡片 DOM 才存在，延迟重试
+            if (pageId === 'dashboard' || pageId === 'backtest') {
+                setTimeout(() => LayoutKit.init(pageId), 100);
+                setTimeout(() => LayoutKit.init(pageId), 500);
+            }
+        },
+
+        toggleLayoutEdit() {
+            this.editLayout = !this.editLayout;
+            LayoutKit.setEditing(this.editLayout);
+            window.__alpineApp && window.__alpineApp.showToast(
+                this.editLayout ? '布局编辑已开启：拖动 ⠿ 排序、宽度按钮调宽、✕ 隐藏' : '布局已保存', 'info');
+        },
+
+        resetLayout() {
+            LayoutKit.reset();
+            window.__alpineApp && window.__alpineApp.showToast('已恢复默认布局', 'success');
         },
 
         async loadPage(name) {
