@@ -778,6 +778,19 @@ class BacktestService:
                 logger.warning(f"[Backtest {task_id}] 策略验证失败: {e}")
                 validation = {"error": str(e), "profile": getattr(request, "validator_profile", "default")}
 
+            # ---- 置信度合成（阶段3：零 LLM，确定性因子）----
+            # 回测场景：验证分 0.60 + 数据完整度 0.40 → {score, tier, factors}
+            confidence_synthesis: Optional[Dict[str, Any]] = None
+            try:
+                from finhack_pro.backtest.confidence import backtest_confidence, data_completeness_from_df
+
+                confidence_synthesis = backtest_confidence(
+                    validation=validation,
+                    data_completeness=data_completeness_from_df(data),
+                )
+            except Exception as e:
+                logger.warning(f"[Backtest {task_id}] 置信度合成失败: {e}")
+
             result = BacktestResult(
                 task_id=task_id,
                 status="completed",
@@ -787,6 +800,7 @@ class BacktestService:
                 benchmark_curve=benchmark_curve,
                 daily_returns=[round(r, 6) for r in getattr(backtest_result, "daily_returns", [])],
                 validation=validation,
+                confidence=confidence_synthesis,
             )
 
             logger.info(f"[Backtest {task_id}] 回测完成: 总收益 {metrics.total_return}%, 交易次数 {metrics.total_trades}")

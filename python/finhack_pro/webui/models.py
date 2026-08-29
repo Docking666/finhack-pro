@@ -234,6 +234,7 @@ class BacktestResult(BaseModel):
     benchmark_curve: List[Dict[str, Any]] = Field(default_factory=list)
     daily_returns: List[float] = Field(default_factory=list, description="每日收益率序列（与 equity_curve 对齐）")
     validation: Optional[Dict[str, Any]] = Field(None, description="策略验证报告（StrategyValidator 7 项检查）")
+    confidence: Optional[Dict[str, Any]] = Field(None, description="置信度合成（阶段3）：{score, tier, factors} 零 LLM 确定性因子")
 
 
 # ============================================================

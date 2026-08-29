@@ -171,6 +171,30 @@
                 <div x-show="validation && !validation.error" class="text-xs text-gray-500 mt-1.5"
                      x-text="'综合评分: ' + (validation.overall_score || 0).toFixed(0) + '/100 · ' + (validation.summary || '')"></div>
             </div>
+
+            <!-- 置信度合成（阶段3：确定性因子，零 LLM 自评） -->
+            <div x-show="confidence" class="mt-3 pt-3 border-t border-line">
+                <div class="flex items-center justify-between mb-1.5">
+                    <span class="text-xs text-gray-400">信号置信度</span>
+                    <span class="px-2 py-0.5 rounded-sm text-xs"
+                          :class="confidence && confidence.tier === 'high' ? 'bg-up-soft text-up' : confidence && confidence.tier === 'medium' ? 'bg-elevated text-warn' : 'bg-elevated text-danger'"
+                          x-text="confidence ? (confidence.tier === 'high' ? '高' : confidence.tier === 'medium' ? '中' : '低') : ''"></span>
+                </div>
+                <div class="text-xs text-gray-500 mb-2">
+                    综合 <span class="text-white font-mono" x-text="confidence ? confidence.score.toFixed(0) : ''"></span>/100
+                    · 确定性因子合成（零 LLM 自评）
+                </div>
+                <div class="space-y-1">
+                    <div class="flex justify-between text-xs" x-show="confidence && confidence.factors && confidence.factors.validation_score != null">
+                        <span class="text-gray-400">策略验证分</span>
+                        <span class="text-white font-mono" x-text="confidence.factors.validation_score.toFixed(0) + '/100'"></span>
+                    </div>
+                    <div class="flex justify-between text-xs" x-show="confidence && confidence.factors">
+                        <span class="text-gray-400">数据完整度</span>
+                        <span class="text-white font-mono" x-text="(confidence.factors.data_completeness * 100).toFixed(0) + '%'"></span>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 

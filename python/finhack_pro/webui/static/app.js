@@ -1074,6 +1074,7 @@ function backtestPage() {
         exporting: false,
         currentResult: null,
         validation: null,   // 策略验证报告（StrategyValidator 7 项）
+        confidence: null,   // 置信度合成（阶段3）：{score, tier, factors}
         activeTrade: null,  // 交易溯源弹窗数据（表格详情/权益曲线点击共用）
         signalLog: {
             rows: [], allRows: [], total: 0, sampled: false,
@@ -1398,6 +1399,7 @@ function backtestPage() {
                     this.progressMessage = '回测完成';
                     this.metrics = data.metrics || {};
                     this.validation = data.validation || null;
+                    this.confidence = null;  // WS 不推置信度，由 fetchResult 填充
 
                     // 立即从 WS 事件数据渲染权益曲线
                     if (data.equity_curve && data.equity_curve.length > 0) {
@@ -1431,6 +1433,7 @@ function backtestPage() {
                     this.trades = result.trades || [];
                     this.currentResult = result; // 保存完整结果用于导出
                     this.validation = result.validation || null;
+                    this.confidence = result.confidence || null;
 
                     // 渲染权益曲线（采用"销毁重建"策略，避免 Chart 实例与 DOM 脱离导致的空白问题）
                     if (result.equity_curve && result.equity_curve.length > 0) {
