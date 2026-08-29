@@ -1317,8 +1317,11 @@ function backtestPage() {
             initial_capital: 1000000,
             strategies: [],              // 多策略组合（≥2 时启用信号聚合+滤波）
             enableHighCostFilters: false, // 高开销滤波器（Transformer/粒子滤波）
+            strategy_params: {},         // 策略参数临时覆盖（回测时传 runner.params）
         },
         strategyOptions: [],  // 内置 + 工坊自有策略
+        paramMeta: [],        // 当前策略的参数元数据（[{name, default}]，回测面板"参数调整"区）
+        paramsMetaAll: {},    // 全部策略参数元数据（/api/backtest/strategies 的 params 字段）
         running: false,
         progress: 0,
         progressMessage: '',
@@ -1589,9 +1592,31 @@ function backtestPage() {
                         });
                     }
                     this.strategyOptions = opts;
+                    // 参数元数据：内置 inspect 提取；工坊策略从 manifest.params_schema
+                    this.paramsMetaAll = resp.data.params || {};
+                    for (const s of resp.data.custom || []) {
+                        const schema = s.params_schema || [];
+                        this.paramsMetaAll[s.id] = schema.map(p => ({
+                            name: p.name || p.key,
+                            default: p.default !== undefined ? p.default : null,
+                        })).filter(p => p.name);
+                    }
+                    this.syncParamMeta();
                 }
             } catch (e) {
                 console.error('加载策略列表失败:', e);
+            }
+        },
+
+        // 策略切换时同步参数元数据；保留已填的覆盖值（按参数名）
+        syncParamMeta() {
+            const meta = (this.paramsMetaAll && this.paramsMetaAll[this.params.strategy]) || [];
+            this.paramMeta = meta;
+            if (!this.params.strategy_params) this.params.strategy_params = {};
+            for (const p of meta) {
+                if (!(p.name in this.params.strategy_params)) {
+                    this.params.strategy_params[p.name] = p.default !== null && p.default !== undefined ? p.default : undefined;
+                }
             }
         },
 
@@ -2725,6 +2750,7 @@ function workshopPage() {
         cloudLoading: false,
         cloudUploading: false,
         cloudUploadPath: 'data/workshop/my_strat-v1.0.0.zip',
+        cloudCode: { name: '', code: '', version: '0.1.0', pkg_type: 'strategy' },  // 文本代码上传
 
         // AI策略生成状态
         strategyForm: {
@@ -3558,6 +3584,34 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
                 this.cloudPackages = [];
             } finally {
                 this.cloudLoading = false;
+            }
+        },
+
+        async uploadCloudCode() {
+            const code = (this.cloudCode.code || '').trim();
+            if (!code) {
+                window.__alpineApp.showToast('请先粘贴策略/因子代码', 'warning');
+                return;
+            }
+            this.cloudUploading = true;
+            try {
+                const resp = await API.post('/api/workshop/cloud/upload_code', {
+                    code,
+                    name: (this.cloudCode.name || '').trim() || '未命名策略',
+                    version: (this.cloudCode.version || '0.1.0').trim() || '0.1.0',
+                    pkg_type: this.cloudCode.pkg_type,
+                });
+                if (resp.success) {
+                    window.__alpineApp.showToast(resp.message || '代码已上传云端', 'success');
+                    this.cloudCode = { name: '', code: '', version: '0.1.0', pkg_type: 'strategy' };
+                    await this.loadCloudPackages();
+                } else {
+                    window.__alpineApp.showToast(resp.detail || resp.message || '上传失败', 'error');
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('上传失败: ' + (e.message || e), 'error');
+            } finally {
+                this.cloudUploading = false;
             }
         },
 

@@ -280,6 +280,21 @@ class CloudUploadRequest(BaseModel):
     package_id: str = Field("", description="策略 ID（默认从文件名推导）")
 
 
+class CloudUploadCodeRequest(BaseModel):
+    """云端文本代码上传请求（合规结构化格式：安全扫描 + manifest + 打包后上传）
+
+    相比 zip 上传，单个策略/因子代码可直接粘贴文本，由服务端完成
+    安全检查与标准工坊包结构封装（manifest.yaml + strategy.py）。
+    """
+    code: str = Field(..., description="策略/因子代码")
+    name: str = Field("未命名策略", description="名称")
+    version: str = Field("0.1.0", description="版本")
+    author: str = Field("anonymous", description="作者")
+    description: str = Field("", description="描述")
+    entry_class: str = Field("", description="策略类名")
+    pkg_type: str = Field("strategy", description="strategy / factor")
+
+
 def _get_cloud() -> WorkshopCloud:
     """获取云端客户端"""
     return WorkshopCloud()
@@ -343,3 +358,68 @@ async def cloud_upload(req: CloudUploadRequest) -> APIResponse:
     except Exception as e:
         logger.error(f"[Workshop] 云端上传失败: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/cloud/upload_code", response_model=APIResponse)
+async def cloud_upload_code(req: CloudUploadCodeRequest) -> APIResponse:
+    """文本代码上传云端（合规结构化格式）
+
+    单个策略/因子代码直接粘贴文本上传：服务端完成
+    1) AST 安全扫描（高危拒绝） 2) 标准工坊包封装（manifest.yaml + 代码）
+    3) 上传云端。替代"必须本地打包 zip"的不合理路径。
+    """
+    import re
+    import tempfile
+    import uuid
+
+    # 1. 安全扫描（上云代码会被他人安装执行，必须过安全关）
+    scanner = PackageScanner()
+    issues = scanner.scan_code(req.code)
+    high_issues = [i for i in issues if i.severity == "high"]
+    if high_issues:
+        detail = "; ".join(i.message for i in high_issues[:5])
+        raise HTTPException(
+            status_code=400,
+            detail=f"代码含高危安全风险，禁止上传云端: {detail}",
+        )
+
+    # 2. 构造包（manifest + 代码 → 临时 zip）
+    pkg_id = f"gen_{uuid.uuid4().hex[:10]}"
+    manifest = StrategyManifest.from_dict({
+        "id": pkg_id,
+        "name": req.name,
+        "version": req.version,
+        "author": req.author,
+        "description": req.description,
+        "type": req.pkg_type if req.pkg_type in ("strategy", "factor") else "strategy",
+        "entry": "strategy.py" if req.pkg_type != "factor" else "factor.py",
+        "entry_class": req.entry_class,
+        "params_schema": StrategyManifest.default_params_schema(),
+    })
+    manifest.touch()
+
+    manager = _get_manager()
+    with tempfile.TemporaryDirectory(prefix="workshop_cloud_") as tmp:
+        tmp_dir = Path(tmp)
+        entry_name = "factor.py" if req.pkg_type == "factor" else "strategy.py"
+        (tmp_dir / entry_name).write_text(req.code, encoding="utf-8")
+        (tmp_dir / "manifest.yaml").write_text(manifest.to_yaml(), encoding="utf-8")
+        pkg_path = manager.pack(strategy_dir=str(tmp_dir), manifest=manifest)
+
+        # 3. 上传云端
+        try:
+            data = _get_cloud().upload_package(
+                zip_path=str(pkg_path),
+                package_id=pkg_id,
+                name=req.name,
+                version=req.version,
+                author=req.author,
+                description=req.description,
+                entry_class=req.entry_class,
+            )
+            return APIResponse(success=True, data=data, message="代码已上传云端（合规打包后）")
+        except WorkshopCloudError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+        except Exception as e:
+            logger.error(f"[Workshop] 云端代码上传失败: {e}")
+            raise HTTPException(status_code=500, detail=str(e)) from e

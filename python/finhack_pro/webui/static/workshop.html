@@ -42,7 +42,7 @@
             <div x-show="cloudError" class="mb-3 p-2.5 rounded-sm bg-elevated border border-warn/50 text-xs text-warn" x-text="cloudError"></div>
             <div x-show="cloudLoading" class="text-sm text-gray-500 py-6 text-center">正在连接云端市场...</div>
             <div x-show="!cloudLoading && cloudPackages.length === 0 && !cloudError" class="text-sm text-gray-500 py-6 text-center">
-                云端市场为空。可在下方上传本地策略包（data/workshop/*.zip）。
+                云端市场为空。可在下方粘贴策略/因子代码上传（合规打包后入云）。
             </div>
             <template x-for="pkg in cloudPackages" :key="pkg.id">
                 <div class="flex items-center justify-between py-2 border-b border-line/50">
@@ -57,17 +57,34 @@
                     </button>
                 </div>
             </template>
+
+            <!-- 文本代码上传（合规结构化：服务端安全扫描 + 打包 manifest + 入云） -->
             <div class="mt-4 pt-3 border-t border-line">
-                <label class="block text-xs text-gray-400 mb-2">上传本地策略包到云端（data/workshop/*.zip）</label>
-                <div class="flex items-center gap-2">
-                    <input type="text" x-model="cloudUploadPath" placeholder="data/workshop/my_strat-v1.0.0.zip"
-                           class="flex-1 bg-inset border border-line rounded-sm px-3 py-1.5 text-sm text-white focus:border-accent focus:outline-none">
-                    <button @click="uploadCloudPackage()" :disabled="cloudUploading"
-                            class="px-3 py-1.5 bg-accent hover:bg-accent/85 disabled:bg-accent/70 text-accent-fg text-xs rounded-sm">
-                        <span x-text="cloudUploading ? '上传中...' : '上传'"></span>
-                    </button>
-                </div>
-                <p class="text-[10px] text-gray-600 mt-1.5">需配置 workshop.base_url（CloudBase 云函数地址）。未配置时显示连接错误，不影响本地工坊。</p>
+                <details>
+                    <summary class="text-xs text-gray-400 cursor-pointer select-none hover:text-gray-200 mb-2">上传代码到云端（策略/因子）</summary>
+                    <div class="space-y-2">
+                        <div class="flex gap-2">
+                            <input type="text" x-model="cloudCode.name" placeholder="名称（如：RSI 反转策略）"
+                                   class="flex-1 bg-inset border border-line rounded-sm px-3 py-1.5 text-sm text-white focus:border-accent focus:outline-none">
+                            <select x-model="cloudCode.pkg_type"
+                                    class="bg-inset border border-line rounded-sm px-2 py-1.5 text-sm text-gray-300">
+                                <option value="strategy">策略</option>
+                                <option value="factor">因子</option>
+                            </select>
+                            <input type="text" x-model="cloudCode.version" placeholder="版本 0.1.0"
+                                   class="w-24 bg-inset border border-line rounded-sm px-2 py-1.5 text-sm text-white font-mono focus:border-accent focus:outline-none">
+                        </div>
+                        <textarea x-model="cloudCode.code" rows="6" placeholder="粘贴策略/因子 Python 代码..."
+                                  class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white font-mono focus:border-accent focus:outline-none"></textarea>
+                        <div class="flex items-center justify-between gap-2">
+                            <p class="text-[10px] text-gray-600">上传前服务端执行 AST 安全扫描（高危拒绝）；自动封装为 manifest.yaml + 代码的标准包格式。需配置 workshop.base_url。</p>
+                            <button @click="uploadCloudCode()" :disabled="cloudUploading || !cloudCode.code.trim()"
+                                    class="px-3 py-1.5 bg-accent hover:bg-accent/85 disabled:bg-accent/70 text-accent-fg text-xs rounded-sm transition-colors flex-shrink-0">
+                                <span x-text="cloudUploading ? '上传中...' : '上传云端'"></span>
+                            </button>
+                        </div>
+                    </div>
+                </details>
             </div>
         </div>
     </div>
@@ -432,17 +449,16 @@
                         <p class="text-sm text-gray-300" x-text="selectedTemplate.full_description"></p>
                     </div>
 
-                    <!-- 参数表（可编辑默认值：只改数值不改参数名，临时覆盖） -->
+                    <!-- 参数表（只读展示；临时调整请在回测面板"策略参数"区进行） -->
                     <div x-show="selectedTemplate.params && selectedTemplate.params.length > 0">
                         <div class="flex items-center justify-between mb-2">
-                            <h4 class="text-xs text-gray-500">参数配置（临时调整默认值后点"快速测试"验证）</h4>
-                            <button @click="initTempParams()" class="text-xs text-gray-500 hover:text-gray-300">恢复默认</button>
+                            <h4 class="text-xs text-gray-500">参数配置（临时调整请到回测面板"策略参数"区）</h4>
                         </div>
                         <table class="w-full text-xs">
                             <thead>
                                 <tr class="text-gray-500 border-b border-line">
                                     <th class="text-left py-1.5 px-2">参数名</th>
-                                    <th class="text-left py-1.5 px-2">临时值</th>
+                                    <th class="text-left py-1.5 px-2">默认值</th>
                                     <th class="text-left py-1.5 px-2">范围</th>
                                     <th class="text-left py-1.5 px-2">说明</th>
                                 </tr>
@@ -451,11 +467,7 @@
                                 <template x-for="param in selectedTemplate.params" :key="param.name">
                                     <tr class="border-b border-line/50">
                                         <td class="py-1.5 px-2 text-white font-mono" x-text="param.name"></td>
-                                        <td class="py-1.5 px-2">
-                                            <input type="number" step="any" :value="tempParams[param.name]"
-                                                   @input="tempParams[param.name] = $event.target.value"
-                                                   class="w-20 bg-inset border border-line rounded-sm px-1.5 py-0.5 text-accent font-mono focus:border-accent focus:outline-none">
-                                        </td>
+                                        <td class="py-1.5 px-2 text-accent font-mono" x-text="param.default"></td>
                                         <td class="py-1.5 px-2 text-gray-400" x-text="param.range || '-'"></td>
                                         <td class="py-1.5 px-2 text-gray-400" x-text="param.desc"></td>
                                     </tr>

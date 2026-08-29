@@ -19,7 +19,7 @@
                     <div x-show="strategyDropdownOpen" x-cloak
                          class="absolute z-30 mt-1 w-full bg-surface border border-line rounded-sm shadow-lg max-h-72 overflow-auto">
                         <template x-for="s in strategyOptions" :key="s.id">
-                            <button type="button" @click="if (!s.disabled) { params.strategy = s.id; strategyDropdownOpen = false; }"
+                            <button type="button" @click="if (!s.disabled) { params.strategy = s.id; strategyDropdownOpen = false; syncParamMeta(); }"
                                     :class="s.id === params.strategy ? 'bg-elevated text-white' : s.disabled ? 'text-gray-600 cursor-not-allowed' : 'text-gray-300 hover:bg-elevated'"
                                     class="w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2">
                                 <span x-text="s.name"></span>
@@ -31,6 +31,27 @@
                         <div x-show="strategyOptions.length === 0" class="px-3 py-2 text-xs text-gray-500">策略加载中...</div>
                     </div>
                 </div>
+            </div>
+            <!-- 策略参数（临时调整默认值，不改参数名；回测时随请求传给策略） -->
+            <div class="lg:col-span-3" x-show="paramMeta.length > 0">
+                <details class="bg-inset border border-line rounded-sm">
+                    <summary class="px-3 py-2 text-xs text-gray-400 cursor-pointer select-none hover:text-gray-200">
+                        策略参数（临时调整）
+                        <span class="text-gray-600 ml-1" x-text="'共 ' + paramMeta.length + ' 项'"></span>
+                    </summary>
+                    <div class="px-3 pb-3 pt-1 grid grid-cols-2 md:grid-cols-4 gap-2">
+                        <template x-for="p in paramMeta" :key="p.name">
+                            <label class="block">
+                                <span class="text-[10px] text-gray-500 font-mono" x-text="p.name"></span>
+                                <input type="number" step="any"
+                                       :value="params.strategy_params[p.name] !== undefined ? params.strategy_params[p.name] : p.default"
+                                       @input="params.strategy_params[p.name] = $event.target.value === '' ? undefined : Number($event.target.value)"
+                                       class="w-full bg-surface border border-line rounded-sm px-2 py-1 text-xs text-white font-mono focus:border-accent focus:outline-none">
+                            </label>
+                        </template>
+                    </div>
+                    <div class="px-3 pb-2 text-[10px] text-gray-600">仅修改当前回测的参数值，不改变策略代码；留空则用默认值</div>
+                </details>
             </div>
             <div class="lg:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">多策略组合（勾选 ≥2 个启用信号聚合器 + 滤波管道）</label>

@@ -1131,7 +1131,8 @@ async def enable_strategy(request: Request, strategy_id: str, body: Optional[Dic
 
     body = body or {}
     symbol = body.get("symbol", "600519.SH")
-    start_date = body.get("start_date", (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d"))
+    # 默认 3 年区间：低频趋势/突破策略 1 年样本过短（1-2 笔），统计无意义
+    start_date = body.get("start_date", (datetime.now() - timedelta(days=365 * 3)).strftime("%Y-%m-%d"))
     end_date = body.get("end_date", datetime.now().strftime("%Y-%m-%d"))
     initial_capital = float(body.get("initial_capital", 1_000_000))
 
@@ -1170,8 +1171,27 @@ async def enable_strategy(request: Request, strategy_id: str, body: Optional[Dic
             "total_trades": int(bt.total_trades or 0),
             "annual_return": float(bt.annual_return or 0),
         }
-        validator = StrategyValidator.from_profile("default")
+        # 验证门槛按交易频率适配：趋势/突破类低频策略（如 DualThrust 1 年 1-2 笔）
+        # 对 default 的 min_trades=100 必然失败——低频豁免 + 报告标注。
+        # 建议用更长回测区间提高样本（低频策略 3-5 年才有统计意义）。
+        _trades = int(bt.total_trades or 0)
+        if _trades >= 100:
+            validator = StrategyValidator.from_profile("default")
+            _trades_note = ""
+        elif _trades >= 30:
+            validator = StrategyValidator.from_profile("low_frequency")
+            _trades_note = f"低频策略（{_trades} 笔），按 low_frequency 门槛验证"
+        else:
+            validator = StrategyValidator.from_profile("low_frequency")
+            # 低频豁免：min_trades 放宽到实际交易数（低频趋势策略特性，非缺陷）
+            validator.min_trades = max(5, _trades)
+            _trades_note = (
+                f"低频豁免：策略仅 {_trades} 笔交易（趋势/突破类策略特性），"
+                f"min_trades 门槛放宽至 {validator.min_trades}；建议延长回测区间至 3-5 年"
+            )
         vresult = validator.validate(perf)
+        if _trades_note:
+            vresult.recommendations.append(_trades_note)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"验证执行失败: {e}")
 

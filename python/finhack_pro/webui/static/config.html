@@ -281,50 +281,6 @@
         </button>
     </div>
 
-    <!-- 策略分享 -->
-    <div class="bg-surface rounded-sm p-4 border border-line">
-        <h3 class="text-sm font-medium text-white mb-4 flex items-center gap-2">
-            <svg class="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"></path></svg>
-            策略分享
-        </h3>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <!-- 分享策略 -->
-            <div>
-                <label class="block text-xs text-gray-400 mb-1">分享当前策略配置</label>
-                <button @click="shareStrategy()" :disabled="sharing"
-                        class="w-full px-4 py-2 bg-accent hover:bg-accent/85 disabled:bg-accent/70 text-accent-fg text-sm rounded-sm transition-colors flex items-center justify-center gap-2">
-                    <template x-if="!sharing"><span>生成分享码</span></template>
-                    <template x-if="sharing"><span class="spinner !w-4 !h-4 !border-2"></span></template>
-                </button>
-                <div x-show="shareCode" class="mt-2">
-                    <label class="block text-xs text-gray-400 mb-1">分享码</label>
-                    <div class="flex gap-2">
-                        <input type="text" x-model="shareCode" readonly
-                               class="flex-1 bg-inset border border-line rounded-sm px-3 py-2 text-xs text-white font-mono">
-                        <button @click="copyShareCode()" class="px-3 py-2 bg-elevated hover:bg-line-strong text-white text-xs rounded-sm">
-                            复制
-                        </button>
-                    </div>
-                </div>
-            </div>
-            <!-- 导入策略 -->
-            <div>
-                <label class="block text-xs text-gray-400 mb-1">导入分享的策略</label>
-                <div class="flex gap-2">
-                    <input type="text" x-model="importCode" placeholder="粘贴分享码..."
-                           class="flex-1 bg-inset border border-line rounded-sm px-3 py-2 text-xs text-white font-mono">
-                    <button @click="importStrategy()" :disabled="importing || !importCode"
-                            class="px-4 py-2 bg-ok hover:bg-ok/85 disabled:bg-green-800 text-white text-xs rounded-sm transition-colors">
-                        <template x-if="!importing"><span>导入</span></template>
-                        <template x-if="importing"><span class="spinner !w-3 !h-3 !border-2"></span></template>
-                    </button>
-                </div>
-                <p x-show="importError" class="mt-1 text-xs text-danger" x-text="importError"></p>
-                <p x-show="importSuccess" class="mt-1 text-xs text-ok" x-text="importSuccess"></p>
-            </div>
-        </div>
-    </div>
-
     <!-- 界面设置：主题 / 涨跌配色 -->
     <div class="bg-surface rounded-sm p-4 border border-line">
         <h3 class="text-sm font-medium text-white mb-4 flex items-center gap-2">

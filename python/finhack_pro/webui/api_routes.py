@@ -254,6 +254,7 @@ async def list_backtest_strategies():
                 continue
             label = d.name
             status = "draft"  # 阶段6 安全边界：未验证默认草稿
+            params_schema: list = []
             manifest = d / "manifest.yaml"
             if manifest.exists():
                 try:
@@ -261,10 +262,31 @@ async def list_backtest_strategies():
                     m = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
                     label = m.get("strategy_name") or m.get("name") or d.name
                     status = m.get("status") or "draft"
+                    ps = m.get("params_schema") or {}
+                    params_schema = ps.get("properties", []) if isinstance(ps, dict) else []
                 except Exception:
                     pass
-            custom.append({"id": d.name, "name": label, "status": status})
-    return APIResponse(data={"builtin": builtin, "custom": custom})
+            custom.append({"id": d.name, "name": label, "status": status, "params_schema": params_schema})
+
+    # 内置策略参数元数据（回测面板"参数调整"区用，inspect 提取 __init__ 默认值）
+    import inspect as _inspect
+    from finhack_pro.backtest.runner import BacktestRunner
+
+    params_meta: Dict[str, list] = {}
+    for sid in builtin:
+        try:
+            cls = BacktestRunner.load_strategy(sid).__class__
+            sig = _inspect.signature(cls.__init__)
+            meta = []
+            for pname, p in sig.parameters.items():
+                if pname == "self":
+                    continue
+                default = p.default if p.default is not _inspect.Parameter.empty else None
+                meta.append({"name": pname, "default": default, "required": default is None})
+            params_meta[sid] = meta
+        except Exception:
+            params_meta[sid] = []
+    return APIResponse(data={"builtin": builtin, "custom": custom, "params": params_meta})
 
 
 @router.get("/api/backtest/sweep/params", response_model=APIResponse)
