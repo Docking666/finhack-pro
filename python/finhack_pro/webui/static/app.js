@@ -339,25 +339,6 @@ function getAgentColor(agentId) {
 }
 
 /**
- * 获取记忆类型颜色
- */
-function getMemoryTypeColor(type) {
-    const colors = {
-        'market_observation': 'bg-blue-900/50 text-blue-400',
-        'analysis_report': 'bg-cyan-900/50 text-cyan-400',
-        'news_event': 'bg-purple-900/50 text-purple-400',
-        'sentiment': 'bg-pink-900/50 text-pink-400',
-        'strategy_decision': 'bg-amber-900/50 text-amber-400',
-        'risk_decision': 'bg-red-900/50 text-red-400',
-        'execution_record': 'bg-green-900/50 text-green-400',
-        'trade_result': 'bg-emerald-900/50 text-emerald-400',
-        'agent_thought': 'bg-indigo-900/50 text-indigo-400',
-        'system_event': 'bg-gray-700/50 text-gray-400',
-    };
-    return colors[type] || 'bg-gray-700/50 text-gray-400';
-}
-
-/**
  * 获取记忆类型中文名
  */
 function getMemoryTypeName(type) {
@@ -635,8 +616,11 @@ function app() {
         scheme: 'cn',
         themeId: 'mono-dark',
         themes: [],
+        // 壁纸个性化（本浏览器生效）：上传即应用 + 蒙版不透明度 + 持久化
         wallpaperMsg: '',
         wallpaperOk: false,
+        wallpaperPreviewUrl: '',
+        wallpaperOverlay: 0.5,
 
         get currentPageTitle() {
             const item = this.navItems.find(n => n.id === this.currentPage);
@@ -678,6 +662,95 @@ function app() {
             this.themeId = this._lsGet('fh.theme.id')
                 || (this.theme === 'dark' ? 'mono-dark' : 'mono-light');
             this.refreshThemes(true);
+            // 恢复用户上传的壁纸（独立于主题，刷新/重启后仍生效）
+            this._initWallpaperFromStore();
+        },
+
+        // ---------- 壁纸个性化（上传即生效 + 蒙版 + 持久化） ----------
+        _userWallpaper() {
+            try {
+                const raw = localStorage.getItem('fh.theme.wallpaper');
+                return raw ? JSON.parse(raw) : null;
+            } catch (_) { return null; }
+        },
+
+        _initWallpaperFromStore() {
+            const wp = this._userWallpaper();
+            if (wp && wp.url) {
+                this.wallpaperPreviewUrl = wp.url;
+                this.wallpaperOverlay = typeof wp.overlay === 'number' ? wp.overlay : 0.5;
+                this.wallpaperOk = true;
+                this.wallpaperMsg = '壁纸已加载（本浏览器保存）';
+            }
+            // 主题应用后由 applyTheme 里的 _applyWallpaper 统一渲染
+        },
+
+        async uploadWallpaper(event) {
+            const input = event.target;
+            const file = input.files && input.files[0];
+            if (!file) return;
+
+            this.wallpaperMsg = '上传中...';
+            this.wallpaperOk = false;
+            const form = new FormData();
+            form.append('file', file);
+            try {
+                const res = await fetch('/api/themes/wallpaper', { method: 'POST', body: form });
+                const json = await res.json();
+                if (json && json.success) {
+                    const wp = { url: json.data.url, overlay: this.wallpaperOverlay };
+                    try { localStorage.setItem('fh.theme.wallpaper', JSON.stringify(wp)); } catch (_) {}
+                    this.wallpaperPreviewUrl = wp.url;
+                    this.wallpaperOk = true;
+                    this.wallpaperMsg = '壁纸已生效（本浏览器保存，刷新后仍保留）';
+                    this._applyWallpaper(wp);
+                } else {
+                    this.wallpaperOk = false;
+                    this.wallpaperMsg = (json && json.detail) || (json && json.message) || '上传失败';
+                }
+            } catch (e) {
+                this.wallpaperOk = false;
+                this.wallpaperMsg = '上传失败：' + (e && e.message ? e.message : '网络错误');
+            } finally {
+                input.value = '';
+            }
+        },
+
+        clearWallpaper() {
+            try { localStorage.removeItem('fh.theme.wallpaper'); } catch (_) {}
+            this.wallpaperPreviewUrl = '';
+            this.wallpaperOk = false;
+            this.wallpaperMsg = '壁纸已移除（回落到主题自带壁纸，如有）';
+            this._applyWallpaper(null);
+        },
+
+        setWallpaperOverlay(v) {
+            this.wallpaperOverlay = v;
+            const wp = this._userWallpaper();
+            if (wp && wp.url) {
+                wp.overlay = v;
+                try { localStorage.setItem('fh.theme.wallpaper', JSON.stringify(wp)); } catch (_) {}
+                this._applyWallpaper(wp);
+            }
+        },
+
+        _applyWallpaper(wp) {
+            const root = document.documentElement;
+            const keys = ['--wallpaper-url', '--wallpaper-size', '--wallpaper-repeat',
+                          '--wallpaper-position', '--wallpaper-overlay', '--wallpaper-blur'];
+            if (!wp || !wp.url) {
+                keys.forEach(k => root.style.removeProperty(k));
+                return;
+            }
+            const mode = wp.mode || 'cover';
+            root.style.setProperty('--wallpaper-url', `url("${wp.url}")`);
+            root.style.setProperty('--wallpaper-size',
+                mode === 'contain' ? 'contain' : (mode === 'tile' ? 'auto' : 'cover'));
+            root.style.setProperty('--wallpaper-repeat', mode === 'tile' ? 'repeat' : 'no-repeat');
+            root.style.setProperty('--wallpaper-position', wp.position || 'center');
+            // 默认 0.5 遮罩，避免壁纸喧宾夺主影响文字可读性
+            root.style.setProperty('--wallpaper-overlay', String(wp.overlay != null ? wp.overlay : 0.5));
+            root.style.setProperty('--wallpaper-blur', `${wp.blur || 0}px`);
         },
 
         async refreshThemes(apply) {
@@ -700,7 +773,8 @@ function app() {
                 const data = json.data;
                 const tokens = data.tokens || {};
                 if (window.__fhApplyTokens) window.__fhApplyTokens(tokens);
-                this._applyWallpaper(data.wallpaper);
+                // 用户上传的壁纸优先于主题自带壁纸
+                this._applyWallpaper(this._userWallpaper() || data.wallpaper);
 
                 const nextMode = mode || data.mode || 'dark';
                 const nextScheme = scheme || data.scheme || 'cn';
@@ -728,46 +802,17 @@ function app() {
         },
 
         toggleTheme() {
+            // 明暗切换功能：已由"主题下拉框"覆盖（mono-dark / mono-light 等主题本身含明暗变体），
+            // 独立快捷入口去除；保留方法以防外部调用残留。
             const next = this.theme === 'dark' ? 'light' : 'dark';
             const isBuiltin = this.themeId === 'mono-dark' || this.themeId === 'mono-light';
             const target = isBuiltin ? (next === 'dark' ? 'mono-dark' : 'mono-light') : this.themeId;
             this.applyTheme(target, next, this.scheme);
         },
 
-        toggleScheme() {
-            this.applyTheme(this.themeId, this.theme, this.scheme === 'cn' ? 'us' : 'cn');
-        },
-
         setScheme(scheme) {
             if (this.scheme === scheme) return;
             this.applyTheme(this.themeId, this.theme, scheme);
-        },
-
-        async uploadWallpaper(event) {
-            const input = event.target;
-            const file = input.files && input.files[0];
-            if (!file) return;
-
-            this.wallpaperMsg = '上传中...';
-            this.wallpaperOk = false;
-            const form = new FormData();
-            form.append('file', file);
-            try {
-                const res = await fetch('/api/themes/wallpaper', { method: 'POST', body: form });
-                const json = await res.json();
-                if (json && json.success) {
-                    this.wallpaperOk = true;
-                    this.wallpaperMsg = '已上传：' + json.data.url + '（在主题文件的 wallpaper.url 中引用即可生效）';
-                } else {
-                    this.wallpaperOk = false;
-                    this.wallpaperMsg = (json && json.message) || (json && json.detail) || '上传失败';
-                }
-            } catch (e) {
-                this.wallpaperOk = false;
-                this.wallpaperMsg = '上传失败：' + (e && e.message ? e.message : '网络错误');
-            } finally {
-                input.value = '';
-            }
         },
 
         _applyCustomCss(css) {
@@ -782,25 +827,6 @@ function app() {
                 document.head.appendChild(el);
             }
             el.textContent = css;
-        },
-
-        _applyWallpaper(wp) {
-            const root = document.documentElement;
-            const keys = ['--wallpaper-url', '--wallpaper-size', '--wallpaper-repeat',
-                          '--wallpaper-position', '--wallpaper-overlay', '--wallpaper-blur'];
-            if (!wp || !wp.url) {
-                keys.forEach(k => root.style.removeProperty(k));
-                return;
-            }
-            const mode = wp.mode || 'cover';
-            root.style.setProperty('--wallpaper-url', `url("${wp.url}")`);
-            root.style.setProperty('--wallpaper-size',
-                mode === 'contain' ? 'contain' : (mode === 'tile' ? 'auto' : 'cover'));
-            root.style.setProperty('--wallpaper-repeat', mode === 'tile' ? 'repeat' : 'no-repeat');
-            root.style.setProperty('--wallpaper-position', wp.position || 'center');
-            // 默认 0.5 遮罩，避免壁纸喧宾夺主影响文字可读性
-            root.style.setProperty('--wallpaper-overlay', String(wp.overlay != null ? wp.overlay : 0.5));
-            root.style.setProperty('--wallpaper-blur', `${wp.blur || 0}px`);
         },
 
         repaintCharts() {
@@ -2309,6 +2335,14 @@ function agentsPage() {
             // 看门狗定时器：检测长时间无更新的 running 步骤，提示用户
             this._watchdogTimer = setInterval(() => {
                 if (!this.pipelineRunning) return;
+                // 服务器重启/WS 断开场景：任务状态已不可信，明确提示刷新
+                const appState = window.__alpineApp;
+                if (appState && !appState.wsConnected) {
+                    if (!this.thinkingMessage.includes('连接已断开')) {
+                        this.thinkingMessage = '⚠ 实时连接已断开（服务器可能已重启），当前任务状态可能已失效——请刷新页面查看真实状态，或点"取消"归档';
+                    }
+                    return;
+                }
                 const runningStep = this.pipelineSteps.find(s => s.status === 'running');
                 if (runningStep && this._lastThinkingTs > 0 && (Date.now() - this._lastThinkingTs) > 30000) {
                     if (!this.thinkingMessage.includes('响应较慢')) {
@@ -2424,15 +2458,20 @@ function agentsPage() {
         },
 
         async cancelPipeline() {
-            if (!this.currentRunId) return;
+            // 优先取消当前发起 run；页面刷新/服务器重启后 currentRunId 为空时，
+            // 回退到磁盘恢复的未完成任务（pendingRun）——否则"一直运行"却点不动取消
+            const target = this.currentRunId || (this.pendingRun && this.pendingRun.run_id);
+            if (!target) return;
             try {
-                const resp = await API.cancelPipeline(this.currentRunId);
-                if (resp.success) {
+                const resp = await API.cancelPipeline(target);
+                if (resp.success && resp.data && resp.data.cancel_requested) {
                     window.__alpineApp.showToast('取消请求已发送', 'info');
+                } else if (resp.success) {
+                    window.__alpineApp.showToast('任务已结束（状态: ' + (resp.data && resp.data.status) + '），无需取消', 'info');
                 } else {
                     window.__alpineApp.showToast('任务不在运行中，状态: ' + (resp.data && resp.data.status), 'warning');
-                    this.loadData();
                 }
+                this.loadData();
             } catch (e) {
                 window.__alpineApp.showToast('取消失败: ' + e.message, 'error');
             }
@@ -3595,7 +3634,6 @@ window.formatMoney = formatMoney;
 window.formatComponentName = formatComponentName;
 window.renderMarkdown = renderMarkdown;
 window.getAgentColor = getAgentColor;
-window.getMemoryTypeColor = getMemoryTypeColor;
 window.getMemoryTypeName = getMemoryTypeName;
 window.getImportanceName = getImportanceName;
 window.app = app;
