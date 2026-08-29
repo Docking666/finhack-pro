@@ -219,7 +219,7 @@ class ConfigService:
         """测试 OpenAI 兼容端点连接（任意服务商，只测 GET /models 不传模型名）"""
         import httpx
 
-        key = api_key or self._config.llm.openai_api_key
+        key = api_key if api_key is not None else self._config.llm.openai_api_key
         url = base_url or self._config.llm.openai_base_url
         if not key:
             return ConnectionTestResult(
@@ -275,7 +275,7 @@ class ConfigService:
         """测试 Anthropic 协议连接（支持自定义 base_url）"""
         import httpx
 
-        key = api_key or self._config.llm.anthropic_api_key
+        key = api_key if api_key is not None else self._config.llm.anthropic_api_key
         if not key:
             return ConnectionTestResult(
                 provider=provider,
@@ -627,16 +627,15 @@ class BacktestService:
                 )
             else:
                 strategy = BacktestRunner.load_strategy(request.strategy)
-                if request.strategy_params:
-                    for key, value in request.strategy_params.items():
-                        if hasattr(strategy, key):
-                            setattr(strategy, key, value)
+                # 参数经 runner.run(params=...) → Context.params → strategy.on_init 合并进 _params。
+                # 原先的 setattr 只创建同名实例属性，而策略实际读 _params 字典，参数从不生效（B2）。
 
-            # 差异化策略（niche）：预计算技术字段 → runner 注入 BarData.extra；
-            # 并喂入 Agent 扫描的微观事件（实时链路：事件驱动/情绪反转/龙虎榜跟随）
+            # 技术字段预计算对所有策略统一执行（B1 修复：原先仅 niche 策略执行，
+            # 导致普通策略 BarData.extra 恒为空，依赖指标的条件可能永不触发）；
+            # runner 注入 BarData.extra；差异化策略额外喂入 Agent 扫描的微观事件（实时链路）
+            data = _precompute_niche_fields(data)
             _strat_ids = request.strategies or [request.strategy]
             if any(s.lower() in _NICHE_STRATEGY_IDS for s in _strat_ids):
-                data = _precompute_niche_fields(data)
                 micro_events = getattr(request, "micro_events", None)
                 if micro_events and hasattr(strategy, "feed_micro_events"):
                     try:
@@ -685,6 +684,7 @@ class BacktestService:
                     commission_rate=request.commission_rate,
                     stamp_tax_rate=request.stamp_tax_rate,
                     slippage=request.slippage,
+                    params=request.strategy_params,
                     progress_callback=_on_progress,
                 )
             )
@@ -725,18 +725,19 @@ class BacktestService:
                         "equity": round(request.initial_capital * (row['close'] / start_price), 2),
                     })
 
-            # 转换交易记录
+            # 转换交易记录（B4 修复：runner 字典键是 action 而非 direction，
+            # 原先 direction 恒为 'buy'、reason 恒为 '策略信号'）
             trades = []
             for t in backtest_result.trades:
                 trades.append(TradeRecord(
                     date=t.get('date', ''),
                     symbol=t.get('symbol', symbol),
-                    direction=t.get('direction', 'buy'),
+                    direction=t.get('action', 'buy'),
                     price=t.get('price', 0),
                     volume=t.get('volume', 0),
                     commission=t.get('commission', 0),
                     pnl=t.get('pnl', 0),
-                    reason=t.get('reason', '策略信号'),
+                    reason=t.get('strategy_name', '策略信号'),
                 ))
 
             metrics = BacktestMetrics(

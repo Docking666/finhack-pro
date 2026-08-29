@@ -1326,6 +1326,7 @@ class AgentCoordinator:
                     micro_event_report=micro_event_report,
                     current_price=current_price,
                     report_paths=report_paths,
+                    run_id=run_id,
                 )
 
             strategy_signal = await self._run_step(run_id, 5, "strategy_signal", _run_strategy, cancel_check=cancel_check)
@@ -1575,6 +1576,7 @@ class AgentCoordinator:
         micro_event_report: Any = None,
         current_price: Optional[float] = None,
         report_paths: Optional[Dict[str, str]] = None,
+        run_id: Optional[str] = None,
     ) -> Any:
         """使用多空辩论模式生成策略
 
@@ -1590,6 +1592,7 @@ class AgentCoordinator:
             current_price: 当前价格
             report_paths: 各报告 md 落盘路径字典（三层架构第2层），
                 如 {"analysis": ".../step1_market_analysis.md", ...}
+            run_id: 流水线 run_id（B5：透传给 debate() 落盘辩论结果）
 
         Returns:
             StrategySignal 策略信号
@@ -1620,6 +1623,7 @@ class AgentCoordinator:
                     current_price=current_price,
                     report_paths=report_paths,
                     sentiment_data=sentiment_data,
+                    run_dir=self._get_pipeline_dir(run_id) if run_id else None,
                 )
                 return signal
             except Exception as e:

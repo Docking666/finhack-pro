@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -421,6 +423,7 @@ class StrategyGeneratorAgent(BaseAgent):
         current_price: Optional[float] = None,
         report_paths: Optional[Dict[str, str]] = None,
         sentiment_data: Optional[Dict[str, Any]] = None,
+        run_dir: Optional[str] = None,
     ) -> StrategySignal:
         """执行多空辩论并生成最终策略信号
 
@@ -436,6 +439,7 @@ class StrategyGeneratorAgent(BaseAgent):
             current_price: 当前价格(可选)
             report_paths: 各报告 md 落盘路径字典
             sentiment_data: 股吧关注度/排名数据（FetchSentimentDataTool 输出）
+            run_dir: 流水线 run 目录；提供则把 BullBearDebateResult 落盘 debate.json（B5 修复）
 
         Returns:
             StrategySignal 策略信号
@@ -577,6 +581,18 @@ class StrategyGeneratorAgent(BaseAgent):
             f"bull={debate_result.bull_strength:.2f}, bear={debate_result.bear_strength:.2f}, "
             f"confidence={debate_result.confidence:.2f}"
         )
+
+        # B5 修复：辩论结果落盘到 run 目录（供决策报告/置信度合成消费，
+        # 原先仅打印日志，流水线重启后不可追溯）
+        if run_dir:
+            try:
+                os.makedirs(run_dir, exist_ok=True)
+                debate_path = os.path.join(run_dir, "debate.json")
+                with open(debate_path, "w", encoding="utf-8") as f:
+                    json.dump(debate_result.model_dump(), f, ensure_ascii=False, indent=2)
+                self._logger.info(f"[{symbol}] 辩论结果已落盘: {debate_path}")
+            except Exception as e:
+                self._logger.warning(f"[{symbol}] 辩论结果落盘失败: {e}")
 
         # 综合辩论结果生成最终策略信号
         await self.emit_progress("🎯 策略信号生成中...")

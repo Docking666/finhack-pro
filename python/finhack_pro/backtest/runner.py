@@ -292,6 +292,7 @@ class BacktestRunner:
                                 "price": round(price, 2),
                                 "volume": volume,
                                 "commission": round(commission, 2),
+                                "strategy_name": signal.strategy_name or "策略信号",
                             })
 
                 elif signal.direction == SignalDirection.SELL and position_volume > 0:
@@ -311,6 +312,7 @@ class BacktestRunner:
                         "volume": position_volume,
                         "commission": round(commission + stamp_tax, 2),
                         "pnl": round(pnl, 2),
+                        "strategy_name": signal.strategy_name or "策略信号",
                     })
                     position_volume = 0
                     position_cost = 0.0

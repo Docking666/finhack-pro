@@ -232,36 +232,60 @@ class RiskManagerAgent(BaseAgent):
         return decision
 
     def _rule_engine_check(self, signal: StrategySignal) -> Dict[str, Any]:
-        """规则引擎硬性检查
+        """规则引擎硬性检查（B6 修复：逐项结构化输出 checks 数组）
 
         Args:
             signal: 策略信号
 
         Returns:
-            包含passed和reasons的字典
+            {passed, checks: [{name, passed, detail}], reasons, warnings}
+            checks 供决策报告/置信度合成逐项消费；reasons/warnings 保持向后兼容
         """
         reasons: List[str] = []
         warnings_list: List[str] = []
+        checks: List[Dict[str, Any]] = []
+
+        def _add_check(name: str, passed: bool, detail: str, *, is_warning: bool = False) -> None:
+            checks.append({"name": name, "passed": passed, "detail": detail})
+            if is_warning:
+                warnings_list.append(detail)
+            elif not passed:
+                reasons.append(detail)
 
         # 检查1: 信号方向为HOLD时直接通过(不交易)
         if signal.direction.value == "hold":
-            return {"passed": True, "reasons": [], "warnings": []}
+            return {
+                "passed": True,
+                "checks": [{"name": "hold_direct_pass", "passed": True, "detail": "HOLD 信号直通（不交易）"}],
+                "reasons": [],
+                "warnings": [],
+            }
 
         # 检查2: 单只股票仓位限制
         if signal.position_size_pct > self._max_position_pct:
-            reasons.append(
-                f"仓位超限: {signal.position_size_pct:.1%} > {self._max_position_pct:.1%}"
+            _add_check(
+                "position_limit",
+                False,
+                f"仓位超限: {signal.position_size_pct:.1%} > {self._max_position_pct:.1%}",
             )
+        else:
+            _add_check("position_limit", True, f"仓位 {signal.position_size_pct:.1%} ≤ 上限 {self._max_position_pct:.1%}")
 
         # 检查3: 总仓位限制
         current_total_position = sum(
             pos.get("weight", 0) for pos in self._portfolio.positions
         )
         if current_total_position + signal.position_size_pct > self._max_total_position:
-            reasons.append(
-                f"总仓位将超限: "
-                f"{current_total_position + signal.position_size_pct:.1%} > "
-                f"{self._max_total_position:.1%}"
+            _add_check(
+                "total_position_limit",
+                False,
+                f"总仓位将超限: {current_total_position + signal.position_size_pct:.1%} > {self._max_total_position:.1%}",
+            )
+        else:
+            _add_check(
+                "total_position_limit",
+                True,
+                f"总仓位 {current_total_position + signal.position_size_pct:.1%} ≤ 上限 {self._max_total_position:.1%}",
             )
 
         # 检查4: 日亏损限制
@@ -270,33 +294,50 @@ class RiskManagerAgent(BaseAgent):
                 self._portfolio.total_value, 1
             )
             if daily_loss_pct >= self._daily_loss_limit:
-                reasons.append(
-                    f"今日亏损已达上限: {daily_loss_pct:.2%} >= {self._daily_loss_limit:.2%}"
+                _add_check(
+                    "daily_loss_limit",
+                    False,
+                    f"今日亏损已达上限: {daily_loss_pct:.2%} >= {self._daily_loss_limit:.2%}",
                 )
+            else:
+                _add_check("daily_loss_limit", True, f"今日亏损 {daily_loss_pct:.2%} < 上限 {self._daily_loss_limit:.2%}")
+        else:
+            _add_check("daily_loss_limit", True, "今日无亏损")
 
         # 检查5: 最大回撤限制
         if self._portfolio.max_drawdown >= self._max_drawdown_limit:
-            reasons.append(
-                f"最大回撤已达上限: {self._portfolio.max_drawdown:.2%} >= "
-                f"{self._max_drawdown_limit:.2%}"
+            _add_check(
+                "max_drawdown_limit",
+                False,
+                f"最大回撤已达上限: {self._portfolio.max_drawdown:.2%} >= {self._max_drawdown_limit:.2%}",
             )
+        else:
+            _add_check("max_drawdown_limit", True, f"回撤 {self._portfolio.max_drawdown:.2%} < 上限 {self._max_drawdown_limit:.2%}")
 
         # 检查6: 连续亏损检查
         if self._consecutive_losses >= 3:
-            reasons.append(f"连续亏损{self._consecutive_losses}次，建议暂停交易")
+            _add_check("consecutive_losses", False, f"连续亏损{self._consecutive_losses}次，建议暂停交易")
+        else:
+            _add_check("consecutive_losses", True, f"连续亏损 {self._consecutive_losses} 次 < 3 次")
 
         # 检查7: 信号置信度门槛（信号质量阈值，非 VaR 统计置信水平）
         # 与 config.RiskConfig.var_confidence 语义不同：此处是决策阈值，默认 0.6 可配置
         if signal.confidence < self._min_signal_confidence:
-            reasons.append(
+            _add_check(
+                "signal_confidence",
+                False,
                 f"信号置信度不足: {signal.confidence:.2f} < {self._min_signal_confidence:.2f}"
-                f"（未达信号置信度门槛 signal_confidence_threshold）"
+                f"（未达信号置信度门槛 signal_confidence_threshold）",
             )
+        else:
+            _add_check("signal_confidence", True, f"信号置信度 {signal.confidence:.2f} ≥ 门槛 {self._min_signal_confidence:.2f}")
 
         # 检查8: 重复持仓检查
         existing_symbols = {pos.get("symbol") for pos in self._portfolio.positions}
         if signal.symbol in existing_symbols and signal.direction.value == "buy":
-            reasons.append(f"{signal.symbol} 已在持仓中，不建议加仓")
+            _add_check("duplicate_position", False, f"{signal.symbol} 已在持仓中，不建议加仓")
+        else:
+            _add_check("duplicate_position", True, f"{signal.symbol} 无重复持仓")
 
         # 检查9: 市场情绪温度（P2② 情绪择时）
         # 过热 → 降仓/观望（拒绝）；恐慌 → 预警（不硬拒，提示机会与风险）
@@ -309,12 +350,15 @@ class RiskManagerAgent(BaseAgent):
                 f"上涨占比={sentiment.get('advancers_ratio', 0):.1%})"
             )
             if temperature == "overheated":
-                reasons.append(f"{_detail}：情绪过热，建议降低仓位或观望（情绪择时）")
+                _add_check("sentiment_timing", False, f"{_detail}：情绪过热，建议降低仓位或观望（情绪择时）")
             else:
-                warnings_list.append(f"{_detail}：市场恐慌，注意风险与潜在机会（情绪择时）")
+                _add_check("sentiment_timing", True, f"{_detail}：市场恐慌，注意风险与潜在机会（情绪择时）", is_warning=True)
+        else:
+            _add_check("sentiment_timing", True, f"市场情绪正常（{temperature or '未知'}）")
 
         return {
             "passed": len(reasons) == 0,
+            "checks": checks,
             "reasons": reasons,
             "warnings": warnings_list,
         }

@@ -69,12 +69,14 @@ class DualThrustStrategy(BaseStrategy):
         self._lower_band: float = 0.0
         self._today_open: float = 0.0
         self._signal_generated_today: bool = False
+        self._last_signal_date: str = ""
 
     def on_init(self, context: Context) -> None:
         """策略初始化"""
         self._params.update(context.params)
         self._history_bars = []
         self._signal_generated_today = False
+        self._last_signal_date = ""
         logger.info(
             f"Dual Thrust策略初始化: k1={self._params['k1']}, "
             f"k2={self._params['k2']}, lookback={self._params['lookback']}"
@@ -86,6 +88,13 @@ class DualThrustStrategy(BaseStrategy):
 
         # 添加到历史数据
         self._history_bars.append(bar)
+
+        # 按日期重置"今日已出信号"标志。原实现置 True 后整个回测期不重置，
+        # 导致策略终生只会触发一次信号（"一年只交易1次"的直接原因之一）。
+        bar_day = str(getattr(bar, "datetime", ""))[:10]
+        if bar_day != self._last_signal_date:
+            self._signal_generated_today = False
+            self._last_signal_date = bar_day
 
         # 保留足够的历史数据
         lookback = self._params["lookback"]
