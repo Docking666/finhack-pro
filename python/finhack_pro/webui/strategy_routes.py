@@ -70,6 +70,9 @@ class StrategyTestRequest(BaseModel):
     start_date: str = Field("2024-01-01", description="开始日期")
     end_date: str = Field("2024-12-31", description="结束日期")
     initial_capital: float = Field(1000000, description="初始资金")
+    # 参数临时覆盖：只改默认值不改参数名（模板/工坊策略快速测试用），
+    # 以 kwargs 传给策略构造器（adapter._load 内 strategy_cls(**params)）
+    params: Dict[str, Any] = Field(default_factory=dict, description="参数覆盖 {name: value}")
 
 class StrategySaveRequest(BaseModel):
     """策略保存请求（保存到 data/generated_strategies 供回测列表加载）"""
@@ -940,7 +943,7 @@ async def test_strategy(request: StrategyTestRequest):
         )
 
         try:
-            adapter = WorkshopStrategyAdapter(request.code, symbol=symbol)
+            adapter = WorkshopStrategyAdapter(request.code, symbol=symbol, params=request.params or {})
             # 预加载触发安全扫描（提前拒绝，避免进回测）
             adapter._load()
         except StrategySecurityError as e:

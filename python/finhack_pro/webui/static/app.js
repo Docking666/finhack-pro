@@ -2741,6 +2741,8 @@ function workshopPage() {
         testRunning: false,
         testResult: null,
         testError: '',
+        tempParams: {},  // 参数临时覆盖 {name: value}（模板/工坊策略，只改默认值）
+        deleteTarget: null,  // 待删除策略（自定义确认弹窗，替代被嵌入式浏览器拦截的原生 confirm）
 
         // AI因子生成状态
         factorForm: {
@@ -3234,6 +3236,7 @@ class TurtleTradingStrategy:
                 const resp = await API.get('/api/strategy/templates/' + id);
                 if (resp.success) {
                     this.selectedTemplate = resp.data;
+                    this.initTempParams();
                     return;
                 }
             } catch (e) {
@@ -3243,6 +3246,16 @@ class TurtleTradingStrategy:
             const tpl = this.templates.find(t => t.id === id);
             if (tpl) {
                 this.selectedTemplate = tpl;
+                this.initTempParams();
+            }
+        },
+
+        // 参数临时覆盖（只改默认值不改参数名）：从模板 params 初始化
+        initTempParams() {
+            this.tempParams = {};
+            const params = (this.selectedTemplate && this.selectedTemplate.params) || [];
+            for (const p of params) {
+                if (p && p.name) this.tempParams[p.name] = p.default;
             }
         },
 
@@ -3468,12 +3481,14 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
             }
         },
 
-        async deleteStrategy(strategyId) {
-            if (!confirm('确定删除该策略？删除后不可恢复，回测下拉框将移除它。')) return;
+        async confirmDelete() {
+            if (!this.deleteTarget) return;
+            const target = this.deleteTarget;
+            this.deleteTarget = null;
             try {
-                const resp = await API.delete(`/api/strategy/${strategyId}`);
+                const resp = await API.delete(`/api/strategy/${target.id}`);
                 if (resp.success) {
-                    this.myStrategies = this.myStrategies.filter(s => s.id !== strategyId);
+                    this.myStrategies = this.myStrategies.filter(s => s.id !== target.id);
                     window.__alpineApp.showToast('策略已删除', 'success');
                     if (window.__backtestPage) window.__backtestPage.loadStrategies();
                 } else {
@@ -3590,12 +3605,20 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
             this.testError = '';
             this.testResult = null;
             try {
+                // 参数临时覆盖：模板/工坊策略的参数输入框值（只改默认值不改参数名）
+                const paramsOverride = {};
+                if (this.tempParams) {
+                    for (const [k, v] of Object.entries(this.tempParams)) {
+                        if (v !== '' && v !== null && v !== undefined) paramsOverride[k] = v;
+                    }
+                }
                 const resp = await API.post('/api/strategy/test', {
                     code,
                     symbol: '600519.SH',
                     start_date: '2024-01-01',
                     end_date: '2024-06-30',
                     initial_capital: 100000,
+                    params: paramsOverride,
                 });
                 if (resp.success && resp.data) {
                     if (resp.data.valid === false) {
@@ -3604,7 +3627,9 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
                         window.__alpineApp.showToast(this.testError, 'error');
                     } else {
                         this.testResult = resp.data;
-                        window.__alpineApp.showToast(resp.data.message || '快速测试完成', 'success');
+                        const m = (resp.data.metrics || {});
+                        const sum = `收益 ${(m.total_return || 0).toFixed(2)}% · 夏普 ${(m.sharpe_ratio || 0).toFixed(2)} · ${m.total_trades || 0} 笔`;
+                        window.__alpineApp.showToast('快速测试完成: ' + sum, 'success');
                         // 渲染权益曲线
                         this.$nextTick(() => this.renderTestChart());
                     }
