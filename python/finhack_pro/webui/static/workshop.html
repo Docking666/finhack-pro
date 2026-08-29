@@ -522,7 +522,18 @@
                                 <button x-show="s.validation_report && Object.keys(s.validation_report).length"
                                         @click="s.showReport = !s.showReport"
                                         class="text-xs text-gray-400 hover:text-gray-200">验证报告</button>
+                                <button @click="s.renaming = !s.renaming; s.newName = s.name"
+                                        class="text-xs text-gray-400 hover:text-gray-200">重命名</button>
+                                <button @click="deleteStrategy(s.id)"
+                                        class="text-xs text-danger/80 hover:text-danger">删除</button>
                             </div>
+                        </div>
+                        <!-- 内联重命名 -->
+                        <div x-show="s.renaming" class="mt-2 flex items-center gap-2" @keyup.enter="renameStrategy(s)">
+                            <input type="text" x-model="s.newName" maxlength="30"
+                                   class="flex-1 bg-inset border border-line rounded-sm px-2 py-1 text-sm text-white focus:border-accent focus:outline-none">
+                            <button @click="renameStrategy(s)" class="px-2.5 py-1 bg-accent/85 hover:bg-accent text-accent-fg text-xs rounded-sm transition-colors">保存</button>
+                            <button @click="s.renaming = false" class="px-2 py-1 text-xs text-gray-400 hover:text-gray-200">取消</button>
                         </div>
                         <div x-show="s.showReport && s.validation_report" class="mt-2 pt-2 border-t border-line/50 text-xs space-y-1">
                             <div class="flex gap-2">

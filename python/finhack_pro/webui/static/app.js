@@ -1326,6 +1326,7 @@ function backtestPage() {
         trades: [],
         history: [],
         tradePage: 1,
+        strategyDropdownOpen: false,  // 自定义策略下拉展开状态（原生 select 在部分浏览器不可靠）
         equityChart: null,
         returnsChart: null,
         currentTaskId: null,
@@ -3446,6 +3447,40 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
                 }
             } catch (e) {
                 window.__alpineApp.showToast('加载策略列表失败: ' + e.message, 'error');
+            }
+        },
+
+        async renameStrategy(s) {
+            if (!s || !s.id || !s.newName || !s.newName.trim()) return;
+            try {
+                const resp = await API.post(`/api/strategy/${s.id}/rename`, { name: s.newName.trim() });
+                if (resp.success) {
+                    s.name = s.newName.trim();
+                    s.renaming = false;
+                    window.__alpineApp.showToast('策略已重命名', 'success');
+                    // 刷新回测面板策略列表（下拉显示新名称）
+                    if (window.__backtestPage) window.__backtestPage.loadStrategies();
+                } else {
+                    window.__alpineApp.showToast(resp.detail || resp.message || '重命名失败', 'error');
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('重命名失败: ' + e.message, 'error');
+            }
+        },
+
+        async deleteStrategy(strategyId) {
+            if (!confirm('确定删除该策略？删除后不可恢复，回测下拉框将移除它。')) return;
+            try {
+                const resp = await API.delete(`/api/strategy/${strategyId}`);
+                if (resp.success) {
+                    this.myStrategies = this.myStrategies.filter(s => s.id !== strategyId);
+                    window.__alpineApp.showToast('策略已删除', 'success');
+                    if (window.__backtestPage) window.__backtestPage.loadStrategies();
+                } else {
+                    window.__alpineApp.showToast(resp.detail || resp.message || '删除失败', 'error');
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('删除失败: ' + e.message, 'error');
             }
         },
 

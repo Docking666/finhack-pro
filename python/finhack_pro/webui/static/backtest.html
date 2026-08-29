@@ -6,12 +6,31 @@
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
                 <label class="block text-xs text-gray-400 mb-1">策略选择</label>
-                <select x-model="params.strategy" class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
-                    <template x-for="s in strategyOptions" :key="s.id">
-                        <option :value="s.id" :selected="s.id === params.strategy" :disabled="s.disabled"
-                                @click="if(!s.disabled) params.strategy = s.id" x-text="s.name"></option>
-                    </template>
-                </select>
+                <!-- 自定义下拉：原生 select 在部分浏览器（如 Edge）对 template x-for 渲染的
+                     option 点击事件不可靠（用户反馈多次无法选择），改为 div 模拟 100% 可控 -->
+                <div class="relative" @click.outside="strategyDropdownOpen = false">
+                    <button type="button" @click="strategyDropdownOpen = !strategyDropdownOpen"
+                            class="w-full flex items-center justify-between bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
+                        <span x-text="(strategyOptions.find(s => s.id === params.strategy) || {}).name || '选择策略'"></span>
+                        <svg class="w-4 h-4 text-gray-500 flex-shrink-0" :class="strategyDropdownOpen ? 'rotate-180' : ''" style="transition: transform .15s;" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                    </button>
+                    <div x-show="strategyDropdownOpen" x-cloak
+                         class="absolute z-30 mt-1 w-full bg-surface border border-line rounded-sm shadow-lg max-h-72 overflow-auto">
+                        <template x-for="s in strategyOptions" :key="s.id">
+                            <button type="button" @click="if (!s.disabled) { params.strategy = s.id; strategyDropdownOpen = false; }"
+                                    :class="s.id === params.strategy ? 'bg-elevated text-white' : s.disabled ? 'text-gray-600 cursor-not-allowed' : 'text-gray-300 hover:bg-elevated'"
+                                    class="w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2">
+                                <span x-text="s.name"></span>
+                                <svg x-show="s.id === params.strategy" class="w-3.5 h-3.5 text-accent flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                </svg>
+                            </button>
+                        </template>
+                        <div x-show="strategyOptions.length === 0" class="px-3 py-2 text-xs text-gray-500">策略加载中...</div>
+                    </div>
+                </div>
             </div>
             <div class="lg:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">多策略组合（勾选 ≥2 个启用信号聚合器 + 滤波管道）</label>
@@ -171,6 +190,23 @@
                 </template>
                 <div x-show="validation && !validation.error" class="text-xs text-gray-500 mt-1.5"
                      x-text="'综合评分: ' + (validation.overall_score || 0).toFixed(0) + '/100 · ' + (validation.summary || '')"></div>
+                <!-- 改进建议（StrategyValidator 输出，可点击展开） -->
+                <template x-if="validation && validation.recommendations && validation.recommendations.length">
+                    <div class="mt-2 pt-2 border-t border-line/50">
+                        <div class="flex items-center justify-between mb-1">
+                            <span class="text-xs text-gray-400">改进建议</span>
+                            <span class="text-[10px] text-gray-600" x-text="validation.recommendations.length + ' 条'"></span>
+                        </div>
+                        <div class="space-y-1">
+                            <template x-for="(rec, i) in validation.recommendations.slice(0, 3)" :key="i">
+                                <div class="flex items-start gap-1.5 text-xs text-gray-400">
+                                    <span class="text-accent mt-0.5 flex-shrink-0">›</span>
+                                    <span x-text="rec"></span>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
             </div>
 
             <!-- 置信度合成（阶段3：确定性因子，零 LLM 自评） -->

@@ -1065,6 +1065,46 @@ async def get_strategy_manifest(strategy_id: str):
     })
 
 
+@router.delete("/{strategy_id}", response_model=APIResponse)
+async def delete_strategy(strategy_id: str):
+    """删除工坊策略（含 strategy.py + manifest.yaml，释放下拉框空间）"""
+    import shutil
+
+    gen_dir = Path("data/generated_strategies") / strategy_id
+    if not gen_dir.exists():
+        raise HTTPException(status_code=404, detail=f"策略不存在: {strategy_id}")
+    if not strategy_id.startswith("gen_"):
+        raise HTTPException(status_code=400, detail="仅允许删除工坊生成策略（gen_ 前缀）")
+    try:
+        shutil.rmtree(gen_dir)
+        logger.info(f"[Workshop] 策略已删除: {strategy_id}")
+        return APIResponse(success=True, message="策略已删除", data={"strategy_id": strategy_id})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
+
+
+@router.post("/{strategy_id}/rename", response_model=APIResponse)
+async def rename_strategy(strategy_id: str, body: Optional[Dict[str, Any]] = None):
+    """重命名工坊策略（改 manifest.name，下拉框显示名随之更新）"""
+    from finhack_pro.workshop import StrategyManifest
+
+    gen_dir = Path("data/generated_strategies") / strategy_id
+    manifest_file = gen_dir / "manifest.yaml"
+    if not manifest_file.exists():
+        raise HTTPException(status_code=404, detail=f"策略不存在: {strategy_id}")
+    name = (body or {}).get("name", "").strip()
+    if not name or len(name) > 30:
+        raise HTTPException(status_code=400, detail="名称需为 1-30 字符")
+    try:
+        manifest = StrategyManifest.from_yaml_file(str(manifest_file))
+        manifest.name = name
+        manifest.updated_at = datetime.now().isoformat()
+        manifest_file.write_text(manifest.to_yaml(), encoding="utf-8")
+        return APIResponse(success=True, message="策略已重命名", data={"strategy_id": strategy_id, "name": name})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"重命名失败: {e}")
+
+
 @router.post("/{strategy_id}/enable", response_model=APIResponse)
 async def enable_strategy(request: Request, strategy_id: str, body: Optional[Dict[str, Any]] = None):
     """启用验证（阶段6 安全边界）：draft → enabled
@@ -1086,21 +1126,22 @@ async def enable_strategy(request: Request, strategy_id: str, body: Optional[Dic
     if not code_file.exists():
         raise HTTPException(status_code=404, detail=f"策略不存在: {strategy_id}")
 
-    # 加载工坊策略类（与 BacktestRunner.load_strategy custom 分支一致）
-    try:
-        import importlib.util
-        from finhack_pro.workshop.strategy_adapter import WorkshopStrategyAdapter
-
-        adapter = WorkshopStrategyAdapter(code_file.read_text(encoding="utf-8"))
-        strategy_cls = adapter.strategy_class
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"策略加载失败: {e}")
-
     body = body or {}
     symbol = body.get("symbol", "600519.SH")
     start_date = body.get("start_date", (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d"))
     end_date = body.get("end_date", datetime.now().strftime("%Y-%m-%d"))
     initial_capital = float(body.get("initial_capital", 1_000_000))
+
+    # 加载工坊策略（WorkshopStrategyAdapter 自身是 BaseStrategy 子类，
+    # on_bar 内部延迟 _load 编译并桥接到用户策略——直接作为策略实例使用）
+    try:
+        from finhack_pro.workshop.strategy_adapter import WorkshopStrategyAdapter
+
+        code = code_file.read_text(encoding="utf-8")
+        adapter = WorkshopStrategyAdapter(code, symbol=symbol)
+        adapter._load()  # 提前触发 AST 扫描 + 编译，失败即 400
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"策略加载失败: {e}")
 
     # 取数（诚实失败：数据不可得则不启用）
     cfg = get_config()
@@ -1115,10 +1156,10 @@ async def enable_strategy(request: Request, strategy_id: str, body: Optional[Dic
     if data is None or data.empty:
         raise HTTPException(status_code=400, detail=f"无法获取 {symbol} 数据，无法执行启用验证")
 
-    # 1) 全量回测 → StrategyValidator
+    # 1) 全量回测 → StrategyValidator（adapter 直接作为策略实例）
     try:
         runner = BacktestRunner()
-        bt = runner.run(strategy=strategy_cls(), symbol=symbol, data=data, initial_capital=initial_capital)
+        bt = runner.run(strategy=adapter, symbol=symbol, data=data, initial_capital=initial_capital)
         perf = {
             "returns": list(bt.daily_returns),
             "sharpe_ratio": float(bt.sharpe_ratio or 0),
@@ -1131,8 +1172,41 @@ async def enable_strategy(request: Request, strategy_id: str, body: Optional[Dic
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"验证执行失败: {e}")
 
-    # 2) 过拟合体检
-    overfit = run_overfit_check(strategy_cls, data, symbol=symbol, initial_capital=initial_capital)
+    # 2) 过拟合体检（样本内前 80% / 样本外后 20%）——adapter 无法直接反序列化
+    #    代码，改用内联实现（判定规则与 run_overfit_check 一致）
+    def _run_slice(slice_data: Any) -> tuple:
+        a = WorkshopStrategyAdapter(code, symbol=symbol)
+        r = runner.run(strategy=a, symbol=symbol, data=slice_data, initial_capital=initial_capital)
+        return float(r.sharpe_ratio or 0), int(r.total_trades or 0)
+
+    overfit = {"is_sharpe": 0.0, "oos_sharpe": 0.0, "is_trades": 0, "oos_trades": 0, "passed": False, "reason": ""}
+    if data is not None and len(data) >= 100:
+        n = len(data)
+        split = max(int(n * 0.8), 1)
+        is_data, oos_data = data.iloc[:split], data.iloc[split:]
+        if len(oos_data) >= 20:
+            try:
+                is_sharpe, is_trades = _run_slice(is_data)
+                oos_sharpe, oos_trades = _run_slice(oos_data)
+                overfit = {
+                    "is_sharpe": round(is_sharpe, 4), "oos_sharpe": round(oos_sharpe, 4),
+                    "is_trades": int(is_trades), "oos_trades": int(oos_trades),
+                    "passed": oos_sharpe >= 0 and oos_sharpe >= 0.5 * is_sharpe,
+                    "reason": "",
+                }
+                if not overfit["passed"]:
+                    overfit["reason"] = (
+                        f"样本外夏普 {oos_sharpe:.2f} 劣于样本内 {is_sharpe:.2f} 的一半"
+                        if oos_sharpe >= 0 else
+                        f"样本外夏普 {oos_sharpe:.2f} < 0，疑似样本内过拟合"
+                    )
+            except Exception as e:
+                overfit["reason"] = f"体检执行失败: {e}"
+                overfit["passed"] = False
+        else:
+            overfit["reason"] = f"样本外仅 {len(oos_data)} 根，不足 20 根，无法评估"
+    else:
+        overfit["reason"] = "数据不足（<100 根），无法评估"
 
     passed = bool(vresult.passed) and bool(overfit["passed"])
     status = "enabled" if passed else "draft"
@@ -1146,6 +1220,7 @@ async def enable_strategy(request: Request, strategy_id: str, body: Optional[Dic
 
     # 写回 manifest
     try:
+        from finhack_pro.workshop import StrategyManifest
         manifest = StrategyManifest.from_yaml_file(str(manifest_file))
         manifest.status = status
         manifest.validation_report = report

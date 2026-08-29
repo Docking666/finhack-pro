@@ -120,11 +120,18 @@ class WorkshopStrategyAdapter(BaseStrategy):
 
         # 找到 BaseStrategy 的子类并实例化
         # 注意：exec 上下文中的类 __module__ 为 'builtins'，不能按 module 过滤
+        # 兼容两类基类：旧 API 桥接基类 _LegacyBaseStrategy（ns 内 BaseStrategy 别名）
+        # 与真实 finhack_pro.strategies.base.BaseStrategy（用户代码 import 引入）。
+        # 修复：此前只认 _LegacyBaseStrategy 子类，工坊代码 import 真实 BaseStrategy
+        # 时永远"未找到策略类"，导致启用验证/快速测试/回测全部失败。
         strategy_cls = None
         for name, obj in ns.items():
             if (
                 isinstance(obj, type)
-                and issubclass(obj, _LegacyBaseStrategy)
+                and (
+                    issubclass(obj, _LegacyBaseStrategy)
+                    or (BaseStrategy is not None and issubclass(obj, BaseStrategy))
+                )
                 and obj is not _LegacyBaseStrategy
                 and obj is not BaseStrategy
             ):
