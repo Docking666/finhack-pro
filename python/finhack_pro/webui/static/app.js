@@ -1433,8 +1433,14 @@ function backtestPage() {
                 setTimeout(() => { if (this.running) { this.running = false; this.error = '扫描超时'; clearInterval(interval); } }, 60000);
             },
             renderHeatmap() {
-                const svg = this.$refs && this.$refs.heatmap;
-                if (!svg || !this.cells.length) return;
+                // sweep 是 backtestPage 的子对象，此处 this=sweep，没有 $refs
+                // 必须用 querySelector 跨上下文拿 svg 元素（x-ref 在 DOM 全局唯一）
+                const svg = document.querySelector('[x-ref="heatmap"]');
+                if (!svg) {
+                    console.warn('[renderHeatmap] 未找到 [x-ref="heatmap"] 元素');
+                    return;
+                }
+                if (!this.cells.length) return;
                 const cells = this.cells;
                 // 网格维度
                 const xs = [...new Set(cells.map(c => c.x))].sort((a, b) => a - b);
