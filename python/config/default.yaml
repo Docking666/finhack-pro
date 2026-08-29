@@ -5,6 +5,7 @@ agent:
   risk_manager_model: gpt-4o
   strategy_generator_model: gpt-4o
   trade_executor_model: gpt-4o
+agents: {}
 backtest:
   benchmark: 000300.SH
   commission_rate: 0.0003
@@ -12,37 +13,38 @@ backtest:
   slippage: 0.001
   stamp_tax_rate: 0.001
 data:
+  akshare_hist_api: tx
   cache_dir: data/cache
+  custom_source: ''
   default_end: '2024-12-31'
   default_start: '2020-01-01'
-  # 显式多源链（按优先级）：baostock 主源（零注册官方 API，最稳）→ 新浪 →
-  # 腾讯(tx，间歇性 Errno 22 由 RetryDataSource 重试缓解）→ 东财兜底（易反爬）。
-  # 注：source 字段仅作兼容，sources 非空时以此显式链为准。
   source: akshare
   sources:
-    - baostock
-    - akshare_sina
-    - akshare_tx
-    - akshare_em
+  - baostock
+  - akshare_sina
+  - akshare_tx
+  - akshare_em
   tushare_token: ''
 environment: backtest
 llm:
   anthropic_api_key: ''
   max_retries: 3
   max_tokens: 4096
-  model: gpt-4o
+  model: orcarouter/free
   openai_api_key: ''
-  openai_base_url: https://api.openai.com/v1
+  openai_base_url: https://api.orcarouter.ai/v1
   provider: openai
-  temperature: 0.3
+  temperature: 0.0
   timeout: 60
 log_file: logs/finhack_pro.log
 log_level: INFO
 risk:
+  initial_capital: 1000000.0
   max_daily_loss_pct: 0.05
   max_drawdown_pct: 0.15
   max_position_pct: 0.3
   max_total_position_pct: 0.8
+  signal_confidence_threshold: 0.6
   stop_loss_pct: 0.05
   take_profit_pct: 0.1
   var_confidence: 0.95
