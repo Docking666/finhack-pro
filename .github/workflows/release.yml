@@ -236,6 +236,13 @@ jobs:
             VERSION="${MAJOR}.${MINOR}.${PATCH}"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          # 防呆：目标 tag 已存在时直接失败，避免 softprops 静默把新产物覆盖上传到旧 Release。
+          # （2026-08-30 事故：desktop/package.json 停在 2.2.4，未传 version 时自增算出 2.3.0，
+          #   覆盖了 08-08 的 v2.3.0 发布。此后要么显式传 version，要么先同步 package.json 版本。）
+          if git ls-remote --tags origin "refs/tags/v$VERSION" | grep -q .; then
+            echo "::error::Tag v$VERSION already exists on origin. 请显式传入 version 输入（例如 version=2.4.0）再触发。"
+            exit 1
+          fi
 
       - name: Download Windows artifacts
         uses: actions/download-artifact@v8
