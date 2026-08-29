@@ -33,23 +33,38 @@
             </div>
             <!-- 策略参数（临时调整默认值，不改参数名；回测时随请求传给策略） -->
             <div class="lg:col-span-3" x-show="paramMeta.length > 0">
-                <details class="bg-inset border border-line rounded-sm">
+                <details class="bg-inset border border-line rounded-sm" open>
                     <summary class="px-3 py-2 text-xs text-gray-400 cursor-pointer select-none hover:text-gray-200">
                         策略参数（临时调整）
                         <span class="text-gray-600 ml-1" x-text="'共 ' + paramMeta.length + ' 项'"></span>
+                        <span x-show="tempParamCount() > 0" class="ml-2 text-accent"
+                              x-text="'已改 ' + tempParamCount() + ' 项'"></span>
                     </summary>
                     <div class="px-3 pb-3 pt-1 grid grid-cols-2 md:grid-cols-4 gap-2">
                         <template x-for="p in paramMeta" :key="p.name">
                             <label class="block">
                                 <span class="text-[10px] text-gray-500 font-mono" x-text="p.name"></span>
-                                <input type="number" step="any"
+                                <!-- 布尔开关（如 use_rsi / use_bb）用下拉，数值输入无法表达 -->
+                                <select x-show="p.type === 'bool'"
+                                        :value="params.strategy_params[p.name] === undefined ? String(!!p.default) : String(!!params.strategy_params[p.name])"
+                                        @change="params.strategy_params[p.name] = $event.target.value === 'true'"
+                                        class="w-full bg-surface border border-line rounded-sm px-2 py-1 text-xs text-white font-mono focus:border-accent focus:outline-none">
+                                    <option value="true">开启</option>
+                                    <option value="false">关闭</option>
+                                </select>
+                                <input x-show="p.type !== 'bool'" type="number" step="any"
                                        :value="params.strategy_params[p.name] !== undefined ? params.strategy_params[p.name] : p.default"
                                        @input="params.strategy_params[p.name] = $event.target.value === '' ? undefined : Number($event.target.value)"
                                        class="w-full bg-surface border border-line rounded-sm px-2 py-1 text-xs text-white font-mono focus:border-accent focus:outline-none">
                             </label>
                         </template>
                     </div>
-                    <div class="px-3 pb-2 text-[10px] text-gray-600">仅修改当前回测的参数值，不改变策略代码；留空则用默认值</div>
+                    <div class="px-3 pb-2 flex items-center gap-3">
+                        <span class="text-[10px] text-gray-600">仅修改当前回测的参数值，不改变策略代码；留空则用默认值</span>
+                        <button type="button" @click="resetTempParams()"
+                                x-show="tempParamCount() > 0"
+                                class="ml-auto text-[10px] text-gray-500 hover:text-accent transition-colors">重置为默认</button>
+                    </div>
                 </details>
             </div>
             <div class="lg:col-span-2">
@@ -330,13 +345,15 @@
                         <div class="font-medium text-white mb-1.5">热力图怎么看</div>
                         <div class="space-y-1.5">
                             <div><span class="text-gray-500">X 轴 / Y 轴：</span>你勾选的两个策略参数（如 k1/k2、周期/阈值）</div>
-                            <div><span class="text-gray-500">每个格子：</span>一组参数跑完整次回测的夏普比率</div>
-                            <div><span class="text-gray-500">颜色：</span><span class="text-white">红=夏普高</span> / <span class="text-gray-500">灰=中性</span> / <span class="text-white">绿=夏普低</span>（跟随当前涨跌配色）</div>
-                            <div><span class="text-gray-500">悬停：</span>查看收益/回撤细节</div>
-                            <div><span class="text-gray-500">"最优"标记：</span>夏普最高的参数组合</div>
+                            <div><span class="text-gray-500">每个格子：</span>一组参数跑完整次回测的结果</div>
+                            <div><span class="text-gray-500">着色指标：</span>可用左上角下拉切换 夏普 / 年化 / 总收益 / 回撤 / <span class="text-white">交易次数</span> / 胜率</div>
+                            <div><span class="text-gray-500">颜色：</span><span class="text-white">红=该指标更优</span> / <span class="text-gray-500">灰=中性</span> / <span class="text-white">绿=更差</span>（回撤自动反向，越小越红）</div>
+                            <div><span class="text-gray-500">悬停：</span>查看该组合的夏普 / 年化 / 回撤 / <span class="text-white">交易次数</span> / 胜率</div>
+                            <div><span class="text-gray-500">点击格子：</span>把该参数组合写回上方「策略参数（临时调整）」，可直接复跑验证</div>
+                            <div><span class="text-gray-500">"最优"：</span>按当前选中指标取最好/最小的组合</div>
                         </div>
                         <div class="mt-2 pt-2 border-t border-line/50 text-gray-500">
-                            建议：先用大范围粗扫定位热区，再缩小区间细扫
+                            建议：先用大范围粗扫定位热区，再缩小区间细扫；<span class="text-white">切到「交易次数」可直接看出哪些参数下信号根本不触发</span>
                         </div>
                     </div>
                 </span>
@@ -390,19 +407,25 @@
         <div x-show="sweep.cells.length > 0" class="overflow-auto">
             <div class="block w-full overflow-x-auto">
                 <div class="flex items-center gap-3 mb-2 text-xs flex-wrap">
-                    <span class="text-gray-500">夏普比率</span>
+                    <select x-model="sweep.metric" @change="sweep.onMetricChange()"
+                            class="bg-inset border border-line rounded-sm px-1.5 py-0.5 text-gray-300 text-xs">
+                        <template x-for="m in sweep.METRICS" :key="m.key">
+                            <option :value="m.key" x-text="m.label"></option>
+                        </template>
+                    </select>
                     <div class="flex items-center gap-1">
-                        <span class="w-3 h-3 rounded-sm" style="background: rgb(var(--down) / 0.9)"></span><span class="text-gray-500">低</span>
+                        <span class="w-3 h-3 rounded-sm" style="background: rgb(var(--down) / 0.9)"></span><span class="text-gray-500">差</span>
                         <span class="w-3 h-3 rounded-sm" style="background: rgb(var(--bg-elevated))"></span><span class="text-gray-500">中</span>
-                        <span class="w-3 h-3 rounded-sm" style="background: rgb(var(--up) / 0.9)"></span><span class="text-gray-500">高</span>
+                        <span class="w-3 h-3 rounded-sm" style="background: rgb(var(--up) / 0.9)"></span><span class="text-gray-500">好</span>
                     </div>
-                    <span x-show="sweep.best" class="text-gray-500">
-                        最优: <span class="text-white font-mono" x-text="sweep.best.x + ' / ' + sweep.best.y"></span>
-                        <span class="text-gray-600" x-text="' 夏普 ' + sweep.best.sharpe.toFixed(2)"></span>
-                    </span>
+                    <span x-show="sweep.bestByMetric()" class="text-gray-500 font-mono" x-text="sweep.bestText()"></span>
+                    <span x-show="sweep.triggeredText()" class="text-gray-600" x-text="sweep.triggeredText()"></span>
                     <span x-show="sweep.error" class="text-danger" x-text="sweep.error"></span>
                 </div>
                 <svg x-ref="heatmap" style="display: block; min-width: 280px; max-width: 100%;"></svg>
+                <div class="mt-1.5 text-[10px] text-gray-600">
+                    悬停查看该组合的夏普/年化/回撤/交易次数/胜率；点击格子可把该参数组合写回上方「策略参数（临时调整）」。
+                </div>
             </div>
         </div>
         <div x-show="sweep.cells.length === 0 && !sweep.running && !sweep.error"

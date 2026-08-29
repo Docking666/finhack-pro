@@ -233,12 +233,19 @@ class SweepRequest(BaseModel):
 
 
 class SweepCell(BaseModel):
-    """热力图单元格"""
+    """热力图单元格
+
+    total_trades 用于回答「哪个参数组合下信号才真正触发成交」——低频策略的大片
+    网格点会是 0 笔，只有交易次数这一维度能直接暴露"参数导致信号不触发"。
+    """
     x: float
     y: float
     sharpe: float = 0.0
     total_return: float = 0.0
     max_drawdown: float = 0.0
+    annual_return: float = 0.0
+    total_trades: int = 0
+    win_rate: float = 0.0
 
 
 class SweepResult(BaseModel):

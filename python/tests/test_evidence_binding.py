@@ -24,7 +24,8 @@ class TestEvidenceId:
             "success": True, "run_id": "r1",
             "return_summary": "data[10条]", "evidence_id": "ev_1", "timestamp": "t",
         })
-        import tempfile, os
+        import os
+        import tempfile
         with tempfile.TemporaryDirectory() as d:
             path = registry.persist(d, run_id="r1")
             with open(path, encoding="utf-8") as f:

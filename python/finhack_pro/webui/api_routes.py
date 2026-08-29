@@ -268,24 +268,45 @@ async def list_backtest_strategies():
                     pass
             custom.append({"id": d.name, "name": label, "status": status, "params_schema": params_schema})
 
-    # 内置策略参数元数据（回测面板"参数调整"区用，inspect 提取 __init__ 默认值）
+    # 内置策略参数元数据（回测面板"参数调整"区用）
+    #
+    # 【坑】原先只用 inspect.signature(cls.__init__) 提取，但内置策略的参数默认值
+    # 定义在 __init__ 内部的 self._params 字典里，__init__ 签名只有 self →
+    # 三个主力策略（dual_thrust/momentum/mean_reversion）永远返回空列表，
+    # 前端"策略参数（临时调整）"因拿不到元数据而整块不渲染。
+    # 现在优先读实例上的 _params 默认字典，inspect 仅作兜底。
     import inspect as _inspect
+
     from finhack_pro.backtest.runner import BacktestRunner
 
     params_meta: Dict[str, list] = {}
     for sid in builtin:
+        meta: list = []
         try:
-            cls = BacktestRunner.load_strategy(sid).__class__
-            sig = _inspect.signature(cls.__init__)
-            meta = []
-            for pname, p in sig.parameters.items():
-                if pname == "self":
-                    continue
-                default = p.default if p.default is not _inspect.Parameter.empty else None
-                meta.append({"name": pname, "default": default, "required": default is None})
-            params_meta[sid] = meta
+            inst = BacktestRunner.load_strategy(sid)
+            raw = getattr(inst, "_params", None)
+            if isinstance(raw, dict) and raw:
+                for pname, default in raw.items():
+                    # 嵌套结构/None 不作为可编辑参数暴露
+                    if isinstance(default, (dict, list)) or default is None:
+                        continue
+                    if isinstance(default, bool):
+                        ptype = "bool"
+                    elif isinstance(default, (int, float)):
+                        ptype = "number"
+                    else:
+                        ptype = "string"
+                    meta.append({"name": pname, "default": default, "type": ptype, "required": False})
+            if not meta:
+                sig = _inspect.signature(inst.__class__.__init__)
+                for pname, p in sig.parameters.items():
+                    if pname == "self":
+                        continue
+                    default = p.default if p.default is not _inspect.Parameter.empty else None
+                    meta.append({"name": pname, "default": default, "required": default is None})
         except Exception:
-            params_meta[sid] = []
+            meta = []
+        params_meta[sid] = meta
     return APIResponse(data={"builtin": builtin, "custom": custom, "params": params_meta})
 
 
@@ -492,6 +513,32 @@ async def get_pipeline_run(request: Request, run_id: str):
     return APIResponse(data=run)
 
 
+def _resolve_pipeline_dir(request: Request, run_id: str) -> Optional[str]:
+    """解析流水线产物目录；**绝不创建目录**
+
+    注意：coordinator._get_pipeline_dir() 内部会 os.makedirs(exist_ok=True)，
+    直接用它会让任意 run_id（含路径穿越 payload）把空目录写进 data/pipeline，
+    并在下一次列表扫描里变成幽灵任务。这里改为只读解析 + 白名单校验。
+    """
+    import os
+    import re
+
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", run_id or ""):
+        return None
+
+    agent_svc = _get_agent_service(request)
+    coordinator = getattr(agent_svc, "_coordinator", None)
+    base = os.path.join("data", "pipeline")
+    if coordinator is not None:
+        try:
+            _cfg = getattr(coordinator, "config", None) or {}
+            base = (_cfg.get("pipeline") or {}).get("output_dir", base)
+        except Exception:
+            pass
+    run_dir = os.path.join(base, run_id)
+    return run_dir if os.path.isdir(run_dir) else None
+
+
 @router.get("/api/agents/report/{run_id}", response_model=APIResponse)
 async def get_agent_decision_report(request: Request, run_id: str):
     """获取结构化决策报告（阶段4：确定性生成，非 LLM）
@@ -503,25 +550,59 @@ async def get_agent_decision_report(request: Request, run_id: str):
 
     from finhack_pro.pipeline.decision_report import save_decision_report
 
-    # 与 coordinator._get_pipeline_dir 同款默认值解析
-    agent_svc = _get_agent_service(request)
-    coordinator = getattr(agent_svc, "_coordinator", None)
-    if coordinator is not None and hasattr(coordinator, "_get_pipeline_dir"):
-        run_dir = coordinator._get_pipeline_dir(run_id)
-    else:
-        run_dir = os.path.join("data", "pipeline", run_id)
-
-    if not os.path.isdir(run_dir):
+    run_dir = _resolve_pipeline_dir(request, run_id)
+    if run_dir is None:
         raise HTTPException(status_code=404, detail=f"流水线运行不存在: {run_id}")
 
     saved = save_decision_report(run_dir)
     if saved.get("error"):
         raise HTTPException(status_code=500, detail=f"决策报告生成失败: {saved['error']}")
+
+    # md 正文直接内联返回：md_path 是服务端本地相对路径（且 Windows 下为反斜杠），
+    # 前端 fetch 该路径必然 404，导致弹窗永远停在"报告生成中"。
+    md_text = ""
+    md_path = saved.get("md_path") or ""
+    if md_path and os.path.exists(md_path):
+        try:
+            with open(md_path, "r", encoding="utf-8") as f:
+                md_text = f.read()
+        except Exception:  # pragma: no cover - 读失败时降级为空，前端走平铺渲染
+            md_text = ""
+
     return APIResponse(data={
         "report": saved["report"],
         "json_path": saved["json_path"],
-        "md_path": saved["md_path"],
+        "md_path": md_path,
+        "md": md_text,
     })
+
+
+@router.get("/api/agents/report/{run_id}/md")
+async def download_agent_decision_report_md(request: Request, run_id: str):
+    """下载决策报告 Markdown（FileResponse，避免暴露服务端本地路径）"""
+    import os
+
+    from fastapi.responses import FileResponse
+
+    from finhack_pro.pipeline.decision_report import save_decision_report
+
+    run_dir = _resolve_pipeline_dir(request, run_id)
+    if run_dir is None:
+        raise HTTPException(status_code=404, detail=f"流水线运行不存在: {run_id}")
+
+    saved = save_decision_report(run_dir)
+    if saved.get("error"):
+        raise HTTPException(status_code=500, detail=f"决策报告生成失败: {saved['error']}")
+
+    md_path = saved.get("md_path") or ""
+    if not md_path or not os.path.exists(md_path):
+        raise HTTPException(status_code=404, detail="决策报告 Markdown 尚未生成")
+
+    return FileResponse(
+        md_path,
+        media_type="text/markdown; charset=utf-8",
+        filename=f"decision_report_{run_id}.md",
+    )
 
 
 @router.post("/api/agents/pipeline/{run_id}/cancel", response_model=APIResponse)
@@ -536,6 +617,21 @@ async def cancel_pipeline(request: Request, run_id: str):
             raise HTTPException(status_code=404, detail=f"流水线任务不存在: {run_id}")
         return APIResponse(data={"run_id": run_id, "cancel_requested": False, "status": existing.get("status")})
     return APIResponse(message="取消请求已发送", data={"run_id": run_id, "cancel_requested": True})
+
+
+@router.delete("/api/agents/pipeline/{run_id}", response_model=APIResponse)
+async def delete_pipeline(request: Request, run_id: str):
+    """删除流水线任务记录与磁盘产物（清理陈年僵尸任务）
+
+    运行中的任务拒绝删除，需先取消。run_id 走白名单校验，防止路径穿越。
+    """
+    agent_svc = _get_agent_service(request)
+    result = agent_svc.delete_pipeline(run_id)
+    if not result.get("deleted"):
+        detail = result.get("reason") or "删除失败"
+        status = 409 if "运行中" in detail else 404
+        raise HTTPException(status_code=status, detail=detail)
+    return APIResponse(message="任务已删除", data={"run_id": run_id, **result})
 
 
 # ============================================================

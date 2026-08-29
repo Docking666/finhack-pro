@@ -39,24 +39,87 @@
                     <button @click="loadCloudPackages()" class="px-3 py-1.5 bg-accent hover:bg-accent/85 text-accent-fg text-xs rounded-sm">搜索</button>
                 </div>
             </div>
+            <div class="flex items-center gap-3 mb-3 text-xs text-gray-500">
+                <span x-show="cloudPackages.length > 0"
+                      x-text="'共 ' + cloudPackages.length + ' 项' + (cloudTotal > cloudPackages.length ? '（云端总计 ' + cloudTotal + '）' : '')"></span>
+                <button @click="loadCloudPackages()" class="ml-auto text-gray-500 hover:text-accent transition-colors">刷新</button>
+            </div>
             <div x-show="cloudError" class="mb-3 p-2.5 rounded-sm bg-elevated border border-warn/50 text-xs text-warn" x-text="cloudError"></div>
             <div x-show="cloudLoading" class="text-sm text-gray-500 py-6 text-center">正在连接云端市场...</div>
             <div x-show="!cloudLoading && cloudPackages.length === 0 && !cloudError" class="text-sm text-gray-500 py-6 text-center">
                 云端市场为空。可在下方粘贴策略/因子代码上传（合规打包后入云）。
             </div>
-            <template x-for="pkg in cloudPackages" :key="pkg.id">
-                <div class="flex items-center justify-between py-2 border-b border-line/50">
-                    <div>
-                        <span class="text-sm text-white" x-text="pkg.name || pkg.id"></span>
-                        <span class="text-xs text-gray-500 ml-2" x-text="'v' + (pkg.version || '0.1.0')"></span>
-                        <div class="text-xs text-gray-500" x-text="(pkg.description || '') + ' · 作者: ' + (pkg.author || '未知')"></div>
+
+            <!-- 应用商店式卡片网格 -->
+            <div x-show="cloudPackages.length > 0" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                <template x-for="pkg in cloudPackages" :key="pkg.id || pkg.package_id">
+                    <div class="bg-inset border border-line rounded-sm p-3 flex flex-col gap-2 hover:border-line-strong transition-colors">
+                        <div class="flex items-start justify-between gap-2">
+                            <div class="min-w-0">
+                                <div class="text-sm text-white truncate" x-text="pkg.name || pkg.package_id || '未命名'"></div>
+                                <div class="text-[10px] text-gray-600 font-mono truncate" x-text="pkg.package_id || ''"></div>
+                            </div>
+                            <span class="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded-sm border"
+                                  :class="pkg.type === 'factor' ? 'bg-elevated text-warn border-warn/40' : 'bg-elevated text-accent border-accent/40'"
+                                  x-text="pkg.type === 'factor' ? '因子' : '策略'"></span>
+                        </div>
+                        <div class="text-xs text-gray-500 line-clamp-2 min-h-[2rem]"
+                             x-text="pkg.description || '暂无描述'"></div>
+                        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-gray-600">
+                            <span x-text="'v' + (pkg.version || '0.1.0')"></span>
+                            <span x-text="'作者 ' + (pkg.author || '匿名')"></span>
+                            <span x-show="pkg.downloads" x-text="'下载 ' + pkg.downloads"></span>
+                            <span x-show="pkg.rating_count > 0" x-text="'评分 ' + (pkg.rating_avg || 0).toFixed(1) + '（' + pkg.rating_count + '）'"></span>
+                        </div>
+                        <div class="flex items-center gap-2 mt-auto pt-1">
+                            <button @click="viewCloudPackage(pkg.package_id)"
+                                    class="px-2.5 py-1 bg-elevated hover:bg-elevated/70 text-gray-300 text-xs rounded-sm transition-colors border border-line">
+                                查看代码
+                            </button>
+                            <button @click="installCloudPackage(pkg.package_id)"
+                                    class="px-2.5 py-1 bg-ok/80 hover:bg-ok text-white text-xs rounded-sm transition-colors">
+                                安装
+                            </button>
+                            <span x-show="pkg.updated_at" class="ml-auto text-[10px] text-gray-600"
+                                  x-text="(pkg.updated_at || '').slice(0, 10)"></span>
+                        </div>
                     </div>
-                    <button @click="installCloudPackage(pkg.id)"
-                            class="px-2.5 py-1 bg-ok/80 hover:bg-ok text-white text-xs rounded-sm transition-colors">
-                        安装
-                    </button>
+                </template>
+            </div>
+
+            <!-- 详情/代码预览面板 -->
+            <div x-show="cloudDetailId" class="mt-3 bg-inset border border-line rounded-sm p-3" x-cloak>
+                <div class="flex items-center justify-between mb-2">
+                    <h4 class="text-xs text-gray-300">
+                        条目详情
+                        <span class="text-gray-600 font-mono ml-1" x-text="cloudDetailId"></span>
+                    </h4>
+                    <button @click="cloudDetailId = ''; cloudDetail = null;" class="text-gray-500 hover:text-white text-sm leading-none">×</button>
                 </div>
-            </template>
+                <div x-show="cloudDetailLoading" class="text-xs text-gray-500 py-3 text-center">加载中...</div>
+                <template x-if="cloudDetail && !cloudDetailLoading">
+                    <div class="space-y-2">
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                            <div><span class="text-gray-600">名称</span><div class="text-white" x-text="cloudDetail.name || '—'"></div></div>
+                            <div><span class="text-gray-600">版本</span><div class="text-white font-mono" x-text="cloudDetail.version || '—'"></div></div>
+                            <div><span class="text-gray-600">入口类</span><div class="text-white font-mono" x-text="cloudDetail.entry_class || '—'"></div></div>
+                            <div><span class="text-gray-600">类型</span><div class="text-white" x-text="cloudDetail.type || '—'"></div></div>
+                        </div>
+                        <div x-show="cloudDetail.params_schema && Object.keys(cloudDetail.params_schema || {}).length"
+                             class="text-xs">
+                            <span class="text-gray-600">参数：</span>
+                            <span class="text-gray-300 font-mono" x-text="Object.keys(cloudDetail.params_schema || {}).join(', ')"></span>
+                        </div>
+                        <div x-show="cloudDetailCode()">
+                            <div class="text-[10px] text-gray-600 mb-1">策略代码</div>
+                            <pre class="bg-surface border border-line rounded-sm p-2 text-[11px] text-gray-300 font-mono overflow-auto max-h-72 whitespace-pre"><code x-text="cloudDetailCode()"></code></pre>
+                        </div>
+                        <div x-show="!cloudDetailCode()" class="text-xs text-gray-600">
+                            云端未返回源码正文（可直接「安装」到本地后在「我的策略」中查看）。
+                        </div>
+                    </div>
+                </template>
+            </div>
 
             <!-- 文本代码上传（合规结构化：服务端安全扫描 + 打包 manifest + 入云） -->
             <div class="mt-4 pt-3 border-t border-line">

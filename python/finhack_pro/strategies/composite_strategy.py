@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from finhack_pro.strategies.base import BaseStrategy, BarData, Context, Signal, SignalDirection
+from finhack_pro.strategies.base import BarData, BaseStrategy, Context, Signal, SignalDirection
 from finhack_pro.strategies.signal_aggregator import AggregatedDirection, SignalAggregator
 
 

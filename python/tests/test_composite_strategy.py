@@ -7,7 +7,7 @@
 import pytest
 
 from finhack_pro.backtest.runner import BacktestRunner
-from finhack_pro.strategies.base import BaseStrategy, BarData, Signal, SignalDirection
+from finhack_pro.strategies.base import BarData, BaseStrategy, Signal, SignalDirection
 from finhack_pro.strategies.composite_strategy import CompositeStrategy
 from finhack_pro.strategies.signal_aggregator import SignalAggregator
 

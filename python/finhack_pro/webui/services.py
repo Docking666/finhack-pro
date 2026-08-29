@@ -56,6 +56,10 @@ _NICHE_STRATEGY_IDS = {
 # （无实时心跳），视为"中断"而非"运行中"，避免前端显示成一直运行且无法取消。
 _PIPELINE_STALE_SECONDS = 600
 
+# 流水线归档窗口：已终止（failed/cancelled）且超过该秒数的任务标记为 archived，
+# 前端据此把它移出"未完成任务"提示条并折叠进历史区，避免陈年僵尸任务常驻。
+_PIPELINE_ARCHIVE_SECONDS = 24 * 3600
+
 
 def _precompute_niche_fields(data) -> "Any":
     """为差异化策略预计算技术字段（ma20/volume_ratio/rsi/macd_signal）
@@ -639,6 +643,9 @@ class BacktestService:
                     sharpe=round(float(m.get("sharpe_ratio", 0) or 0), 4),
                     total_return=round(float(m.get("total_return", 0) or 0) * 100, 2),
                     max_drawdown=round(float(m.get("max_drawdown", 0) or 0) * 100, 2),
+                    annual_return=round(float(m.get("annual_return", 0) or 0) * 100, 2),
+                    total_trades=int(m.get("total_trades", 0) or 0),
+                    win_rate=round(float(m.get("win_rate", 0) or 0), 2),
                 ))
             result.cells = cells
             if opt_result.best_params:
@@ -720,6 +727,7 @@ class BacktestService:
                     "max_drawdown": float(res.max_drawdown or 0),
                     "annual_return": float(res.annual_return or 0),
                     "total_trades": int(res.total_trades or 0),
+                    "win_rate": float(getattr(res, "win_rate", 0) or 0),
                 }
 
         return _SweepAdapter
@@ -1512,24 +1520,31 @@ class AgentService:
                 except Exception:
                     state = None
                 status = (state or {}).get("status", "running")
-                error = None
+                error = (state or {}).get("error")
+                terminal = (state or {}).get("terminal")
+                # 原始心跳时间：stale 分支会把 state["updated_at"] 改成"现在"，
+                # 归档判定必须用改前的值，否则刚被判中断的任务永远不算过期。
+                updated_at = (state or {}).get("updated_at")
                 # 【僵尸任务治理】磁盘恢复的 running 若无实时心跳（updated_at 过旧）或
                 # 连 state 文件都没有（仅 step*.done 残留）→ 判定为中断而非运行中，
                 # 否则前端会把陈年僵尸任务显示成"一直运行"且无法取消。
                 # 判定结果写回磁盘（status=failed），使 API 显示与磁盘状态一致，
                 # 前端刷新即失败态，不再残留"运行中"假象。
                 if status == "running":
-                    updated_at = (state or {}).get("updated_at")
                     stale = updated_at is None or (time.time() - float(updated_at)) > _PIPELINE_STALE_SECONDS
                     if stale:
                         status = "failed"
+                        terminal = "interrupted"
                         error = "任务中断（上次运行被终止或进程重启），已由 stale 检测标记"
                         try:
                             if state is not None:
                                 state["status"] = "failed"
                                 state["terminal"] = "interrupted"
                                 state["error"] = error
-                                state["updated_at"] = time.time()
+                                # 保留原始心跳时间：它是"最后一次存活"的时刻，
+                                # 归档判定依赖它。若改写成 now，陈年僵尸任务会被
+                                # 每轮扫描无限续命，永远进不了归档。
+                                state["marked_at"] = time.time()
                                 with open(state_path, "w", encoding="utf-8") as f:
                                     _json.dump(state, f, ensure_ascii=False, indent=2)
                             logger.info(f"[Pipeline {name}] stale 检测：运行中任务已中断，写回磁盘 failed")
@@ -1539,15 +1554,26 @@ class AgentService:
                     int(f[4:-5]) for f in os.listdir(run_dir)
                     if f.startswith("step") and f.endswith(".done")
                 )
+                # 【归档判定】陈年僵尸任务（中断/取消 且 超过归档窗口）不应常驻
+                # 前端提示条，也不应再被当成"可续跑的未完成任务"。
+                archived = False
+                if status in ("failed", "cancelled") and updated_at:
+                    try:
+                        archived = (time.time() - float(updated_at)) > _PIPELINE_ARCHIVE_SECONDS
+                    except (TypeError, ValueError):
+                        archived = False
                 runs.append({
                     "run_id": name,
                     "status": status,
                     "error": error,
+                    "terminal": terminal,
+                    "archived": archived,
                     "steps_completed": len(done_steps),
                     "steps_total": len(_STEP_MODELS),
                     "done_steps": done_steps,
                     "start_time": None,
                     "end_time": None,
+                    "updated_at": updated_at,
                 })
         except Exception as e:
             logger.warning(f"扫描磁盘流水线检查点失败: {e}")
@@ -1631,6 +1657,53 @@ class AgentService:
             task.cancel()
         logger.info(f"[Pipeline {run_id}] 已发起取消请求")
         return True
+
+    def delete_pipeline(self, run_id: str) -> Dict[str, Any]:
+        """删除流水线任务（内存记录 + 磁盘目录）
+
+        用于清理陈年僵尸任务。运行中的任务拒绝删除（请先取消）。
+        目录名以 run_id 白名单校验，防止路径穿越。
+        """
+        import re as _re
+        import shutil
+
+        if not _re.fullmatch(r"[A-Za-z0-9_\-]+", run_id or ""):
+            return {"deleted": False, "reason": f"非法 run_id: {run_id}"}
+
+        entry = self._running_pipelines.get(run_id)
+        if entry is not None:
+            return {"deleted": False, "reason": "任务正在运行中，请先取消再删除"}
+
+        # 内存历史
+        before = len(self._pipeline_history)
+        self._pipeline_history = [
+            h for h in self._pipeline_history if h.get("run_id") != run_id
+        ]
+        removed_mem = before - len(self._pipeline_history)
+
+        # 磁盘目录
+        removed_disk = False
+        try:
+            base = "data/pipeline"
+            if self._coordinator is not None:
+                try:
+                    _cfg = getattr(self._coordinator, "config", None) or {}
+                    base = (_cfg.get("pipeline") or {}).get("output_dir", "data/pipeline")
+                except Exception:
+                    base = "data/pipeline"
+            run_dir = os.path.join(base, run_id)
+            if os.path.isdir(run_dir):
+                shutil.rmtree(run_dir)
+                removed_disk = True
+        except Exception as e:
+            logger.warning(f"[Pipeline {run_id}] 删除目录失败: {e}")
+            return {"deleted": False, "reason": f"删除目录失败: {e}"}
+
+        if not removed_mem and not removed_disk:
+            return {"deleted": False, "reason": "任务不存在"}
+
+        logger.info(f"[Pipeline {run_id}] 已删除（内存 {removed_mem} 条 / 磁盘 {removed_disk}）")
+        return {"deleted": True, "removed_disk": removed_disk, "removed_memory": removed_mem}
 
 
 # ============================================================

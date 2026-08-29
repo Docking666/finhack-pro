@@ -22,7 +22,6 @@ from finhack_pro.backtest.runner import BacktestRunner
 from finhack_pro.strategies.base import BarData, BaseStrategy, Context, Signal, SignalDirection
 from finhack_pro.strategies.dual_thrust import DualThrustStrategy
 
-
 # ============================================================================
 # 测试数据与探针
 # ============================================================================

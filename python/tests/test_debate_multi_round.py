@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from finhack_pro.agents.strategy_generator import StrategyGeneratorAgent
 from finhack_pro.agents.market_analyzer import MarketAnalysisReport
+from finhack_pro.agents.strategy_generator import StrategyGeneratorAgent
 
 
 class _FakeLLM:

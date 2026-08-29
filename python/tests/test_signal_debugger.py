@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from finhack_pro.backtest.runner import BacktestRunner
-from finhack_pro.strategies.base import BaseStrategy, Context, BarData
+from finhack_pro.strategies.base import BarData, BaseStrategy, Context
 from finhack_pro.strategies.dual_thrust import DualThrustStrategy
 
 

@@ -38,6 +38,7 @@ class TestNicheRegistration:
     def test_niche_strategies_in_api_list(self):
         """策略列表包含差异化策略"""
         import asyncio
+
         from finhack_pro.webui.api_routes import list_backtest_strategies
         resp = asyncio.run(list_backtest_strategies())
         builtin = set(resp.data["builtin"])

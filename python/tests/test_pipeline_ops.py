@@ -13,7 +13,6 @@ from finhack_pro.agents.coordinator import AgentCoordinator, PipelineCancelledEr
 from finhack_pro.webui.models import PipelineRunResult, PipelineStepResult
 from finhack_pro.webui.services import AgentService
 
-
 # ============================================================
 # AgentService 任务注册表
 # ============================================================
@@ -81,11 +80,18 @@ class TestPipelineRegistry:
         assert by_id["run_2"]["steps_completed"] == 1
 
     def test_scan_disk_pipeline_runs_recovers_checkpoints(self, tmp_path):
-        """磁盘检查点扫描：状态推断 + done 步骤计数（刷新/重启后恢复的关键）"""
+        """磁盘检查点扫描：状态推断 + done 步骤计数（刷新/重启后恢复的关键）
+
+        updated_at 必须是"刚刚"——stale 检测（_PIPELINE_STALE_SECONDS）会把
+        心跳过期的 running 任务改判为 failed，否则本例会命中僵尸治理分支。
+        """
+        import time
+
         run_dir = tmp_path / "pipeline_abc"
         run_dir.mkdir()
         (run_dir / "pipeline_state.json").write_text(
-            json.dumps({"status": "running", "terminal": None, "updated_at": 1}), encoding="utf-8")
+            json.dumps({"status": "running", "terminal": None, "updated_at": time.time()}),
+            encoding="utf-8")
         (run_dir / "step1.done").write_text(json.dumps({"step": 1}), encoding="utf-8")
         (run_dir / "step2.done").write_text(json.dumps({"step": 2}), encoding="utf-8")
 
@@ -101,6 +107,77 @@ class TestPipelineRegistry:
         assert r["status"] == "running"
         assert r["steps_completed"] == 2
         assert r["steps_total"] == 7
+        assert r["archived"] is False
+
+    def test_scan_disk_pipeline_runs_marks_stale_as_interrupted(self, tmp_path):
+        """僵尸治理：心跳过期的 running 任务改判 failed/interrupted 并写回磁盘"""
+        run_dir = tmp_path / "pipeline_zombie"
+        run_dir.mkdir()
+        state_path = run_dir / "pipeline_state.json"
+        state_path.write_text(
+            json.dumps({"status": "running", "terminal": None, "updated_at": 1}), encoding="utf-8")
+        (run_dir / "step1.done").write_text(json.dumps({"step": 1}), encoding="utf-8")
+
+        coord = object.__new__(AgentCoordinator)
+        coord.config = {"pipeline": {"output_dir": str(tmp_path)}}
+        svc = AgentService()
+        svc.set_coordinator(coord)
+
+        runs = svc._scan_disk_pipeline_runs()
+        r = runs[0]
+        assert r["status"] == "failed"
+        assert r["terminal"] == "interrupted"
+        assert r["steps_completed"] == 1
+        # 归档判定：已终止且远超归档窗口
+        assert r["archived"] is True
+        # 写回磁盘，下次扫描读到的是 failed 而非 running
+        persisted = json.loads(state_path.read_text(encoding="utf-8"))
+        assert persisted["status"] == "failed"
+
+    def test_scan_disk_pipeline_runs_completed_not_archived(self, tmp_path):
+        """刚完成的任务不应被判定为归档"""
+        import time
+
+        run_dir = tmp_path / "pipeline_fresh"
+        run_dir.mkdir()
+        (run_dir / "pipeline_state.json").write_text(
+            json.dumps({"status": "completed", "terminal": "hold", "updated_at": time.time()}),
+            encoding="utf-8")
+
+        coord = object.__new__(AgentCoordinator)
+        coord.config = {"pipeline": {"output_dir": str(tmp_path)}}
+        svc = AgentService()
+        svc.set_coordinator(coord)
+
+        r = svc._scan_disk_pipeline_runs()[0]
+        assert r["status"] == "completed"
+        assert r["terminal"] == "hold"
+        assert r["archived"] is False
+
+    def test_delete_pipeline_removes_dir_and_history(self, tmp_path):
+        """删除流水线：清内存历史 + 删磁盘目录；运行中任务拒绝删除"""
+        run_dir = tmp_path / "pipeline_del"
+        run_dir.mkdir()
+        (run_dir / "step1.done").write_text("{}", encoding="utf-8")
+
+        coord = object.__new__(AgentCoordinator)
+        coord.config = {"pipeline": {"output_dir": str(tmp_path)}}
+        svc = AgentService()
+        svc.set_coordinator(coord)
+        svc._pipeline_history.append({"run_id": "pipeline_del", "status": "completed"})
+
+        ok = svc.delete_pipeline("pipeline_del")
+        assert ok["deleted"] is True
+        assert ok["removed_disk"] is True
+        assert not run_dir.exists()
+        assert svc._pipeline_history == []
+
+        # 不存在的任务
+        missing = svc.delete_pipeline("pipeline_nope")
+        assert missing["deleted"] is False
+        # 路径穿越必须被白名单拒绝
+        evil = svc.delete_pipeline("../../etc/passwd")
+        assert evil["deleted"] is False
 
     def test_get_pipeline_run_found_and_missing(self):
         """单任务查询：命中历史 / 未命中返回 None"""

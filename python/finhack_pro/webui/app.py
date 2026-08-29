@@ -27,11 +27,6 @@ from loguru import logger
 
 from finhack_pro.webui.api_routes import router as api_router
 from finhack_pro.webui.export_routes import router as export_router
-from finhack_pro.webui.theme_routes import (
-    WALLPAPER_DIR,
-    ensure_dirs,
-    router as theme_router,
-)
 from finhack_pro.webui.services import (
     AgentService,
     BacktestService,
@@ -41,6 +36,13 @@ from finhack_pro.webui.services import (
     StreamService,
 )
 from finhack_pro.webui.strategy_routes import router as strategy_router
+from finhack_pro.webui.theme_routes import (
+    WALLPAPER_DIR,
+    ensure_dirs,
+)
+from finhack_pro.webui.theme_routes import (
+    router as theme_router,
+)
 from finhack_pro.webui.workshop_routes import router as workshop_router
 from finhack_pro.webui.ws_routes import router as ws_router
 

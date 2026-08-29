@@ -195,17 +195,17 @@
         <div class="px-4 py-2 border-b border-line flex items-center justify-between">
             <h3 class="text-sm font-medium text-white">流水线日志</h3>
             <div class="flex items-center gap-2">
-                <span class="text-xs text-gray-500" x-text="pipelineHistory.length + ' 条记录'"></span>
-                <button @click="loadPipelineLogs()" class="text-xs text-accent hover:text-accent">刷新</button>
+                <span class="text-xs text-gray-500" x-text="pipelineRuns.length + ' 条记录'"></span>
+                <button @click="loadData()" class="text-xs text-accent hover:text-accent">刷新</button>
             </div>
         </div>
 
-        <div x-show="pipelineHistory.length === 0" class="text-sm text-gray-500 py-6 text-center">
+        <div x-show="pipelineRuns.length === 0" class="text-sm text-gray-500 py-6 text-center">
             暂无流水线日志。运行分析流水线后，这里会展示每个 Agent 的执行过程和思考结果。
         </div>
 
-        <div x-show="pipelineHistory.length > 0" class="divide-y divide-line/50">
-            <template x-for="record in pipelineHistory.slice().reverse().slice(0, 10)" :key="record.run_id">
+        <div x-show="pipelineRuns.length > 0" class="divide-y divide-line/50">
+            <template x-for="record in pipelineRuns.slice(0, 20)" :key="record.run_id">
                 <div class="px-4 py-3">
                     <!-- 运行摘要行(可点击展开) -->
                     <div class="flex items-center justify-between cursor-pointer select-none" @click="togglePipelineLog(record.run_id)">
@@ -216,16 +216,24 @@
                             </svg>
                             <div class="w-2 h-2 rounded-full"
                                  :class="record.status === 'completed' ? 'bg-ok' : record.status === 'running' ? 'bg-accent' : record.status === 'cancelled' ? 'bg-gray-500' : 'bg-danger'"></div>
-                            <span class="text-sm text-white font-mono" x-text="record.symbol"></span>
+                            <span class="text-sm text-white font-mono" x-text="record.symbol || record.run_id"></span>
+                            <span x-show="record.symbol" class="text-[10px] text-gray-600 font-mono" x-text="record.run_id"></span>
                             <span class="text-xs text-gray-500" x-text="formatTime(record.start_time)"></span>
+                            <span x-show="record.archived" class="px-1.5 py-0.5 rounded-sm text-[10px] bg-elevated text-gray-500">已归档</span>
                         </div>
                         <div class="flex items-center gap-3">
                             <span class="text-xs text-gray-400">
                                 <span class="text-green-400" x-text="record.steps_completed"></span>/<span x-text="record.steps_total || 7"></span> 步
+                                <span x-show="record.terminal === 'hold'" class="text-gray-600 ml-1">HOLD 提前结束</span>
+                                <span x-show="record.terminal === 'risk_rejected'" class="text-gray-600 ml-1">风控拒绝</span>
+                                <span x-show="record.terminal === 'executed'" class="text-gray-600 ml-1">已生成执行单</span>
+                                <span x-show="record.terminal === 'interrupted'" class="text-gray-600 ml-1">被中断</span>
                             </span>
-                            <button @click="showDecisionReport(record.run_id)"
-                                    x-show="record.status === 'completed'"
+                            <button @click.stop="showDecisionReport(record.run_id)"
                                     class="text-xs text-accent hover:underline">决策报告</button>
+                            <button @click.stop="deletePipeline(record.run_id, $event)"
+                                    x-show="record.status !== 'running'"
+                                    class="text-xs text-gray-500 hover:text-danger transition-colors">删除</button>
                             <span class="px-2 py-0.5 rounded-sm text-xs"
                                   :class="record.status === 'completed' ? 'bg-elevated text-ok' : record.status === 'running' ? 'bg-elevated text-accent' : record.status === 'cancelled' ? 'bg-elevated text-gray-400' : 'bg-elevated text-danger'"
                                   x-text="record.status === 'completed' ? '完成' : record.status === 'running' ? '运行中' : record.status === 'cancelled' ? '已取消' : record.status === 'pending' ? '待执行' : '失败'"></span>
@@ -275,33 +283,193 @@
                 </h3>
                 <button @click="decisionReport = null" class="text-gray-400 hover:text-white text-lg leading-none">×</button>
             </div>
-            <div class="p-4 space-y-5 text-sm" x-show="decisionReport">
-                <!-- 状态与置信度 -->
+            <template x-if="decisionReport">
+            <div class="p-4 space-y-5 text-sm">
+
+                <!-- ① 概览：状态 / 终态 / 置信度 -->
                 <div class="flex flex-wrap items-center gap-3 text-xs">
                     <span class="px-2 py-0.5 rounded-sm bg-elevated text-gray-300"
                           x-text="'状态: ' + (decisionReport.status || '—') + (decisionReport.terminal ? ' (' + decisionReport.terminal + ')' : '')"></span>
                     <span class="px-2 py-0.5 rounded-sm text-xs"
                           :class="decisionReport.confidence && decisionReport.confidence.tier === 'high' ? 'bg-up-soft text-up' : decisionReport.confidence && decisionReport.confidence.tier === 'medium' ? 'bg-elevated text-warn' : 'bg-elevated text-danger'"
                           x-text="decisionReport.confidence ? ('置信度: ' + (decisionReport.confidence.tier === 'high' ? '高' : decisionReport.confidence.tier === 'medium' ? '中' : '低') + ' ' + decisionReport.confidence.score.toFixed(0) + '/100') : '置信度: —'"></span>
+                    <span class="px-2 py-0.5 rounded-sm bg-elevated text-gray-400"
+                          x-text="'已完成步骤: ' + ((decisionReport.steps || []).length) + ' / 7'"></span>
                 </div>
 
-                <!-- 研究报告（后端 decision_report.md，markdown 渲染；加载中提示） -->
-                <div x-show="!decisionReportMd && !decisionReportMdLoading" class="text-sm text-gray-500 py-6 text-center">报告生成中...</div>
-                <div x-show="decisionReportMdLoading" class="flex items-center gap-2 text-sm text-gray-400 py-6 justify-center">
-                    <span class="spinner !w-4 !h-4 !border-2"></span>
-                    加载研究报告...
+                <div x-show="decisionReport.status === 'failed' || decisionReport.terminal === 'interrupted'"
+                     class="p-2.5 rounded-sm bg-elevated border border-warn/50 text-xs text-warn">
+                    该流水线未跑完全部步骤，下方仅展示已完成步骤的结论。
                 </div>
-                <div x-show="decisionReportMd" class="markdown-content text-xs leading-relaxed"
-                     x-html="renderMarkdown(decisionReportMd)"></div>
 
-                <!-- 完整报告下载 -->
-                <div class="flex gap-2 pt-3 border-t border-line/50">
+                <!-- ② 置信度构成（平铺：因子 / 得分 / 权重） -->
+                <div x-show="decisionReport.confidence">
+                    <h4 class="text-xs text-gray-400 mb-2">置信度构成</h4>
+                    <div class="space-y-1.5">
+                        <template x-for="(w, k) in (decisionReport.confidence.weights || {})" :key="k">
+                            <div class="flex items-center gap-2 text-xs">
+                                <span class="text-gray-400 w-20 flex-shrink-0" x-text="confidenceFactorLabel(k)"></span>
+                                <div class="flex-1 h-1.5 bg-inset rounded-sm overflow-hidden">
+                                    <div class="h-full bg-accent/70"
+                                         :style="'width: ' + Math.min(100, Math.max(0, Number(decisionReport.confidence.factors[k] || 0) > 1.0001 ? Number(decisionReport.confidence.factors[k] || 0) : Number(decisionReport.confidence.factors[k] || 0) * 100)) + '%'"></div>
+                                </div>
+                                <span class="text-white font-mono w-16 text-right flex-shrink-0"
+                                      x-text="confidenceFactorText(k, decisionReport.confidence.factors[k])"></span>
+                                <span class="text-gray-600 font-mono w-12 text-right flex-shrink-0"
+                                      x-text="'×' + Number(w).toFixed(2)"></span>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- ③ 分析链路（逐步平铺） -->
+                <div x-show="(decisionReport.steps || []).length > 0">
+                    <h4 class="text-xs text-gray-400 mb-2">分析链路</h4>
+                    <div class="space-y-2">
+                        <template x-for="st in decisionReport.steps" :key="st.step">
+                            <div class="bg-inset border border-line rounded-sm p-2.5">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="text-[10px] px-1.5 py-0.5 rounded-sm bg-elevated text-gray-400 font-mono"
+                                          x-text="'Step ' + st.step"></span>
+                                    <span class="text-xs text-white" x-text="st.name"></span>
+                                    <span class="text-[10px] text-gray-600 font-mono ml-auto" x-text="st.agent"></span>
+                                </div>
+                                <template x-for="e in decisionSummaryEntries(st.summary)" :key="st.step + '-' + e.key">
+                                    <div class="flex gap-2 text-xs mt-1">
+                                        <span class="text-gray-600 w-14 flex-shrink-0" x-text="e.label"></span>
+                                        <span class="text-gray-300 leading-relaxed"
+                                              :class="e.key === 'direction' ? decisionDirectionMeta(e.value).cls : ''"
+                                              x-text="e.key === 'direction' ? decisionDirectionMeta(e.value).text : e.value"></span>
+                                    </div>
+                                </template>
+                                <div x-show="decisionSummaryEntries(st.summary).length === 0"
+                                     class="text-xs text-gray-600">该步骤未产出可展示的摘要字段</div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- ④ 多空辩论 -->
+                <div x-show="decisionReport.debate">
+                    <h4 class="text-xs text-gray-400 mb-2">多空辩论</h4>
+                    <div class="bg-inset border border-line rounded-sm p-2.5 space-y-2">
+                        <div class="flex flex-wrap items-center gap-3 text-xs">
+                            <span class="text-gray-400">共识</span>
+                            <span :class="decisionConsensusMeta(decisionReport.debate.consensus).cls"
+                                  x-text="decisionConsensusMeta(decisionReport.debate.consensus).text"></span>
+                            <span class="text-gray-600">多空强度</span>
+                            <span class="text-up font-mono" x-text="'多 ' + Number(decisionReport.debate.bull_strength || 0).toFixed(2)"></span>
+                            <span class="text-down font-mono" x-text="'空 ' + Number(decisionReport.debate.bear_strength || 0).toFixed(2)"></span>
+                            <span class="text-gray-600">置信</span>
+                            <span class="text-white font-mono" x-text="Number(decisionReport.debate.confidence || 0).toFixed(2)"></span>
+                        </div>
+                        <div x-show="decisionReport.debate.conclusion" class="text-xs text-gray-300 leading-relaxed"
+                             x-text="decisionReport.debate.conclusion"></div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            <div>
+                                <div class="text-[10px] text-up mb-1">多头论点（<span x-text="(decisionReport.debate.bull_arguments || []).length"></span>）</div>
+                                <ul class="space-y-1">
+                                    <template x-for="(a, i) in (decisionReport.debate.bull_arguments || [])" :key="'b' + i">
+                                        <li class="text-[11px] text-gray-400 leading-relaxed" x-text="'· ' + a"></li>
+                                    </template>
+                                </ul>
+                            </div>
+                            <div>
+                                <div class="text-[10px] text-down mb-1">空头论点（<span x-text="(decisionReport.debate.bear_arguments || []).length"></span>）</div>
+                                <ul class="space-y-1">
+                                    <template x-for="(a, i) in (decisionReport.debate.bear_arguments || [])" :key="'s' + i">
+                                        <li class="text-[11px] text-gray-400 leading-relaxed" x-text="'· ' + a"></li>
+                                    </template>
+                                </ul>
+                            </div>
+                        </div>
+                        <div x-show="(decisionReport.debate.key_debates || []).length > 0">
+                            <div class="text-[10px] text-warn mb-1">关键争议</div>
+                            <ul class="space-y-1">
+                                <template x-for="(a, i) in (decisionReport.debate.key_debates || [])" :key="'d' + i">
+                                    <li class="text-[11px] text-gray-400 leading-relaxed" x-text="'· ' + a"></li>
+                                </template>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ⑤ 风控逐项 -->
+                <div x-show="(decisionReport.risk_checks || []).length > 0">
+                    <h4 class="text-xs text-gray-400 mb-2">风控逐项</h4>
+                    <div class="space-y-1">
+                        <template x-for="(c, i) in (decisionReport.risk_checks || [])" :key="'rc' + i">
+                            <div class="flex items-center gap-2 text-xs bg-inset border border-line rounded-sm px-2 py-1.5">
+                                <span :class="c.passed ? 'text-up' : 'text-down'" x-text="c.passed ? '通过' : '未通过'"></span>
+                                <span class="text-gray-300" x-text="c.name || c.item || ('检查项 ' + (i + 1))"></span>
+                                <span class="text-gray-500 ml-auto"
+                                      x-text="[c.detail, c.reason, c.message].filter(Boolean).join(' · ')"></span>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- ⑥ 工具调用（证据链） -->
+                <div x-show="(decisionReport.tool_calls || []).length > 0">
+                    <h4 class="text-xs text-gray-400 mb-2">
+                        工具调用 <span class="text-gray-600" x-text="'(' + (decisionReport.tool_calls || []).length + ' 次，证据编号 ev_N)'"></span>
+                    </h4>
+                    <div class="space-y-1 max-h-48 overflow-auto">
+                        <template x-for="(t, i) in (decisionReport.tool_calls || [])" :key="'tc' + i">
+                            <div class="flex items-center gap-2 text-[11px] bg-inset border border-line rounded-sm px-2 py-1">
+                                <span class="text-accent font-mono flex-shrink-0" x-text="t.evidence_id || ('#' + (i + 1))"></span>
+                                <span class="text-gray-300 font-mono" x-text="t.tool || t.name || ''"></span>
+                                <span class="text-gray-600 truncate ml-auto" x-text="t.return_summary || ''"></span>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- ⑦ Markdown 视图（可选切换；正文由后端内联返回） -->
+                <div x-show="decisionReportMdView">
+                    <div class="flex items-center justify-between mb-2">
+                        <h4 class="text-xs text-gray-400">研究报告（Markdown）</h4>
+                    </div>
+                    <div x-show="decisionReportMd" class="markdown-content text-xs leading-relaxed"
+                         x-html="renderMarkdown(decisionReportMd)"></div>
+                    <div x-show="!decisionReportMd" class="text-xs text-gray-600 py-3 text-center">
+                        后端尚未生成 Markdown 正文（平铺视图不受影响）。
+                    </div>
+                </div>
+
+                <!-- 底部操作 -->
+                <div class="flex flex-wrap items-center gap-3 pt-3 border-t border-line/50">
                     <a :href="'/api/agents/report/' + decisionReport.run_id" target="_blank"
                        class="text-xs text-accent hover:underline">查看完整 JSON</a>
-                    <a x-show="decisionReportMdPath" :href="decisionReportMdPath" target="_blank"
+                    <a :href="'/api/agents/report/' + decisionReport.run_id + '/md'" target="_blank"
                        class="text-xs text-gray-500 hover:text-gray-300">下载报告 .md</a>
-                    <span class="text-xs text-gray-600" x-text="decisionReportMdPath ? '· ' + decisionReportMdPath.split(/[\\\\/]/).pop() : ''"></span>
+                    <button @click="decisionReportMdView = !decisionReportMdView"
+                            class="text-xs text-gray-500 hover:text-gray-300"
+                            x-text="decisionReportMdView ? '切回平铺视图' : '切换 Markdown 视图'"></button>
                 </div>
+            </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- 删除流水线确认框（内嵌 webview 里原生 confirm 不弹窗，必须自定义） -->
+    <div x-show="pipelineDeleteTarget" x-cloak
+         class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+         @click.self="pipelineDeleteTarget = ''">
+        <div class="bg-surface border border-line rounded-sm w-full max-w-sm">
+            <div class="px-4 py-3 border-b border-line">
+                <h3 class="text-sm font-medium text-white">删除流水线任务</h3>
+            </div>
+            <div class="p-4 text-xs text-gray-400 leading-relaxed">
+                将删除任务
+                <span class="text-white font-mono" x-text="pipelineDeleteTarget"></span>
+                的全部产物（步骤 JSON/MD、决策报告、检查点目录），且不可恢复。
+            </div>
+            <div class="px-4 py-3 border-t border-line flex justify-end gap-2">
+                <button @click="pipelineDeleteTarget = ''"
+                        class="px-3 py-1.5 bg-elevated hover:bg-elevated/70 text-gray-300 text-xs rounded-sm transition-colors">取消</button>
+                <button @click="confirmDeletePipeline()"
+                        class="px-3 py-1.5 bg-danger hover:bg-danger/85 text-white text-xs rounded-sm transition-colors">确认删除</button>
             </div>
         </div>
     </div>

@@ -79,4 +79,15 @@ node_modules/
 # Runtime data (fetcher cache + pipeline artifacts under python/)
 python/data/cache/
 python/data/pipeline/
-data/themes/
+
+# 个性化壁纸：用户上传的个人图片，不入库
+# 注意：data/themes/ 这类含中间斜杠的模式会锚定到仓库根目录，
+# 匹配不到 python/data/themes/，必须显式写全路径。
+python/data/themes/
+
+# 创意工坊运行时产物：云端包注册表 + 代码生成包
+python/data/workshop/registry.json
+python/data/workshop/gen_*.zip
+
+# 前端临时调试页
+python/finhack_pro/webui/static/chart_debug.html

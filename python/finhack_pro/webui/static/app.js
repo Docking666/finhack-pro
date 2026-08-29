@@ -1385,6 +1385,68 @@ function backtestPage() {
             progress: 0,
             error: '',
             sweepTaskId: null,
+            // 热力图着色/排序指标（交易次数可直观看"哪些参数下信号才触发"）
+            metric: 'sharpe',
+            METRICS: [
+                { key: 'sharpe', label: '夏普比率', higher: true, fmt: (v) => v.toFixed(2) },
+                { key: 'annual_return', label: '年化收益 %', higher: true, fmt: (v) => v.toFixed(1) },
+                { key: 'total_return', label: '总收益 %', higher: true, fmt: (v) => v.toFixed(1) },
+                { key: 'max_drawdown', label: '最大回撤 %', higher: false, fmt: (v) => v.toFixed(1) },
+                { key: 'total_trades', label: '交易次数', higher: true, fmt: (v) => String(Math.round(v)) },
+                { key: 'win_rate', label: '胜率 %', higher: true, fmt: (v) => v.toFixed(1) },
+            ],
+            metricDef() {
+                return this.METRICS.find(m => m.key === this.metric) || this.METRICS[0];
+            },
+            metricValue(c) {
+                if (!c) return 0;
+                const v = Number(c[this.metric]);
+                return isFinite(v) ? v : 0;
+            },
+            // 按当前指标重算最优格子（后端 best 固定按夏普，前端需要跟随指标切换）
+            bestByMetric() {
+                if (!this.cells || !this.cells.length) return null;
+                const def = this.metricDef();
+                let best = this.cells[0];
+                for (const c of this.cells) {
+                    const a = this.metricValue(c), b = this.metricValue(best);
+                    if (def.higher ? a > b : a < b) best = c;
+                }
+                return best;
+            },
+            // 点击格子 → 把该组合写回回测面板的临时参数（便于直接复跑验证）
+            applyCellToParams(c) {
+                const page = window.__backtestPage;
+                if (!page || !c) return;
+                if (page.params.strategy !== this.strategy) {
+                    page.params.strategy = this.strategy;
+                    page.syncParamMeta();
+                }
+                page.params.strategy_params[this.axes.x.name] = c.x;
+                page.params.strategy_params[this.axes.y.name] = c.y;
+                if (window.__alpineApp) {
+                    window.__alpineApp.showToast(
+                        `已应用参数 ${this.axes.x.name}=${c.x}, ${this.axes.y.name}=${c.y}（点击"开始回测"复跑）`,
+                        'success'
+                    );
+                }
+            },
+            // 最优格子的展示文案（指标名 + 参数值 + 指标数值）
+            bestText() {
+                const b = this.bestByMetric();
+                if (!b) return '';
+                const def = this.metricDef();
+                return `${def.label} 最优: ${this.axes.x.name}=${b.x}, ${this.axes.y.name}=${b.y} → ${def.fmt(this.metricValue(b))}`;
+            },
+            // 触发成交的格子占比（暴露"参数导致信号不触发"的情况）
+            triggeredText() {
+                if (!this.cells || !this.cells.length) return '';
+                const n = this.cells.filter(c => (c.total_trades || 0) > 0).length;
+                return `${n}/${this.cells.length} 个组合产生交易`;
+            },
+            onMetricChange() {
+                this.renderHeatmap();
+            },
             axisOptions(axis) {
                 const rx = this.registry[this.strategy] || {};
                 const self = this.axes[axis];
@@ -1485,9 +1547,11 @@ function backtestPage() {
                 const cellW = 56, cellH = 28, padL = 46, padT = 22;
                 const W = padL + xs.length * cellW + 8;
                 const H = padT + ys.length * cellH + 6;
-                // 色阶：sharpe 归一化到 [-1,1] → 低=绿(--down)、高=红(--up)
-                const sh = cells.map(c => c.sharpe);
-                const lo = Math.min(...sh), hi = Math.max(...sh);
+                // 色阶：按当前选中指标归一化 → 好=红(--up)、差=绿(--down)
+                // 最大回撤这类"越小越好"的指标需要反转映射
+                const def = this.metricDef();
+                const vals = cells.map(c => this.metricValue(c));
+                const lo = Math.min(...vals), hi = Math.max(...vals);
                 const range = (hi - lo) || 1;
                 const upRGB = TK('--up'), downRGB = TK('--down');
                 const parseColor = (str) => {
@@ -1536,7 +1600,8 @@ function backtestPage() {
                     for (let i = 0; i < xs.length; i++) {
                         const c = cellMap.get(xs[i] + '|' + ys[j]);
                         if (!c) continue;
-                        const t = (c.sharpe - lo) / range;
+                        let t = (this.metricValue(c) - lo) / range;
+                        if (!def.higher) t = 1 - t;   // 回撤越小越好 → 反转色阶
                         const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
                         rect.setAttribute('x', padL + i * cellW);
                         rect.setAttribute('y', padT + j * cellH);
@@ -1545,17 +1610,23 @@ function backtestPage() {
                         rect.setAttribute('rx', '2');
                         rect.setAttribute('fill', mix(t));
                         const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-                        title.textContent = `${this.axes.x.name}=${c.x}, ${this.axes.y.name}=${c.y} | 夏普 ${c.sharpe.toFixed(2)} | 收益 ${c.total_return}% | 回撤 ${c.max_drawdown}%`;
+                        title.textContent =
+                            `${this.axes.x.name}=${c.x}, ${this.axes.y.name}=${c.y}\n` +
+                            `夏普 ${c.sharpe.toFixed(2)} · 年化 ${(c.annual_return || 0).toFixed(1)}% · 总收益 ${c.total_return.toFixed(1)}%\n` +
+                            `回撤 ${c.max_drawdown.toFixed(1)}% · 交易 ${c.total_trades || 0} 笔 · 胜率 ${(c.win_rate || 0).toFixed(1)}%\n` +
+                            `点击应用该参数组合`;
                         rect.appendChild(title);
+                        rect.style.cursor = 'pointer';
+                        rect.addEventListener('click', () => this.applyCellToParams(c));
                         svg.appendChild(rect);
-                        // 中心数值（夏普）
+                        // 中心数值（当前选中指标）
                         const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
                         txt.setAttribute('x', padL + i * cellW + (cellW - 2) / 2);
                         txt.setAttribute('y', padT + j * cellH + (cellH - 2) / 2 + 3);
                         txt.setAttribute('text-anchor', 'middle');
                         txt.setAttribute('fill', '#ffffff');
                         txt.setAttribute('font-size', '9');
-                        txt.textContent = c.sharpe.toFixed(2);
+                        txt.textContent = def.fmt(this.metricValue(c));
                         svg.appendChild(txt);
                     }
                 }
@@ -1626,8 +1697,20 @@ function backtestPage() {
                     }
                     this.strategyOptions = opts;
                     // 参数元数据：内置前端 BUILTIN_PARAMS；工坊策略从 manifest.params_schema；
-                    // 后端如返回 params 字段则优先合并（向后兼容）
-                    this.paramsMetaAll = { ...BUILTIN_PARAMS, ...(resp.data.params || {}) };
+                    // 后端如返回 params 字段则优先合并（向后兼容）。
+                    //
+                    // 【坑】后端 params 对 dual_thrust/momentum/mean_reversion 返回的是
+                    // 空数组（inspect.signature 取不到策略类内部的 _params 字典）。
+                    // 直接展开会让空数组把 BUILTIN_PARAMS 的同名项覆盖成 []，
+                    // 导致 paramMeta 为空、"策略参数（临时调整）"整块不渲染。
+                    // 因此这里只在后端给出**非空且可用**的条目时才覆盖。
+                    this.paramsMetaAll = { ...BUILTIN_PARAMS };
+                    for (const [sid, plist] of Object.entries(resp.data.params || {})) {
+                        const usable = (plist || []).filter(
+                            p => p && p.name && p.name !== 'config' && p.default !== null && p.default !== undefined
+                        );
+                        if (usable.length) this.paramsMetaAll[sid] = usable;
+                    }
                     for (const s of resp.data.custom || []) {
                         const schema = s.params_schema || [];
                         this.paramsMetaAll[s.id] = schema.map(p => ({
@@ -1651,6 +1734,30 @@ function backtestPage() {
                 if (!(p.name in this.params.strategy_params)) {
                     this.params.strategy_params[p.name] = p.default !== null && p.default !== undefined ? p.default : undefined;
                 }
+            }
+            // 切换策略后清掉不属于当前策略的旧覆盖值，避免把 rsi_period 之类
+            // 的参数误传给 dual_thrust
+            const names = new Set(meta.map(p => p.name));
+            for (const k of Object.keys(this.params.strategy_params)) {
+                if (!names.has(k)) delete this.params.strategy_params[k];
+            }
+        },
+
+        // 与默认值不同的参数个数（"已改 N 项"提示用）
+        tempParamCount() {
+            let n = 0;
+            for (const p of this.paramMeta || []) {
+                const cur = (this.params.strategy_params || {})[p.name];
+                if (cur === undefined || cur === null || cur === '') continue;
+                if (String(cur) !== String(p.default)) n++;
+            }
+            return n;
+        },
+
+        // 把当前策略的临时参数全部还原为默认值
+        resetTempParams() {
+            for (const p of this.paramMeta || []) {
+                this.params.strategy_params[p.name] = p.default;
             }
         },
 
@@ -2392,18 +2499,59 @@ function agentsPage() {
         pipelineHistory: [],
         expandedLogs: [],
         decisionReport: null,   // 决策报告弹窗数据（阶段4：确定性生成）
-        decisionReportMd: '',        // 研究报告 markdown（后端渲染）
+        decisionReportMd: '',        // 研究报告 markdown（后端内联返回）
         decisionReportMdLoading: false,
-        decisionReportMdPath: '',    // 报告 .md 文件路径（下载用）
+        decisionReportMdPath: '',    // 报告 .md 文件路径（仅展示用，不可 fetch）
+        decisionReportMdView: false, // true=Markdown 视图；false=结构化平铺视图（默认）
         _lastThinkingTs: 0,          // 看门狗：最后一次 agent_thinking 事件时间戳
 
         // 未完成任务（非当前发起 run）：提供续跑入口
         get pendingRun() {
-            const run = this.pipelineRuns.find(r =>
-                (r.status === 'running' || r.status === 'failed' || r.status === 'pending')
-                && r.run_id !== this.currentRunId);
-            return run || null;
+            // 只把"仍可能继续"的任务当未完成任务，运行状态优先。
+            // 陈年僵尸任务（terminal=interrupted / 已归档 / 已取消）不应常驻提示条
+            // ——它们每次刷新都会被磁盘扫描带回来，会让页面顶部永远挂着一条
+            // "失败/中断"横幅，看起来像反复失败。
+            const candidates = (this.pipelineRuns || []).filter(
+                r => r.run_id !== this.currentRunId && !r.archived
+            );
+            const running = candidates.find(r => r.status === 'running' || r.status === 'pending');
+            if (running) return running;
+            const failed = candidates.find(r => r.status === 'failed' && r.terminal !== 'interrupted');
+            return failed || null;
         },
+
+        // 删除（清理）一条流水线任务：仅对非运行中任务开放
+        async deletePipeline(runId, event) {
+            if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+            if (!runId) return;
+            if (this.pipelineRunning && runId === this.currentRunId) {
+                window.__alpineApp.showToast('任务正在运行，请先取消再删除', 'warning');
+                return;
+            }
+            // 内嵌 webview 里原生 confirm() 不弹窗，统一走 Alpine 自定义确认框
+            this.pipelineDeleteTarget = runId;
+        },
+
+        async _doDeletePipeline(runId) {
+            try {
+                const resp = await API.delete(`/api/agents/pipeline/${runId}`);
+                if (resp.success) {
+                    window.__alpineApp.showToast('任务已删除', 'success');
+                    await this.loadData();
+                } else {
+                    window.__alpineApp.showToast(resp.message || '删除失败', 'error');
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('删除失败: ' + (e.message || e), 'error');
+            }
+        },
+
+        async confirmDeletePipeline() {
+            const id = this.pipelineDeleteTarget;
+            this.pipelineDeleteTarget = '';
+            if (id) await this._doDeletePipeline(id);
+        },
+        pipelineDeleteTarget: '',     // 待删除的流水线 run_id（自定义确认框）
         // 续跑遇环境指纹漂移（LLM 配置已变更）→ 二次确认后强制续跑
         pendingDriftRun: null,
 
@@ -2476,14 +2624,11 @@ function agentsPage() {
                 const resp = await API.get(`/api/agents/report/${runId}`);
                 if (resp.success && resp.data && resp.data.report) {
                     this.decisionReport = resp.data.report;
-                    // 加载研究报告 markdown（后端已渲染：执行摘要/分析链路/辩论/风控/风险）
-                    this.decisionReportMd = '';
-                    this.decisionReportMdLoading = true;
+                    // md 正文由后端内联返回（resp.data.md）。
+                    // 注意：不能再 fetch(resp.data.md_path) —— 那是服务端本地相对路径，
+                    // 浏览器请求必然 404，会让弹窗永远停在"报告生成中"。
+                    this.decisionReportMd = resp.data.md || '';
                     this.decisionReportMdPath = resp.data.md_path || '';
-                    try {
-                        const mdResp = await fetch(resp.data.md_path);
-                        if (mdResp.ok) this.decisionReportMd = await mdResp.text();
-                    } catch (_) { /* 报告 md 不可达时保留空态提示 */ }
                     this.decisionReportMdLoading = false;
                 } else {
                     window.__alpineApp.showToast('决策报告生成失败', 'error');
@@ -2491,6 +2636,64 @@ function agentsPage() {
             } catch (e) {
                 window.__alpineApp.showToast('获取决策报告失败: ' + e.message, 'error');
             }
+        },
+
+        // 决策报告：把某一步的 summary 字典摊平成 [{label, value}]，供平铺渲染
+        decisionSummaryEntries(summary) {
+            const out = [];
+            if (!summary || typeof summary !== 'object') return out;
+            const labels = {
+                summary: '结论', conclusion: '结论', direction: '方向', confidence: '置信度',
+                sentiment: '情绪', assessment: '评估', key_findings: '关键发现',
+                reasoning: '推理', approved: '风控通过', checks: '检查项',
+            };
+            for (const [k, v] of Object.entries(summary)) {
+                if (v === null || v === undefined || v === '') continue;
+                if (Array.isArray(v)) {
+                    out.push({ key: k, label: labels[k] || k, value: v.map(x => (typeof x === 'object' ? JSON.stringify(x) : String(x))).join('；') });
+                } else if (typeof v === 'object') {
+                    out.push({ key: k, label: labels[k] || k, value: JSON.stringify(v) });
+                } else {
+                    out.push({ key: k, label: labels[k] || k, value: String(v) });
+                }
+            }
+            return out;
+        },
+
+        // 决策报告：置信度因子中文名
+        confidenceFactorLabel(key) {
+            const m = {
+                risk_pass_rate: '风控通过率',
+                debate_consensus: '多空共识度',
+                data_completeness: '数据完整度',
+                historical_validation: '历史验证',
+            };
+            return m[key] || key;
+        },
+
+        // 决策报告：数值按 0~1 小数或 0~100 分数两种形态展示
+        confidenceFactorText(key, val) {
+            const n = Number(val);
+            if (!isFinite(n)) return '—';
+            if (n > 1.0001) return n.toFixed(1) + ' / 100';
+            return (n * 100).toFixed(0) + '%';
+        },
+
+        // 决策报告：方向中文 + 配色类
+        decisionDirectionMeta(dir) {
+            const d = String(dir || '').toLowerCase();
+            if (d === 'buy' || d === 'long') return { text: '看多', cls: 'text-up' };
+            if (d === 'sell' || d === 'short') return { text: '看空', cls: 'text-down' };
+            if (d === 'hold') return { text: '观望', cls: 'text-warn' };
+            return { text: dir || '—', cls: 'text-gray-300' };
+        },
+
+        decisionConsensusMeta(c) {
+            const s = String(c || '').toLowerCase();
+            if (s === 'bullish') return { text: '偏多', cls: 'text-up' };
+            if (s === 'bearish') return { text: '偏空', cls: 'text-down' };
+            if (s === 'neutral') return { text: '中性', cls: 'text-warn' };
+            return { text: c || '—', cls: 'text-gray-300' };
         },
 
         togglePipelineLog(runId) {            const idx = this.expandedLogs.indexOf(runId);
@@ -2803,6 +3006,10 @@ function workshopPage() {
         cloudError: '',
         cloudLoading: false,
         cloudUploading: false,
+        cloudTotal: 0,                 // 云端条目总数（供列表头展示）
+        cloudDetail: null,             // 云端条目详情（查看代码）
+        cloudDetailId: '',             // 当前展开详情的 package_id
+        cloudDetailLoading: false,
         cloudUploadPath: 'data/workshop/my_strat-v1.0.0.zip',
         cloudCode: { name: '', code: '', version: '0.1.0', pkg_type: 'strategy' },  // 文本代码上传
 
@@ -3655,16 +3862,73 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
                 }
                 const resp = await API.get(path);
                 if (resp.success) {
-                    this.cloudPackages = resp.data || [];
+                    // 后端返回 {"items":[...],"page":n,"pageSize":n,"total":n}，
+                    // 必须解包 items，否则 cloudPackages 变成对象 → length 为
+                    // undefined → 空态不显示、x-for 迭代不出卡片。
+                    const raw = resp.data;
+                    const list = Array.isArray(raw)
+                        ? raw
+                        : (raw && Array.isArray(raw.items) ? raw.items : []);
+                    // 云端字段是 package_id（不是 id），统一补 id 别名便于模板书写
+                    this.cloudPackages = list.map(p => ({
+                        ...p,
+                        id: p.package_id || p.id || '',
+                    }));
+                    this.cloudTotal = (raw && raw.total) || this.cloudPackages.length;
                 } else {
                     this.cloudError = resp.message || '云端市场加载失败';
                     this.cloudPackages = [];
+                    this.cloudTotal = 0;
                 }
             } catch (e) {
                 this.cloudError = '无法连接云端市场: ' + e.message + '（需配置 workshop.base_url）';
                 this.cloudPackages = [];
+                this.cloudTotal = 0;
             } finally {
                 this.cloudLoading = false;
+            }
+        },
+
+        // 从云端详情里抽取源码正文（不同后端字段名不一致，逐个兜底）
+        cloudDetailCode() {
+            const d = this.cloudDetail;
+            if (!d) return '';
+            for (const key of ['code', 'source', 'content', 'source_code']) {
+                if (typeof d[key] === 'string' && d[key].trim()) return d[key];
+            }
+            const files = d.files;
+            if (files && typeof files === 'object') {
+                for (const [name, body] of Object.entries(files)) {
+                    if (typeof body === 'string' && body.trim() && name.endsWith('.py')) return body;
+                }
+                for (const body of Object.values(files)) {
+                    if (typeof body === 'string' && body.trim()) return body;
+                }
+            }
+            return '';
+        },
+
+        async viewCloudPackage(packageId) {
+            if (!packageId) {
+                window.__alpineApp.showToast('该条目缺少 package_id，无法查看详情', 'warning');
+                return;
+            }
+            this.cloudDetailId = packageId;
+            this.cloudDetail = null;
+            this.cloudDetailLoading = true;
+            try {
+                const resp = await API.get('/api/workshop/cloud/packages/' + encodeURIComponent(packageId));
+                if (resp.success) {
+                    this.cloudDetail = resp.data || {};
+                } else {
+                    window.__alpineApp.showToast(resp.message || '详情加载失败', 'error');
+                    this.cloudDetailId = '';
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('详情加载失败: ' + (e.message || e), 'error');
+                this.cloudDetailId = '';
+            } finally {
+                this.cloudDetailLoading = false;
             }
         },
 
@@ -3697,10 +3961,16 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
         },
 
         async installCloudPackage(packageId) {
+            if (!packageId) {
+                window.__alpineApp.showToast('该条目缺少 package_id，无法安装', 'warning');
+                return;
+            }
             try {
                 const resp = await API.post('/api/workshop/cloud/install', { package_id: packageId });
                 if (resp.success) {
-                    window.__alpineApp.showToast('云端策略已安装', 'success');
+                    window.__alpineApp.showToast(resp.message || '云端策略已安装', 'success');
+                    // 安装后同步刷新"我的策略"，让用户立刻看到新条目
+                    try { await this.loadMyStrategies(); } catch (_) { /* 忽略刷新失败 */ }
                 } else {
                     window.__alpineApp.showToast('安装失败: ' + (resp.message || ''), 'error');
                 }

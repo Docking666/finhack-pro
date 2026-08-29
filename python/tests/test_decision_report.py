@@ -12,9 +12,9 @@ import pytest
 
 from finhack_pro.agents.tool_registry import ToolRegistry, _summarize_return
 from finhack_pro.pipeline.decision_report import (
+    _render_markdown,
     build_decision_report,
     save_decision_report,
-    _render_markdown,
 )
 
 
