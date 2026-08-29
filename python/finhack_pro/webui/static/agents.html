@@ -81,15 +81,19 @@
                 </template>
                 <template x-if="!pipelineRunning && pendingRun">
                     <div class="flex items-center gap-2 bg-inset border border-line rounded-sm px-3 py-1.5">
-                        <span class="w-2 h-2 rounded-full bg-warn"></span>
+                        <span class="w-2 h-2 rounded-full" :class="pendingRun.status === 'running' ? 'bg-warn' : 'bg-gray-500'"></span>
                         <span class="text-xs text-gray-400">
                             未完成任务 <span class="text-gray-300 font-mono" x-text="pendingRun.run_id"></span>
-                            (<span x-text="pendingRun.status === 'running' ? '进行中' : pendingRun.status === 'failed' ? '失败' : '待执行'"></span>,
+                            (<span x-text="pendingRun.status === 'running' ? '进行中' : pendingRun.status === 'failed' ? '失败/中断' : '待执行'"></span>,
                             <span x-text="pendingRun.steps_completed"></span>/<span x-text="pendingRun.steps_total || 7"></span> 步)
                         </span>
-                        <button @click="resumePipeline(pendingRun)"
+                        <button x-show="pendingRun.status === 'running'" @click="resumePipeline(pendingRun)"
                                 class="px-2.5 py-0.5 bg-accent/80 hover:bg-accent text-accent-fg text-xs rounded-sm transition-colors">
                             续跑
+                        </button>
+                        <button @click="cancelPipeline()"
+                                class="px-2.5 py-0.5 bg-danger/70 hover:bg-danger text-white text-xs rounded-sm transition-colors">
+                            取消
                         </button>
                     </div>
                 </template>

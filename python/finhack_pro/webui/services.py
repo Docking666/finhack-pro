@@ -52,6 +52,10 @@ _NICHE_STRATEGY_IDS = {
     "dragon_tiger_follow", "alternative_cross",
 }
 
+# 流水线僵尸任务治理：磁盘恢复的 running 任务若 updated_at 超过该秒数
+# （无实时心跳），视为"中断"而非"运行中"，避免前端显示成一直运行且无法取消。
+_PIPELINE_STALE_SECONDS = 600
+
 
 def _precompute_niche_fields(data) -> "Any":
     """为差异化策略预计算技术字段（ma20/volume_ratio/rsi/macd_signal）
@@ -1508,7 +1512,29 @@ class AgentService:
                 except Exception:
                     state = None
                 status = (state or {}).get("status", "running")
-                # 无 state 文件但有 done 标记 → 推测 running（进行中/中断）
+                error = None
+                # 【僵尸任务治理】磁盘恢复的 running 若无实时心跳（updated_at 过旧）或
+                # 连 state 文件都没有（仅 step*.done 残留）→ 判定为中断而非运行中，
+                # 否则前端会把陈年僵尸任务显示成"一直运行"且无法取消。
+                # 判定结果写回磁盘（status=failed），使 API 显示与磁盘状态一致，
+                # 前端刷新即失败态，不再残留"运行中"假象。
+                if status == "running":
+                    updated_at = (state or {}).get("updated_at")
+                    stale = updated_at is None or (time.time() - float(updated_at)) > _PIPELINE_STALE_SECONDS
+                    if stale:
+                        status = "failed"
+                        error = "任务中断（上次运行被终止或进程重启），已由 stale 检测标记"
+                        try:
+                            if state is not None:
+                                state["status"] = "failed"
+                                state["terminal"] = "interrupted"
+                                state["error"] = error
+                                state["updated_at"] = time.time()
+                                with open(state_path, "w", encoding="utf-8") as f:
+                                    _json.dump(state, f, ensure_ascii=False, indent=2)
+                            logger.info(f"[Pipeline {name}] stale 检测：运行中任务已中断，写回磁盘 failed")
+                        except Exception as e:
+                            logger.warning(f"[Pipeline {name}] stale 状态写回失败: {e}")
                 done_steps = sorted(
                     int(f[4:-5]) for f in os.listdir(run_dir)
                     if f.startswith("step") and f.endswith(".done")
@@ -1516,6 +1542,7 @@ class AgentService:
                 runs.append({
                     "run_id": name,
                     "status": status,
+                    "error": error,
                     "steps_completed": len(done_steps),
                     "steps_total": len(_STEP_MODELS),
                     "done_steps": done_steps,
@@ -1573,6 +1600,28 @@ class AgentService:
         """
         entry = self._running_pipelines.get(run_id)
         if not entry:
+            # 僵尸任务兜底：任务不在内存（进程重启后磁盘恢复的 running）→ 直接落盘 cancelled
+            try:
+                run_dir = os.path.join(
+                    (getattr(self._coordinator, "config", None) or {})
+                    .get("pipeline", {}).get("output_dir", "data/pipeline"),
+                    run_id,
+                )
+                state_path = os.path.join(run_dir, "pipeline_state.json")
+                if os.path.exists(state_path):
+                    import json as _json
+                    with open(state_path, "r", encoding="utf-8") as f:
+                        st = _json.load(f)
+                    if st.get("status") == "running":
+                        st["status"] = "cancelled"
+                        st["terminal"] = "cancelled"
+                        st["updated_at"] = time.time()
+                        with open(state_path, "w", encoding="utf-8") as f:
+                            _json.dump(st, f, ensure_ascii=False, indent=2)
+                        logger.info(f"[Pipeline {run_id}] 僵尸任务已落盘取消（磁盘兜底）")
+                        return True
+            except Exception as e:
+                logger.warning(f"[Pipeline {run_id}] 僵尸任务取消落盘失败: {e}")
             return False
         flag = entry.get("cancel_flag")
         if flag is not None:
