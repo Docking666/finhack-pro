@@ -616,6 +616,10 @@ function app() {
         // 系统状态
         systemStatus: 'healthy',
         systemInfo: { version: '1.0.0', mode: 'backtest', uptime_seconds: 0, agent_count: 6, memory_count: 0, tool_count: 7 },
+        // 运行时间本地秒级自增（30 秒轮询校准 base，恢复右上角"跳动"）
+        uptimeBase: 0,
+        uptimeAnchorTs: 0,
+        uptimeDisplay: 0,
         healthComponents: {},
         wsConnected: false,
 
@@ -666,6 +670,10 @@ function app() {
 
             // 定期刷新数据
             setInterval(() => this.loadSystemData(), 30000);
+            // 运行时间本地秒级自增（页面不刷新也持续跳动，30 秒轮询校准）
+            setInterval(() => {
+                this.uptimeDisplay = this.uptimeBase + (Date.now() - this.uptimeAnchorTs) / 1000;
+            }, 1000);
         },
 
         // ---------- 主题与配色 ----------
@@ -942,6 +950,10 @@ function app() {
 
                 if (infoResp.status === 'fulfilled' && infoResp.value.success) {
                     this.systemInfo = infoResp.value.data;
+                    // 校准本地 uptime 计时（防服务器重启后跳变）
+                    this.uptimeBase = (infoResp.value.data.uptime_seconds || 0);
+                    this.uptimeAnchorTs = Date.now();
+                    this.uptimeDisplay = this.uptimeBase;
                 }
                 if (healthResp.status === 'fulfilled' && healthResp.value.success) {
                     this.healthComponents = healthResp.value.data.components || {};

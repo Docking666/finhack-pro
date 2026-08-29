@@ -376,7 +376,7 @@
                         <span x-text="wsConnected ? 'WS已连接' : 'WS未连接'"></span>
                     </div>
                     <div x-text="'模式: ' + systemInfo.mode"></div>
-                    <div x-text="'运行时间: ' + formatUptime(systemInfo.uptime_seconds)"></div>
+                    <div x-text="'运行时间: ' + formatUptime(Math.floor(uptimeDisplay || systemInfo.uptime_seconds || 0))"></div>
                 </div>
             </header>
 
