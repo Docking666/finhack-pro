@@ -242,6 +242,27 @@ const LayoutKit = {
     },
 };
 
+// 内置策略参数元数据（回测面板"策略参数（临时调整）"区数据源；
+// 后端 /api/backtest/strategies 暂无 params 字段，前端内置与策略默认值保持一致）
+const BUILTIN_PARAMS = {
+    dual_thrust: [
+        { name: 'k1', label: '上轨系数（开仓）', default: 0.5 },
+        { name: 'k2', label: '下轨系数（平仓）', default: 0.5 },
+        { name: 'lookback', label: '通道回看周期', default: 20 },
+    ],
+    mean_reversion: [
+        { name: 'rsi_period', label: 'RSI 周期', default: 14 },
+        { name: 'oversold', label: '超卖阈值', default: 30 },
+        { name: 'overbought', label: '超买阈值', default: 70 },
+        { name: 'bb_period', label: '布林周期', default: 20 },
+    ],
+    momentum: [
+        { name: 'lookback', label: '动量回看周期', default: 20 },
+        { name: 'top_k', label: '持仓数量', default: 5 },
+        { name: 'rebalance_days', label: '调仓周期', default: 5 },
+    ],
+};
+
 // Chart.js 实例注册表：图表颜色在 JS 配置里固化，不走 CSS 变量，
 // 换主题后必须逐个重绘（见 repaintCharts）。用 class 继承包装以保留静态方法。
 window.__charts = new Set();
@@ -1592,8 +1613,9 @@ function backtestPage() {
                         });
                     }
                     this.strategyOptions = opts;
-                    // 参数元数据：内置 inspect 提取；工坊策略从 manifest.params_schema
-                    this.paramsMetaAll = resp.data.params || {};
+                    // 参数元数据：内置前端 BUILTIN_PARAMS；工坊策略从 manifest.params_schema；
+                    // 后端如返回 params 字段则优先合并（向后兼容）
+                    this.paramsMetaAll = { ...BUILTIN_PARAMS, ...(resp.data.params || {}) };
                     for (const s of resp.data.custom || []) {
                         const schema = s.params_schema || [];
                         this.paramsMetaAll[s.id] = schema.map(p => ({
@@ -3453,6 +3475,8 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
                 if (resp.success) {
                     window.__alpineApp.showToast(resp.message || '策略已保存为草稿', 'success');
                     if (resp.data && resp.data.strategy_id) {
+                        // 保存成功 → 自动切到"我的策略"tab 并刷新列表（否则用户看不到刚保存的策略）
+                        this.activeTab = 'my_strategies';
                         this.loadMyStrategies();
                     }
                 }
