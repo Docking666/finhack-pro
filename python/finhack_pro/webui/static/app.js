@@ -1811,6 +1811,14 @@ function backtestPage() {
                     end_date: this.params.end_date,
                     initial_capital: this.params.initial_capital,
                 };
+                // 参数覆盖（临时调整区，只改默认值不改参数名）：过滤空值后传给后端
+                if (this.params.strategy_params && Object.keys(this.params.strategy_params).length) {
+                    const sp = {};
+                    for (const [k, v] of Object.entries(this.params.strategy_params)) {
+                        if (v !== undefined && v !== null && v !== '') sp[k] = v;
+                    }
+                    if (Object.keys(sp).length) payload.strategy_params = sp;
+                }
                 // 多策略组合（≥2）→ 启用信号聚合器+滤波管道，strategy 字段被后端忽略
                 if ((this.params.strategies || []).length >= 2) {
                     payload.strategies = this.params.strategies;
@@ -2372,6 +2380,9 @@ function agentsPage() {
         pipelineHistory: [],
         expandedLogs: [],
         decisionReport: null,   // 决策报告弹窗数据（阶段4：确定性生成）
+        decisionReportMd: '',        // 研究报告 markdown（后端渲染）
+        decisionReportMdLoading: false,
+        decisionReportMdPath: '',    // 报告 .md 文件路径（下载用）
         _lastThinkingTs: 0,          // 看门狗：最后一次 agent_thinking 事件时间戳
 
         // 未完成任务（非当前发起 run）：提供续跑入口
@@ -2453,6 +2464,15 @@ function agentsPage() {
                 const resp = await API.get(`/api/agents/report/${runId}`);
                 if (resp.success && resp.data && resp.data.report) {
                     this.decisionReport = resp.data.report;
+                    // 加载研究报告 markdown（后端已渲染：执行摘要/分析链路/辩论/风控/风险）
+                    this.decisionReportMd = '';
+                    this.decisionReportMdLoading = true;
+                    this.decisionReportMdPath = resp.data.md_path || '';
+                    try {
+                        const mdResp = await fetch(resp.data.md_path);
+                        if (mdResp.ok) this.decisionReportMd = await mdResp.text();
+                    } catch (_) { /* 报告 md 不可达时保留空态提示 */ }
+                    this.decisionReportMdLoading = false;
                 } else {
                     window.__alpineApp.showToast('决策报告生成失败', 'error');
                 }
@@ -3458,6 +3478,31 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
                 }
             } catch (e) {
                 this.editorValidation = { valid: false, message: '验证请求失败: ' + e.message };
+            }
+        },
+
+        async saveTemplateToMine(tpl) {
+            // 模板卡片快捷保存：不依赖 selectedTemplate，直接保存模板代码
+            if (!tpl || !tpl.code) {
+                window.__alpineApp.showToast('该模板没有可保存的代码', 'warning');
+                return;
+            }
+            try {
+                const resp = await API.post('/api/strategy/save', {
+                    code: tpl.code,
+                    name: tpl.name || '自定义策略',
+                });
+                if (resp.success) {
+                    window.__alpineApp.showToast(resp.message || '策略已保存为草稿', 'success');
+                    if (resp.data && resp.data.strategy_id) {
+                        this.activeTab = 'my_strategies';
+                        this.loadMyStrategies();
+                    }
+                } else {
+                    window.__alpineApp.showToast((resp.detail || resp.message || '保存失败') + '（若为数据问题请检查代码）', 'error');
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('保存失败: ' + e.message, 'error');
             }
         },
 

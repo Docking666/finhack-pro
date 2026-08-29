@@ -5,8 +5,7 @@
         <h3 class="text-sm font-medium text-white mb-4">回测参数</h3>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
-                <label class="block text-xs text-gray-400 mb-1">策略选择</label>
-                <!-- 自定义下拉：原生 select 在部分浏览器（如 Edge）对 template x-for 渲染的
+                <label class="block text-xs text-gray-400 mb-1">策略选择</label>                <!-- 自定义下拉：原生 select 在部分浏览器（如 Edge）对 template x-for 渲染的
                      option 点击事件不可靠（用户反馈多次无法选择），改为 div 模拟 100% 可控 -->
                 <div class="relative" @click.outside="strategyDropdownOpen = false">
                     <button type="button" @click="strategyDropdownOpen = !strategyDropdownOpen"
@@ -103,8 +102,8 @@
             </div>
         </div>
 
-        <!-- 回测进度（嵌入参数表单卡，紧邻开始按钮，符合操作习惯） -->
-        <div x-show="running || progress > 0" class="mt-4 border-t border-line pt-3">
+        <!-- 回测进度（sticky 顶部：运行中滚动页面进度条始终可见，紧邻操作按钮） -->
+        <div x-show="running || progress > 0" class="mt-4 border-t border-line pt-3 sticky top-2 z-20 bg-surface/95 backdrop-blur-sm rounded-sm">
             <div class="flex items-center justify-between mb-1.5">
                 <span class="text-xs text-gray-400" x-text="progressMessage || '准备中...'"></span>
                 <span class="text-xs text-white font-mono" x-text="progress.toFixed(1) + '%'"></span>
