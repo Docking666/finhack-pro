@@ -1076,6 +1076,189 @@ function backtestPage() {
         validation: null,   // 策略验证报告（StrategyValidator 7 项）
         confidence: null,   // 置信度合成（阶段3）：{score, tier, factors}
         activeTrade: null,  // 交易溯源弹窗数据（表格详情/权益曲线点击共用）
+        sweep: {
+            strategy: 'dual_thrust',
+            axes: {
+                x: { name: 'k1', min: 0.2, max: 0.8, step: 0.1 },
+                y: { name: 'k2', min: 0.2, max: 0.8, step: 0.1 },
+            },
+            registry: {},        // 策略 → 可扫描参数对
+            cells: [],           // SweepCell[]
+            best: null,
+            running: false,
+            progress: 0,
+            error: '',
+            sweepTaskId: null,
+            axisOptions(axis) {
+                const rx = this.registry[this.strategy] || {};
+                const self = this.axes[axis];
+                return [rx.x, rx.y].filter(Boolean).map(p => ({ ...p, name: p.name }));
+            },
+            onStrategyChange() {
+                const meta = this.registry[this.strategy];
+                if (meta) {
+                    this.axes.x = { name: meta.x.name, min: meta.x.min, max: meta.x.max, step: meta.x.step };
+                    this.axes.y = { name: meta.y.name, min: meta.y.min, max: meta.y.max, step: meta.y.step };
+                }
+                this.cells = []; this.best = null; this.error = '';
+            },
+            onAxisChange(axis) {
+                // 切换参数时套用元数据默认范围
+                const meta = this.registry[this.strategy] || {};
+                const p = meta[axis] || {};
+                if (p.name === this.axes[axis].name) {
+                    this.axes[axis].min = p.min;
+                    this.axes[axis].max = p.max;
+                    this.axes[axis].step = p.step;
+                }
+                this.cells = []; this.best = null; this.error = '';
+            },
+            async loadRegistry() {
+                try {
+                    const resp = await API.get('/api/backtest/sweep/params');
+                    if (resp.success && resp.data) {
+                        this.registry = resp.data;
+                        this.onStrategyChange();
+                    }
+                } catch (e) {
+                    console.error('加载扫描参数元数据失败:', e);
+                }
+            },
+            async start() {
+                if (this.running) return;
+                this.error = '';
+                const payload = {
+                    strategy: this.strategy,
+                    symbol: window.__backtestPage.params.symbols.split(',')[0].trim() || '600519.SH',
+                    start_date: window.__backtestPage.params.start_date,
+                    end_date: window.__backtestPage.params.end_date,
+                    initial_capital: window.__backtestPage.params.initial_capital,
+                    x_param: { name: this.axes.x.name, label: this.axes.x.name, min: this.axes.x.min, max: this.axes.x.max, step: this.axes.x.step },
+                    y_param: { name: this.axes.y.name, label: this.axes.y.name, min: this.axes.y.min, max: this.axes.y.max, step: this.axes.y.step },
+                };
+                try {
+                    const resp = await API.post('/api/backtest/sweep', payload);
+                    if (resp.success && resp.data) {
+                        this.running = true;
+                        this.progress = 5;
+                        this.sweepTaskId = resp.data.task_id;
+                        this.pollSweep();
+                    } else {
+                        this.error = (resp.error || resp.message) || '扫描启动失败';
+                    }
+                } catch (e) {
+                    this.error = '扫描启动失败: ' + (e.message || e);
+                }
+            },
+            async pollSweep() {
+                // 轮询直到完成（WS sweep_progress 只更新进度，结果走拉取）
+                const interval = setInterval(async () => {
+                    if (!this.sweepTaskId) { clearInterval(interval); return; }
+                    try {
+                        const resp = await API.get(`/api/backtest/sweep/${this.sweepTaskId}`);
+                        if (resp.success && resp.data) {
+                            const d = resp.data;
+                            if (d.error) { this.error = d.error; this.running = false; clearInterval(interval); return; }
+                            if (d.cells && d.cells.length) {
+                                this.cells = d.cells;
+                                this.best = d.best || null;
+                                this.running = false;
+                                this.progress = 100;
+                                clearInterval(interval);
+                                this.renderHeatmap();
+                            }
+                        }
+                    } catch (e) { /* keep polling */ }
+                }, 1500);
+                // 兜底：60s 超时停止轮询
+                setTimeout(() => { if (this.running) { this.running = false; this.error = '扫描超时'; clearInterval(interval); } }, 60000);
+            },
+            renderHeatmap() {
+                const svg = this.$refs && this.$refs.heatmap;
+                if (!svg || !this.cells.length) return;
+                const cells = this.cells;
+                // 网格维度
+                const xs = [...new Set(cells.map(c => c.x))].sort((a, b) => a - b);
+                const ys = [...new Set(cells.map(c => c.y))].sort((a, b) => b - a); // y 轴自上而下
+                const cellW = 56, cellH = 28, padL = 46, padT = 22;
+                const W = padL + xs.length * cellW + 8;
+                const H = padT + ys.length * cellH + 6;
+                // 色阶：sharpe 归一化到 [-1,1] → 低=绿(--down)、高=红(--up)
+                const sh = cells.map(c => c.sharpe);
+                const lo = Math.min(...sh), hi = Math.max(...sh);
+                const range = (hi - lo) || 1;
+                const upRGB = TK('--up'), downRGB = TK('--down');
+                const parseColor = (str) => {
+                    if (!str) return [128, 128, 128];
+                    const m = String(str).match(/rgb\(([^)]+)\)/);
+                    if (m) return m[1].split(',').map(s => parseInt(s.trim(), 10));
+                    const h = String(str).replace('#', '');
+                    if (/^[0-9a-fA-F]{6}$/.test(h)) return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+                    return [128, 128, 128];
+                };
+                const mix = (t) => {
+                    const a = parseColor(upRGB), b = parseColor(downRGB);
+                    const r = Math.round(b[0] + (a[0] - b[0]) * t);
+                    const g = Math.round(b[1] + (a[1] - b[1]) * t);
+                    const bl = Math.round(b[2] + (a[2] - b[2]) * t);
+                    return `rgb(${r}, ${g}, ${bl})`;
+                };
+                svg.setAttribute('width', W);
+                svg.setAttribute('height', H);
+                svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+                svg.innerHTML = '';
+                // 轴标签
+                for (let i = 0; i < xs.length; i++) {
+                    const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    t.setAttribute('x', padL + i * cellW + cellW / 2);
+                    t.setAttribute('y', padT - 6);
+                    t.setAttribute('text-anchor', 'middle');
+                    t.setAttribute('fill', 'var(--fg-subtle)');
+                    t.setAttribute('font-size', '10');
+                    t.textContent = String(xs[i]);
+                    svg.appendChild(t);
+                }
+                for (let j = 0; j < ys.length; j++) {
+                    const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    t.setAttribute('x', padL - 6);
+                    t.setAttribute('y', padT + j * cellH + cellH / 2 + 3);
+                    t.setAttribute('text-anchor', 'end');
+                    t.setAttribute('fill', 'var(--fg-subtle)');
+                    t.setAttribute('font-size', '10');
+                    t.textContent = String(ys[j]);
+                    svg.appendChild(t);
+                }
+                // 单元格
+                const cellMap = new Map(cells.map(c => [c.x + '|' + c.y, c]));
+                for (let j = 0; j < ys.length; j++) {
+                    for (let i = 0; i < xs.length; i++) {
+                        const c = cellMap.get(xs[i] + '|' + ys[j]);
+                        if (!c) continue;
+                        const t = (c.sharpe - lo) / range;
+                        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                        rect.setAttribute('x', padL + i * cellW);
+                        rect.setAttribute('y', padT + j * cellH);
+                        rect.setAttribute('width', cellW - 2);
+                        rect.setAttribute('height', cellH - 2);
+                        rect.setAttribute('rx', '2');
+                        rect.setAttribute('fill', mix(t));
+                        const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+                        title.textContent = `${this.axes.x.name}=${c.x}, ${this.axes.y.name}=${c.y} | 夏普 ${c.sharpe.toFixed(2)} | 收益 ${c.total_return}% | 回撤 ${c.max_drawdown}%`;
+                        rect.appendChild(title);
+                        svg.appendChild(rect);
+                        // 中心数值（夏普）
+                        const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                        txt.setAttribute('x', padL + i * cellW + (cellW - 2) / 2);
+                        txt.setAttribute('y', padT + j * cellH + (cellH - 2) / 2 + 3);
+                        txt.setAttribute('text-anchor', 'middle');
+                        txt.setAttribute('fill', '#ffffff');
+                        txt.setAttribute('font-size', '9');
+                        txt.textContent = c.sharpe.toFixed(2);
+                        svg.appendChild(txt);
+                    }
+                }
+            },
+        },
         signalLog: {
             rows: [], allRows: [], total: 0, sampled: false,
             extraKeys: [], strategies: [],
@@ -1104,7 +1287,7 @@ function backtestPage() {
 
         async init() {
             window.__backtestPage = this;
-            await Promise.all([this.loadStrategies(), this.loadHistory()]);
+            await Promise.all([this.loadStrategies(), this.loadHistory(), this.sweep.loadRegistry()]);
             // 回测页模板经 x-html 异步注入，Alpine init 时 canvas 可能尚未挂载，
             // 仅靠 $nextTick 会漏建图表 → 权益曲线永远空白。延时重试确保创建。
             // 用 ensureChart（含实例健康校验 + Chart.js 缺失 toast 提示）而非裸 initChart。
@@ -1369,6 +1552,11 @@ function backtestPage() {
         },
 
         handleWSMessage(data) {
+            // sweep_progress 使用独立 task_id（非回测任务），不被 currentTaskId 过滤
+            if (data.type === 'sweep_progress') {
+                this.sweep.progress = data.progress || this.sweep.progress;
+                return;
+            }
             if (data.task_id && data.task_id !== this.currentTaskId) return;
 
             switch (data.type) {
@@ -1376,8 +1564,7 @@ function backtestPage() {
                     this.progress = data.progress;
                     this.progressMessage = data.current_bar
                         ? `正在处理第 ${data.current_bar}/${data.total_bars} 个交易日`
-                        : '回测运行中...';
-                    // 实时更新权益(简化版)
+                        : '回测运行中...';                    // 实时更新权益(简化版)
                     if (data.equity && this.equityChart) {
                         const labels = this.equityChart.data.labels;
                         const equityData = this.equityChart.data.datasets[0].data;

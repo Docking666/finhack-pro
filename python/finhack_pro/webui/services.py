@@ -31,6 +31,10 @@ from finhack_pro.webui.models import (
     MemoryStats,
     PipelineRunResult,
     PipelineStepResult,
+    SweepCell,
+    SweepParam,
+    SweepRequest,
+    SweepResult,
     SystemInfo,
     ToolCallStats,
     ToolInfo,
@@ -515,6 +519,206 @@ class BacktestService:
         self._history: List[Dict[str, Any]] = []
         # 信号调试日志（阶段1）：单独存储，不进 WS/结果全量推送，由专用 API 拉取
         self._signal_logs: Dict[str, List[Dict[str, Any]]] = {}
+        # 参数扫描结果（阶段5 热力图）
+        self._sweep_results: Dict[str, SweepResult] = {}
+
+    # ========================================================================
+    # 参数扫描（阶段5 热力图）：复用 GridSearchOptimizer，异步 + WS 进度
+    # ========================================================================
+
+    def sweep_param_registry(self) -> Dict[str, Dict[str, Any]]:
+        """内置策略的可扫描参数对元数据（前端下拉默认值）"""
+        return {
+            "dual_thrust": {
+                "x": {"name": "k1", "label": "上轨系数", "min": 0.2, "max": 0.8, "step": 0.1},
+                "y": {"name": "k2", "label": "下轨系数", "min": 0.2, "max": 0.8, "step": 0.1},
+            },
+            "mean_reversion": {
+                "x": {"name": "rsi_period", "label": "RSI周期", "min": 5, "max": 30, "step": 5},
+                "y": {"name": "oversold", "label": "超卖阈值", "min": 20, "max": 40, "step": 5},
+            },
+            "momentum": {
+                "x": {"name": "lookback", "label": "回看周期", "min": 5, "max": 40, "step": 5},
+                "y": {"name": "rebalance_days", "label": "调仓周期", "min": 3, "max": 15, "step": 3},
+            },
+        }
+
+    async def run_sweep(
+        self,
+        task_id: str,
+        request: SweepRequest,
+        stream_callback: Optional[Callable] = None,
+    ) -> Optional[SweepResult]:
+        """执行参数网格扫描（2 参数，复用 GridSearchOptimizer）
+
+        - 网格 >10×10 拒绝（前端亦预校验）
+        - 取数失败/策略加载失败 → SweepResult.error（诚实失败，不造假）
+        """
+        from finhack_pro.backtest.runner import BacktestRunner
+        from finhack_pro.data.fetcher import DataFetcher
+        from finhack_pro.strategies.optimizer import GridSearchOptimizer, ParamSpace
+
+        result = SweepResult(
+            task_id=task_id,
+            strategy=request.strategy,
+            symbol=request.symbol,
+            x_param=request.x_param,
+            y_param=request.y_param,
+            metric=request.metric,
+        )
+        try:
+            # 网格规模校验（≤10×10）
+            x_vals = self._expand_grid(request.x_param)
+            y_vals = self._expand_grid(request.y_param)
+            total = len(x_vals) * len(y_vals)
+            if len(x_vals) > 10 or len(y_vals) > 10:
+                result.error = f"网格超限: {len(x_vals)}×{len(y_vals)}，最多 10×10"
+                return result
+            result.total_combos = total
+
+            if stream_callback:
+                await stream_callback({"type": "sweep_progress", "task_id": task_id, "progress": 5,
+                                       "message": f"扫描网格 {len(x_vals)}×{len(y_vals)}={total} 组合"})
+
+            # 取数（失败抛错）
+            cfg = get_config()
+            fetcher = DataFetcher(
+                source=cfg.data.source,
+                tushare_token=cfg.data.tushare_token,
+                cache_dir=cfg.data.cache_dir,
+                sources=cfg.data.sources or None,
+                custom_source=cfg.data.custom_source,
+            )
+            data = fetcher.get_daily(
+                symbol=request.symbol,
+                start_date=request.start_date,
+                end_date=request.end_date,
+            )
+            if data is None or data.empty:
+                result.error = f"无法获取 {request.symbol} 数据（网络/数据源/日期区间）"
+                return result
+
+            strategy_cls = self._sweep_strategy_class(request.strategy)
+            if strategy_cls is None:
+                result.error = f"策略 {request.strategy} 不支持参数扫描（内置 3 个策略可扫）"
+                return result
+
+            param_space = [
+                ParamSpace(name=request.x_param.name, type="int" if self._is_int_step(request.x_param.step) else "float",
+                           low=request.x_param.min, high=request.x_param.max, step=request.x_param.step),
+                ParamSpace(name=request.y_param.name, type="int" if self._is_int_step(request.y_param.step) else "float",
+                           low=request.y_param.min, high=request.y_param.max, step=request.y_param.step),
+            ]
+
+            # 执行搜索（executor 防阻塞；1/3 进度）
+            if stream_callback:
+                await stream_callback({"type": "sweep_progress", "task_id": task_id, "progress": 20,
+                                       "message": "网格搜索运行中..."})
+            loop = asyncio.get_event_loop()
+            optimizer = GridSearchOptimizer(param_space, metric="sharpe_ratio")
+            adapter = self._make_sweep_adapter(strategy_cls, request.symbol, request.initial_capital)
+            opt_result = await loop.run_in_executor(
+                None,
+                lambda: optimizer.optimize(
+                    adapter,
+                    data,
+                ),
+            )
+
+            # 组装 cells（含收益/回撤，供悬停）
+            cells: List[SweepCell] = []
+            for trial in opt_result.all_results:
+                m = trial.metrics or {}
+                cells.append(SweepCell(
+                    x=float(trial.params.get(request.x_param.name, 0)),
+                    y=float(trial.params.get(request.y_param.name, 0)),
+                    sharpe=round(float(m.get("sharpe_ratio", 0) or 0), 4),
+                    total_return=round(float(m.get("total_return", 0) or 0) * 100, 2),
+                    max_drawdown=round(float(m.get("max_drawdown", 0) or 0) * 100, 2),
+                ))
+            result.cells = cells
+            if opt_result.best_params:
+                best_x = float(opt_result.best_params.get(request.x_param.name, 0))
+                best_y = float(opt_result.best_params.get(request.y_param.name, 0))
+                for c in cells:
+                    if c.x == best_x and c.y == best_y:
+                        result.best = c
+                        break
+
+            if stream_callback:
+                await stream_callback({"type": "sweep_progress", "task_id": task_id, "progress": 100,
+                                       "message": f"扫描完成: {total} 组合"})
+            self._sweep_results[task_id] = result
+            return result
+        except Exception as e:
+            logger.error(f"[Sweep {task_id}] 参数扫描失败: {e}")
+            result.error = f"扫描失败: {str(e)}"
+            self._sweep_results[task_id] = result
+            return result
+
+    @staticmethod
+    def _expand_grid(param: SweepParam) -> List[float]:
+        """展开参数网格（防浮点误差用 round）"""
+        vals: List[float] = []
+        v = param.min
+        n = 0
+        while v <= param.max + 1e-9 and n < 100:
+            vals.append(round(v, 6))
+            v += param.step
+            n += 1
+        return vals
+
+    @staticmethod
+    def _is_int_step(step: float) -> bool:
+        return abs(step - round(step)) < 1e-9 and step >= 1
+
+    def _sweep_strategy_class(self, name: str):
+        from finhack_pro.backtest.runner import BacktestRunner
+
+        strategies: Dict[str, type] = {
+            "dual_thrust": __import__(
+                "finhack_pro.strategies.dual_thrust", fromlist=["DualThrustStrategy"]
+            ).DualThrustStrategy,
+            "momentum": __import__(
+                "finhack_pro.strategies.momentum", fromlist=["MomentumStrategy"]
+            ).MomentumStrategy,
+            "mean_reversion": __import__(
+                "finhack_pro.strategies.mean_reversion", fromlist=["MeanReversionStrategy"]
+            ).MeanReversionStrategy,
+        }
+        return strategies.get(name.lower())
+
+    @staticmethod
+    def _make_sweep_adapter(strategy_cls: type, symbol: str, initial_capital: float) -> type:
+        """把真实回测包装成 optimizer 可消费的静态 backtest 类
+
+        内置策略没有静态 backtest 方法，这里用适配器复用 GridSearchOptimizer
+        的网格生成/并行调度/最优追踪，而每格评估走真实 BacktestRunner
+        （含 B1 修复后的完整信号链路）。
+        """
+        from finhack_pro.backtest.runner import BacktestRunner
+
+        class _SweepAdapter:
+            @staticmethod
+            def backtest(params: Dict[str, Any], data: Any) -> Dict[str, Any]:
+                strategy = strategy_cls()
+                runner = BacktestRunner()
+                res = runner.run(
+                    strategy=strategy,
+                    symbol=symbol,
+                    data=data,
+                    initial_capital=initial_capital,
+                    params=params,
+                )
+                return {
+                    "sharpe_ratio": float(res.sharpe_ratio or 0),
+                    "total_return": float(res.total_return or 0),
+                    "max_drawdown": float(res.max_drawdown or 0),
+                    "annual_return": float(res.annual_return or 0),
+                    "total_trades": int(res.total_trades or 0),
+                }
+
+        return _SweepAdapter
 
     def create_task(self, request: BacktestRequest) -> BacktestStatus:
         """创建回测任务

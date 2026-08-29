@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import platform
 import time
+import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -30,6 +31,7 @@ from finhack_pro.webui.models import (
     MemoryStats,
     PipelineRunRequest,
     PipelineRunResult,
+    SweepRequest,
     SystemInfo,
     ToolCallStats,
     ToolInfo,
@@ -261,6 +263,51 @@ async def list_backtest_strategies():
                     pass
             custom.append({"id": d.name, "name": label})
     return APIResponse(data={"builtin": builtin, "custom": custom})
+
+
+@router.get("/api/backtest/sweep/params", response_model=APIResponse)
+async def list_sweep_params(request: Request):
+    """内置策略的可扫描参数对元数据（阶段5 热力图前端下拉默认值）"""
+    backtest_svc = _get_backtest_service(request)
+    return APIResponse(data=backtest_svc.sweep_param_registry())
+
+
+@router.post("/api/backtest/sweep", response_model=APIResponse)
+async def start_sweep(request: Request, req: SweepRequest):
+    """启动参数热力图扫描（2 参数网格，复用 GridSearchOptimizer）
+
+    网格 >10×10 直接拒绝（前端亦预校验）；异步执行 + WS sweep_progress 进度。
+    """
+    backtest_svc = _get_backtest_service(request)
+    stream_svc = _get_stream_service(request)
+
+    # 网格规模预校验（防无效任务排队）
+    x_vals = backtest_svc._expand_grid(req.x_param)
+    y_vals = backtest_svc._expand_grid(req.y_param)
+    if len(x_vals) > 10 or len(y_vals) > 10:
+        raise HTTPException(
+            status_code=400,
+            detail=f"网格超限: {len(x_vals)}×{len(y_vals)}，最多 10×10（当前 {req.x_param.name}={req.x_param.min}~{req.x_param.max} 步长 {req.x_param.step}）",
+        )
+
+    task_id = uuid.uuid4().hex[:12]
+    async def _run_sweep():
+        async def _stream_callback(msg: Dict[str, Any]):
+            await stream_svc.broadcast("backtest", msg)
+        await backtest_svc.run_sweep(task_id, req, stream_callback=_stream_callback)
+
+    asyncio.create_task(_run_sweep())
+    return APIResponse(message="参数扫描已启动", data={"task_id": task_id})
+
+
+@router.get("/api/backtest/sweep/{task_id}", response_model=APIResponse)
+async def get_sweep_result(request: Request, task_id: str):
+    """查询参数扫描结果（前端轮询/WS 完成事件后拉取）"""
+    backtest_svc = _get_backtest_service(request)
+    result = getattr(backtest_svc, "_sweep_results", {}).get(task_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"扫描任务不存在: {task_id}")
+    return APIResponse(data=result.model_dump())
 
 
 @router.post("/api/backtest/run", response_model=APIResponse)

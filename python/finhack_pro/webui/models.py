@@ -211,6 +211,51 @@ class TradeRecord(BaseModel):
     context: Dict[str, Any] = Field(default_factory=dict)
 
 
+class SweepParam(BaseModel):
+    """参数热力图扫描参数定义（阶段5）"""
+    name: str = ""
+    label: str = ""
+    min: float = 0.0
+    max: float = 1.0
+    step: float = 0.1
+
+
+class SweepRequest(BaseModel):
+    """参数扫描请求（2 参数网格，复用 GridSearchOptimizer）"""
+    strategy: str = "dual_thrust"
+    symbol: str = "600519.SH"
+    start_date: str = "2024-01-01"
+    end_date: str = "2024-12-31"
+    initial_capital: float = 1_000_000
+    metric: str = "sharpe_ratio"
+    x_param: SweepParam = Field(default_factory=SweepParam)
+    y_param: SweepParam = Field(default_factory=SweepParam)
+
+
+class SweepCell(BaseModel):
+    """热力图单元格"""
+    x: float
+    y: float
+    sharpe: float = 0.0
+    total_return: float = 0.0
+    max_drawdown: float = 0.0
+
+
+class SweepResult(BaseModel):
+    """参数扫描结果"""
+    task_id: str
+    strategy: str = ""
+    symbol: str = ""
+    x_param: SweepParam = Field(default_factory=SweepParam)
+    y_param: SweepParam = Field(default_factory=SweepParam)
+    metric: str = "sharpe_ratio"
+    cells: List[SweepCell] = Field(default_factory=list)
+    best: Optional[SweepCell] = None
+    sampled: bool = False
+    total_combos: int = 0
+    error: Optional[str] = None
+
+
 class BacktestMetrics(BaseModel):
     """回测指标"""
     total_return: float = 0.0
