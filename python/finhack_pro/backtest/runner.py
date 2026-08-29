@@ -276,6 +276,21 @@ class BacktestRunner:
             # 处理策略信号
             signals = strategy.on_bar(context, bar)
 
+            # 成交上下文快照（阶段2 交易溯源）：撮合成交时写入 trade['context']
+            # {bar_extra: 当日指标值, position_volume: 当时持仓, signal: 信号摘要}
+            # 组合策略下 signal.extra 含 aggregated_confidence/reasoning（聚合器信息）
+            def _trade_context(sig: Any) -> Dict[str, Any]:
+                return {
+                    "bar_extra": dict(bar.extra),
+                    "position_volume": position_volume,
+                    "signal": {
+                        "direction": sig.direction.value,
+                        "strategy_name": sig.strategy_name or "",
+                        "price": round(sig.price, 2),
+                        "extra": dict(sig.extra or {}),
+                    },
+                }
+
             # 信号调试日志（阶段1）：快照指标值 + 信号摘要 + 持仓状态
             signal_log.append({
                 "date": str(bar_date),
@@ -303,6 +318,7 @@ class BacktestRunner:
                         total_cost = cost + commission
 
                         if total_cost <= portfolio.cash:
+                            _ctx = _trade_context(signal)  # 成交前快照（持仓=开仓前状态）
                             portfolio.cash -= total_cost
                             position_volume = volume
                             position_cost = price
@@ -313,6 +329,7 @@ class BacktestRunner:
                                 "volume": volume,
                                 "commission": round(commission, 2),
                                 "strategy_name": signal.strategy_name or "策略信号",
+                                "context": _ctx,
                             })
 
                 elif signal.direction == SignalDirection.SELL and position_volume > 0:
@@ -325,6 +342,7 @@ class BacktestRunner:
 
                     pnl = net_revenue - position_volume * position_cost
                     portfolio.cash += net_revenue
+                    _ctx = _trade_context(signal)  # 成交前快照（持仓=平仓前状态）
                     trades.append({
                         "date": str(bar_date),
                         "action": "sell",
@@ -333,6 +351,7 @@ class BacktestRunner:
                         "commission": round(commission + stamp_tax, 2),
                         "pnl": round(pnl, 2),
                         "strategy_name": signal.strategy_name or "策略信号",
+                        "context": _ctx,
                     })
                     position_volume = 0
                     position_cost = 0.0

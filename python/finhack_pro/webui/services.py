@@ -740,6 +740,7 @@ class BacktestService:
                     commission=t.get('commission', 0),
                     pnl=t.get('pnl', 0),
                     reason=t.get('strategy_name', '策略信号'),
+                    context=t.get('context', {}),
                 ))
 
             metrics = BacktestMetrics(

@@ -206,6 +206,9 @@ class TradeRecord(BaseModel):
     commission: float
     pnl: float = 0.0
     reason: str = ""
+    # 交易溯源上下文（阶段2）：成交时快照 {bar_extra, position_volume, signal}，
+    # 供前端"详情"展开与权益曲线买卖点弹窗；存量数据无该字段时为 {} 零破坏
+    context: Dict[str, Any] = Field(default_factory=dict)
 
 
 class BacktestMetrics(BaseModel):

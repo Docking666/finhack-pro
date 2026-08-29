@@ -217,6 +217,11 @@
                             <td class="py-1.5 px-2 text-right text-white font-mono" x-text="trade.price.toFixed(2)"></td>
                             <td class="py-1.5 px-2 text-right text-gray-400" x-text="trade.volume"></td>
                             <td class="py-1.5 px-2 text-right font-mono" :class="trade.pnl >= 0 ? 'text-up' : 'text-down'" x-text="(trade.pnl >= 0 ? '+' : '') + trade.pnl.toFixed(2)"></td>
+                            <td class="py-1.5 px-2 text-right">
+                                <button @click="showTradeDetail(trade)"
+                                        class="text-xs text-accent hover:underline"
+                                        x-show="trade.context && Object.keys(trade.context).length">溯源</button>
+                            </td>
                         </tr>
                     </template>
                 </tbody>
@@ -334,5 +339,81 @@
             </table>
         </div>
         <div x-show="history.length === 0" class="text-sm text-gray-500 py-4 text-center">暂无历史回测</div>
+    </div>
+
+    <!-- 交易溯源弹窗（表格详情 + 权益曲线买卖点共用） -->
+    <div x-show="activeTrade" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+         @click.self="activeTrade = null">
+        <div class="bg-surface border border-line rounded-sm w-full max-w-lg max-h-[80vh] overflow-auto">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-line">
+                <h3 class="text-sm font-medium text-white">
+                    交易溯源
+                    <span class="ml-2 text-xs text-gray-500" x-text="activeTrade ? activeTrade.date + ' · ' + (activeTrade.direction === 'buy' ? '买入' : '卖出') : ''"></span>
+                </h3>
+                <button @click="activeTrade = null" class="text-gray-400 hover:text-white text-lg leading-none">×</button>
+            </div>
+            <div class="p-4 space-y-4 text-sm" x-show="activeTrade">
+                <!-- 基础信息 -->
+                <div class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                    <div class="flex justify-between"><span class="text-gray-500">价格</span><span class="text-white font-mono" x-text="activeTrade.price.toFixed(2)"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-500">数量</span><span class="text-white font-mono" x-text="activeTrade.volume"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-500">盈亏</span><span class="font-mono" :class="activeTrade.pnl >= 0 ? 'text-up' : 'text-down'" x-text="(activeTrade.pnl >= 0 ? '+' : '') + activeTrade.pnl.toFixed(2)"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-500">来源策略</span><span class="text-white" x-text="activeTrade.reason || '—'"></span></div>
+                </div>
+
+                <!-- 信号上下文 -->
+                <template x-if="activeTrade.context && activeTrade.context.signal">
+                    <div>
+                        <div class="text-xs text-gray-500 mb-1.5">信号上下文</div>
+                        <div class="bg-elevated rounded-sm p-2.5 text-xs space-y-1">
+                            <div class="flex justify-between">
+                                <span class="text-gray-500">方向</span>
+                                <span :class="activeTrade.context.signal.direction === 'buy' ? 'text-up' : 'text-down'"
+                                      x-text="activeTrade.context.signal.direction === 'buy' ? '买入' : '卖出'"></span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-500">策略</span>
+                                <span class="text-white" x-text="activeTrade.context.signal.strategy_name || '—'"></span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-500">聚合置信度</span>
+                                <span class="text-white font-mono"
+                                      x-text="activeTrade.context.signal.extra && activeTrade.context.signal.extra.aggregated_confidence != null
+                                              ? (Number(activeTrade.context.signal.extra.aggregated_confidence) * 100).toFixed(0) + '%' : '—'"></span>
+                            </div>
+                            <div x-show="activeTrade.context.signal.extra && activeTrade.context.signal.extra.reasoning">
+                                <div class="text-gray-500 mb-0.5">触发理由</div>
+                                <div class="text-gray-300" x-text="activeTrade.context.signal.extra.reasoning"></div>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- 当日指标值 -->
+                <template x-if="activeTrade.context && activeTrade.context.bar_extra && Object.keys(activeTrade.context.bar_extra).length">
+                    <div>
+                        <div class="text-xs text-gray-500 mb-1.5">当日指标值（BarData.extra）</div>
+                        <div class="bg-elevated rounded-sm p-2.5 text-xs">
+                            <div class="grid grid-cols-2 gap-x-4 gap-y-1">
+                                <template x-for="(v, k) in activeTrade.context.bar_extra" :key="k">
+                                    <div class="flex justify-between">
+                                        <span class="text-gray-500 font-mono" x-text="k"></span>
+                                        <span class="text-white font-mono" x-text="typeof v === 'number' && isFinite(v) ? Number(v).toFixed(2) : v"></span>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- 持仓状态 -->
+                <template x-if="activeTrade.context">
+                    <div class="flex justify-between text-xs">
+                        <span class="text-gray-500">成交时持仓量</span>
+                        <span class="text-white font-mono" x-text="activeTrade.context.position_volume != null ? activeTrade.context.position_volume : '—'"></span>
+                    </div>
+                </template>
+            </div>
+        </div>
     </div>
 </div>

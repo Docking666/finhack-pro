@@ -1074,6 +1074,7 @@ function backtestPage() {
         exporting: false,
         currentResult: null,
         validation: null,   // 策略验证报告（StrategyValidator 7 项）
+        activeTrade: null,  // 交易溯源弹窗数据（表格详情/权益曲线点击共用）
         signalLog: {
             rows: [], allRows: [], total: 0, sampled: false,
             extraKeys: [], strategies: [],
@@ -1451,8 +1452,11 @@ function backtestPage() {
             }
         },
 
-        async loadSignalLog(taskId) {
-            try {
+        showTradeDetail(trade) {
+            this.activeTrade = trade;
+        },
+
+        async loadSignalLog(taskId) {            try {
                 const resp = await API.get(`/api/backtest/${taskId}/signal_log`);
                 if (resp.success && resp.data) {
                     const d = resp.data;
@@ -1580,6 +1584,18 @@ function backtestPage() {
                         responsive: true,
                         maintainAspectRatio: false,
                         interaction: { intersect: false, mode: 'index' },
+                        // 买卖点点击 → 交易溯源弹窗（阶段2）：按日期匹配当日交易
+                        onClick: (evt, elements) => {
+                            if (!elements || !elements.length) return;
+                            const idx = elements[0].index;
+                            const date = labels[idx];
+                            const matched = (result.trades || []).filter(t =>
+                                t.date && String(t.date).substring(0, 10) === date);
+                            if (matched.length) {
+                                // 同一日多笔时展示最后一笔，弹窗内信息以该笔为准
+                                this.showTradeDetail(matched[matched.length - 1]);
+                            }
+                        },
                         plugins: {
                             legend: { labels: { color: TK('--chart-axis'), font: { size: 11 } } },
                             tooltip: {
