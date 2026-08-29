@@ -77,6 +77,11 @@ class StrategyManifest:
     preview: str = ""
     created_at: str = ""
     updated_at: str = ""
+    # 阶段6 安全边界：验证准入状态机 draft → validated → enabled。
+    # draft = 仅通过 AST 扫描；enabled = 通过 StrategyValidator 全量 + 过拟合体检，
+    # 才可被回测面板/流水线选用（未验证策略置灰）。
+    status: str = "draft"
+    validation_report: Dict[str, Any] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
     # 解析与序列化
@@ -99,6 +104,8 @@ class StrategyManifest:
             preview=str(data.get("preview", "")).strip(),
             created_at=str(data.get("created_at", "")).strip(),
             updated_at=str(data.get("updated_at", "")).strip(),
+            status=str(data.get("status", "draft")).strip() or "draft",
+            validation_report=data.get("validation_report") or {},
         )
 
     @classmethod
@@ -138,6 +145,8 @@ class StrategyManifest:
             "preview": self.preview,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "status": self.status,
+            "validation_report": self.validation_report,
         }
 
     def to_yaml(self) -> str:

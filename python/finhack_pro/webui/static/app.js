@@ -1316,7 +1316,11 @@ function backtestPage() {
                         opts.push({ id, name: BUILTIN_LABELS[id] || id });
                     }
                     for (const s of resp.data.custom || []) {
-                        opts.push({ id: s.id, name: `[自有] ${s.name}` });
+                        opts.push({
+                            id: s.id,
+                            name: `[自有] ${s.name}${s.status === 'enabled' ? '' : '（未验证）'}`,
+                            disabled: s.status !== 'enabled',  // 阶段6：未验证策略置灰
+                        });
                     }
                     this.strategyOptions = opts;
                 }
@@ -2431,6 +2435,10 @@ function workshopPage() {
         // Tab状态
         activeTab: 'ai_strategy',
 
+        // 我的策略（阶段6 安全边界：draft → enabled 状态机）
+        myStrategies: [],
+        myStrategiesLoaded: false,
+
         // 云端市场状态（CloudBase）
         cloudPackages: [],
         cloudKeyword: '',
@@ -3125,10 +3133,60 @@ ${conditions.length > 0 ? '        # 过滤条件\n' + conditions.map(c => `    
                     name: this.strategyResult && this.strategyResult.name ? this.strategyResult.name : '自定义策略',
                 });
                 if (resp.success) {
-                    window.__alpineApp.showToast('策略已保存，可在回测面板选择: ' + (resp.data && resp.data.strategy_id), 'success');
+                    window.__alpineApp.showToast(resp.message || '策略已保存为草稿', 'success');
+                    if (resp.data && resp.data.strategy_id) {
+                        this.loadMyStrategies();
+                    }
                 }
             } catch (e) {
                 window.__alpineApp.showToast('保存失败: ' + e.message, 'error');
+            }
+        },
+
+        async loadMyStrategies() {
+            try {
+                const resp = await API.get('/api/backtest/strategies');
+                if (resp.success && resp.data && resp.data.custom) {
+                    this.myStrategies = resp.data.custom.map(s => ({
+                        id: s.id,
+                        name: s.name || s.id,
+                        status: s.status || 'draft',
+                        validation_report: {},
+                        showReport: false,
+                    }));
+                    // 逐个读取验证报告（manifest.validation_report）
+                    await Promise.all(this.myStrategies.map(async (s) => {
+                        try {
+                            const r = await API.get(`/api/strategy/${s.id}/manifest`);
+                            if (r.success && r.data) {
+                                s.validation_report = r.data.validation_report || {};
+                                s.status = r.data.status || s.status;
+                            }
+                        } catch (_) { /* 旧策略无 manifest 字段 */ }
+                    }));
+                    this.myStrategiesLoaded = true;
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('加载策略列表失败: ' + e.message, 'error');
+            }
+        },
+
+        async enableStrategy(strategyId) {
+            window.__alpineApp.showToast('正在执行启用验证（真实回测 + 过拟合体检，可能需要 1-2 分钟）...', 'info');
+            try {
+                const resp = await API.post(`/api/strategy/${strategyId}/enable`, {});
+                if (resp.success && resp.data) {
+                    const s = this.myStrategies.find(x => x.id === strategyId);
+                    if (s) {
+                        s.status = resp.data.status || s.status;
+                        s.validation_report = resp.data.validation_report || {};
+                    }
+                    window.__alpineApp.showToast(resp.message || '验证完成', resp.data.status === 'enabled' ? 'success' : 'warning');
+                } else {
+                    window.__alpineApp.showToast((resp.error || resp.message || '验证失败') + '（若为数据获取失败，请确认数据源可用）', 'error');
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('启用验证失败: ' + (e.message || e), 'error');
             }
         },
 

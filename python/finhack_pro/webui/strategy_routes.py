@@ -11,14 +11,15 @@ import json
 import re
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from finhack_pro.config import get_config
 from finhack_pro.webui.models import APIResponse
 
 router = APIRouter(prefix="/api/strategy", tags=["strategy"])
@@ -1031,10 +1032,135 @@ async def save_strategy(request: StrategySaveRequest):
         "entry": "strategy.py",
         "entry_class": "",
         "params_schema": StrategyManifest.default_params_schema(),
+        # 阶段6 安全边界：新保存策略仅 draft（AST 已过，未过回测验证）。
+        # 未验证策略在回测面板选择器中置灰，需"启用验证"通过后才能选用。
+        "status": "draft",
     })
     (gen_dir / "manifest.yaml").write_text(manifest.to_yaml(), encoding="utf-8")
-    logger.info(f"[Workshop] 策略已保存: {strategy_id} ({request.name})")
-    return APIResponse(message="策略已保存，可在回测面板选择", data={"strategy_id": strategy_id, "name": request.name})
+    logger.info(f"[Workshop] 策略已保存(草稿): {strategy_id} ({request.name})")
+    return APIResponse(
+        message="策略已保存为草稿：仅通过安全扫描，需启用验证（回测+过拟合体检）后才可选用",
+        data={"strategy_id": strategy_id, "name": request.name, "status": "draft"},
+    )
+
+
+@router.get("/{strategy_id}/manifest", response_model=APIResponse)
+async def get_strategy_manifest(strategy_id: str):
+    """读取策略 manifest（状态 + 验证报告，供"我的策略"列表展示）"""
+    from finhack_pro.workshop import StrategyManifest
+
+    gen_dir = Path("data/generated_strategies") / strategy_id
+    manifest_file = gen_dir / "manifest.yaml"
+    if not manifest_file.exists():
+        raise HTTPException(status_code=404, detail=f"策略不存在: {strategy_id}")
+    try:
+        manifest = StrategyManifest.from_yaml_file(str(manifest_file))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"manifest 解析失败: {e}")
+    return APIResponse(data={
+        "id": manifest.id,
+        "name": manifest.name,
+        "status": manifest.status,
+        "validation_report": manifest.validation_report,
+    })
+
+
+@router.post("/{strategy_id}/enable", response_model=APIResponse)
+async def enable_strategy(request: Request, strategy_id: str, body: Optional[Dict[str, Any]] = None):
+    """启用验证（阶段6 安全边界）：draft → enabled
+
+    触发 StrategyValidator 全量 + 过拟合体检（样本内前 80% / 样本外后 20%）：
+    - 全部通过 → status=enabled（可被回测面板/流水线选用）
+    - 任一不通过 → 保持 draft，validation_report 记录原因（UI 展示）
+
+    注意：校验需真实取数回测，body 可传 symbol/start_date/end_date 覆盖默认
+    （默认 600519.SH 近一年）。
+    """
+    from finhack_pro.backtest.runner import BacktestRunner
+    from finhack_pro.data.fetcher import DataFetcher
+    from finhack_pro.strategies.strategy_validator import StrategyValidator, run_overfit_check
+
+    gen_dir = Path("data/generated_strategies") / strategy_id
+    code_file = gen_dir / "strategy.py"
+    manifest_file = gen_dir / "manifest.yaml"
+    if not code_file.exists():
+        raise HTTPException(status_code=404, detail=f"策略不存在: {strategy_id}")
+
+    # 加载工坊策略类（与 BacktestRunner.load_strategy custom 分支一致）
+    try:
+        import importlib.util
+        from finhack_pro.workshop.strategy_adapter import WorkshopStrategyAdapter
+
+        adapter = WorkshopStrategyAdapter(code_file.read_text(encoding="utf-8"))
+        strategy_cls = adapter.strategy_class
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"策略加载失败: {e}")
+
+    body = body or {}
+    symbol = body.get("symbol", "600519.SH")
+    start_date = body.get("start_date", (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d"))
+    end_date = body.get("end_date", datetime.now().strftime("%Y-%m-%d"))
+    initial_capital = float(body.get("initial_capital", 1_000_000))
+
+    # 取数（诚实失败：数据不可得则不启用）
+    cfg = get_config()
+    fetcher = DataFetcher(
+        source=cfg.data.source,
+        tushare_token=cfg.data.tushare_token,
+        cache_dir=cfg.data.cache_dir,
+        sources=cfg.data.sources or None,
+        custom_source=cfg.data.custom_source,
+    )
+    data = fetcher.get_daily(symbol=symbol, start_date=start_date, end_date=end_date)
+    if data is None or data.empty:
+        raise HTTPException(status_code=400, detail=f"无法获取 {symbol} 数据，无法执行启用验证")
+
+    # 1) 全量回测 → StrategyValidator
+    try:
+        runner = BacktestRunner()
+        bt = runner.run(strategy=strategy_cls(), symbol=symbol, data=data, initial_capital=initial_capital)
+        perf = {
+            "returns": list(bt.daily_returns),
+            "sharpe_ratio": float(bt.sharpe_ratio or 0),
+            "max_drawdown": float(bt.max_drawdown or 0),
+            "total_trades": int(bt.total_trades or 0),
+            "annual_return": float(bt.annual_return or 0),
+        }
+        validator = StrategyValidator.from_profile("default")
+        vresult = validator.validate(perf)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"验证执行失败: {e}")
+
+    # 2) 过拟合体检
+    overfit = run_overfit_check(strategy_cls, data, symbol=symbol, initial_capital=initial_capital)
+
+    passed = bool(vresult.passed) and bool(overfit["passed"])
+    status = "enabled" if passed else "draft"
+    report = {
+        "passed": passed,
+        "checked_at": datetime.now().isoformat(),
+        "symbol": symbol,
+        "validator": vresult.model_dump(),
+        "overfit": overfit,
+    }
+
+    # 写回 manifest
+    try:
+        manifest = StrategyManifest.from_yaml_file(str(manifest_file))
+        manifest.status = status
+        manifest.validation_report = report
+        manifest.updated_at = datetime.now().isoformat()
+        manifest_file.write_text(manifest.to_yaml(), encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"[Workshop] manifest 更新失败 {strategy_id}: {e}")
+
+    if passed:
+        logger.info(f"[Workshop] 策略启用验证通过: {strategy_id}（验证分 {vresult.overall_score:.0f}，样本外夏普 {overfit['oos_sharpe']:.2f}）")
+        return APIResponse(message="验证通过，策略已启用（可被回测面板选用）",
+                           data={"strategy_id": strategy_id, "status": status, "validation_report": report})
+    reason = overfit["reason"] if not overfit["passed"] else "策略验证未通过"
+    return APIResponse(message=f"验证未通过：{reason}（策略保持草稿状态，不可选用）",
+                       data={"strategy_id": strategy_id, "status": status, "validation_report": report})
 
 
 @router.post("/factors/save", response_model=APIResponse)

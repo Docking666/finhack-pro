@@ -22,6 +22,10 @@
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 1.096A4.001 4.001 0 003 15z"></path></svg>
             云端市场
         </button>
+        <button @click="activeTab='my_strategies'; loadMyStrategies()" :class="activeTab==='my_strategies' ? 'bg-accent text-accent-fg' : 'bg-gray-700 hover:bg-gray-600 text-white'" class="px-4 py-2 rounded-sm text-sm transition-colors flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg>
+            我的策略
+        </button>
     </div>
 
     <!-- ==================== 云端市场（CloudBase） ==================== -->
@@ -486,6 +490,60 @@
                 </div>
             </div>
         </template>
+    </div>
+
+    <!-- ==================== 我的策略（阶段6 安全边界：状态机 + 启用验证） ==================== -->
+    <div x-show="activeTab==='my_strategies'" x-transition>
+        <div class="bg-surface rounded-sm p-4 border border-line">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-medium text-white">我的策略</h3>
+                <button @click="loadMyStrategies()" class="text-xs text-accent hover:text-accent">刷新</button>
+            </div>
+            <p class="text-xs text-gray-500 mb-3">
+                安全边界：草稿仅通过安全扫描（AST）；<span class="text-warn">启用验证</span>需通过策略验证（StrategyValidator 7 项）+ 过拟合体检（样本内/外分治）后才可被回测面板选用。启发式检查，非收益保证。
+            </p>
+            <div x-show="myStrategies.length === 0" class="text-sm text-gray-500 py-6 text-center">
+                暂无已保存策略。在"策略模板/生成"中保存策略后会出现在这里。
+            </div>
+            <div x-show="myStrategies.length > 0" class="space-y-2">
+                <template x-for="s in myStrategies" :key="s.id">
+                    <div class="bg-elevated rounded-sm p-3">
+                        <div class="flex items-center justify-between flex-wrap gap-2">
+                            <div class="flex items-center gap-2">
+                                <span class="text-sm text-white" x-text="s.name"></span>
+                                <span class="font-mono text-xs text-gray-500" x-text="s.id"></span>
+                                <span class="px-1.5 py-0.5 rounded-sm text-xs"
+                                      :class="s.status === 'enabled' ? 'bg-up-soft text-up' : s.status === 'validated' ? 'bg-elevated text-warn' : 'bg-elevated text-gray-400'"
+                                      x-text="s.status === 'enabled' ? '已启用' : s.status === 'validated' ? '已验证' : '草稿'"></span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button x-show="s.status !== 'enabled'" @click="enableStrategy(s.id)"
+                                        class="px-2.5 py-1 bg-accent/85 hover:bg-accent text-accent-fg text-xs rounded-sm transition-colors">启用验证</button>
+                                <button x-show="s.validation_report && Object.keys(s.validation_report).length"
+                                        @click="s.showReport = !s.showReport"
+                                        class="text-xs text-gray-400 hover:text-gray-200">验证报告</button>
+                            </div>
+                        </div>
+                        <div x-show="s.showReport && s.validation_report" class="mt-2 pt-2 border-t border-line/50 text-xs space-y-1">
+                            <div class="flex gap-2">
+                                <span class="text-gray-500">结果</span>
+                                <span :class="s.validation_report.passed ? 'text-ok' : 'text-danger'"
+                                      x-text="s.validation_report.passed ? '通过' : '未通过'"></span>
+                                <span class="text-gray-500" x-text="'· ' + (s.validation_report.checked_at || '')"></span>
+                            </div>
+                            <template x-if="s.validation_report.overfit">
+                                <div class="text-gray-400"
+                                      x-text="'过拟合体检: 样本内夏普 ' + s.validation_report.overfit.is_sharpe + ' / 样本外 ' + s.validation_report.overfit.oos_sharpe + ' → ' + s.validation_report.overfit.reason"></div>
+                            </template>
+                            <template x-if="s.validation_report.validator">
+                                <div class="text-gray-400"
+                                      x-text="'策略验证: ' + (s.validation_report.validator.passed ? '通过' : '未通过') + ' · 综合评分 ' + (s.validation_report.validator.overall_score || 0) + '/100'"></div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
     </div>
 
     <!-- ==================== 因子编辑器 ==================== -->

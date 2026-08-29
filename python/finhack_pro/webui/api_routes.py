@@ -253,15 +253,17 @@ async def list_backtest_strategies():
             if not (d / "strategy.py").exists():
                 continue
             label = d.name
+            status = "draft"  # 阶段6 安全边界：未验证默认草稿
             manifest = d / "manifest.yaml"
             if manifest.exists():
                 try:
                     import yaml
                     m = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
                     label = m.get("strategy_name") or m.get("name") or d.name
+                    status = m.get("status") or "draft"
                 except Exception:
                     pass
-            custom.append({"id": d.name, "name": label})
+            custom.append({"id": d.name, "name": label, "status": status})
     return APIResponse(data={"builtin": builtin, "custom": custom})
 
 

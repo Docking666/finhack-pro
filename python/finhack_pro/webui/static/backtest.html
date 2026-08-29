@@ -8,7 +8,7 @@
                 <label class="block text-xs text-gray-400 mb-1">策略选择</label>
                 <select x-model="params.strategy" class="w-full bg-inset border border-line rounded-sm px-3 py-2 text-sm text-white focus:border-accent focus:outline-none">
                     <template x-for="s in strategyOptions" :key="s.id">
-                        <option :value="s.id" x-text="s.name"></option>
+                        <option :value="s.id" :disabled="s.disabled" x-text="s.name"></option>
                     </template>
                 </select>
             </div>
@@ -264,7 +264,7 @@
             <div class="flex items-center gap-3 text-xs">
                 <select x-model="sweep.strategy" @change="sweep.onStrategyChange()"
                         class="bg-elevated border border-line rounded-sm px-2 py-1 text-gray-300 text-xs">
-                    <template x-for="opt in strategyOptions" :key="opt.id">
+                    <template x-for="opt in strategyOptions.filter(o => sweep.registry[o.id])" :key="opt.id">
                         <option :value="opt.id" x-text="opt.name"></option>
                     </template>
                 </select>

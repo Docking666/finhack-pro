@@ -649,3 +649,104 @@ __all__ = [
     "StrategyValidator",
     "ValidationResult",
 ]
+
+
+# ============================================================================
+# 过拟合体检（阶段6 LLM 安全边界）：样本内/外分治，防"自洽逻辑"
+# ============================================================================
+
+def run_overfit_check(
+    strategy_class: Any,
+    data: Any,
+    symbol: str = "600519.SH",
+    initial_capital: float = 1_000_000.0,
+    params: Optional[Dict[str, Any]] = None,
+    is_ratio: float = 0.8,
+    oos_sharpe_floor: float = 0.0,
+    decay_tolerance: float = 0.5,
+) -> Dict[str, Any]:
+    """样本内(前 80%) vs 样本外(后 20%) 分治回测，检验"样本内漂亮、样本外崩掉"
+
+    判定（启发式，非收益保证——调用方必须在 UI 标注）：
+    - 样本外夏普 < oos_sharpe_floor(0) → 不通过
+    - 样本外夏普 < decay_tolerance(0.5) × 样本内夏普 → 不通过（允许 50% 衰减容忍噪声）
+
+    Args:
+        strategy_class: 策略类（构造即用，无需预配置）
+        data: 日线 DataFrame（按日期升序）
+        symbol/initial_capital/params: 回测参数
+        is_ratio: 样本内占比（默认 0.8）
+        oos_sharpe_floor: 样本外夏普下限
+        decay_tolerance: 样本外允许的最大衰减比例（0.5 = 允许衰减到一半）
+
+    Returns:
+        {passed, is_sharpe, oos_sharpe, is_trades, oos_trades, reason}
+    """
+    from finhack_pro.backtest.runner import BacktestRunner
+
+    def _run_slice(slice_data: Any) -> Tuple[float, int]:
+        strategy = strategy_class()
+        runner = BacktestRunner()
+        res = runner.run(
+            strategy=strategy,
+            symbol=symbol,
+            data=slice_data,
+            initial_capital=initial_capital,
+            params=params or {},
+        )
+        sharpe = float(res.sharpe_ratio or 0)
+        # 样本外太短（<20 根）无法评估 → 按不通过处理（诚实标注）
+        if len(slice_data) < 20:
+            return sharpe, int(res.total_trades or 0)
+        return sharpe, int(res.total_trades or 0)
+
+    if data is None or len(data) == 0:
+        return {"passed": False, "reason": "无数据，无法执行过拟合体检",
+                "is_sharpe": 0.0, "oos_sharpe": 0.0, "is_trades": 0, "oos_trades": 0}
+
+    n = len(data)
+    split = max(int(n * is_ratio), 1)
+    is_data = data.iloc[:split]
+    oos_data = data.iloc[split:]
+    if len(oos_data) < 20:
+        return {"passed": False, "reason": f"样本外仅 {len(oos_data)} 根，不足 20 根，无法评估",
+                "is_sharpe": 0.0, "oos_sharpe": 0.0, "is_trades": 0, "oos_trades": 0}
+
+    try:
+        is_sharpe, is_trades = _run_slice(is_data)
+        oos_sharpe, oos_trades = _run_slice(oos_data)
+    except Exception as e:
+        return {"passed": False, "reason": f"体检执行失败: {e}",
+                "is_sharpe": 0.0, "oos_sharpe": 0.0, "is_trades": 0, "oos_trades": 0}
+
+    if oos_sharpe < oos_sharpe_floor:
+        passed, reason = False, (
+            f"样本外夏普 {oos_sharpe:.2f} < 0（样本内 {is_sharpe:.2f}）——"
+            f"样本外亏损或无效，疑似样本内过拟合"
+        )
+    elif oos_sharpe < decay_tolerance * is_sharpe:
+        passed, reason = False, (
+            f"样本外夏普 {oos_sharpe:.2f} < 样本内 {is_sharpe:.2f} 的一半——"
+            f"前向衰减过快，疑似过拟合"
+        )
+    else:
+        passed, reason = True, (
+            f"样本内夏普 {is_sharpe:.2f} / 样本外夏普 {oos_sharpe:.2f}，"
+            f"前向衰减在容忍范围内（启发式检查，非收益保证）"
+        )
+
+    return {
+        "passed": passed,
+        "is_sharpe": round(is_sharpe, 4),
+        "oos_sharpe": round(oos_sharpe, 4),
+        "is_trades": int(is_trades),
+        "oos_trades": int(oos_trades),
+        "reason": reason,
+    }
+
+
+__all__ = [
+    "StrategyValidator",
+    "ValidationResult",
+    "run_overfit_check",
+]
