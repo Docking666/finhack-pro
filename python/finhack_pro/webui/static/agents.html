@@ -219,6 +219,9 @@
                             <span class="text-xs text-gray-400">
                                 <span class="text-green-400" x-text="record.steps_completed"></span>/<span x-text="record.steps_total || 7"></span> 步
                             </span>
+                            <button @click="showDecisionReport(record.run_id)"
+                                    x-show="record.status === 'completed'"
+                                    class="text-xs text-accent hover:underline">决策报告</button>
                             <span class="px-2 py-0.5 rounded-sm text-xs"
                                   :class="record.status === 'completed' ? 'bg-elevated text-ok' : record.status === 'running' ? 'bg-elevated text-accent' : record.status === 'cancelled' ? 'bg-elevated text-gray-400' : 'bg-elevated text-danger'"
                                   x-text="record.status === 'completed' ? '完成' : record.status === 'running' ? '运行中' : record.status === 'cancelled' ? '已取消' : record.status === 'pending' ? '待执行' : '失败'"></span>
@@ -254,6 +257,93 @@
                     </div>
                 </div>
             </template>
+        </div>
+    </div>
+
+    <!-- 决策报告弹窗（阶段4：确定性生成，非 LLM） -->
+    <div x-show="decisionReport" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+         @click.self="decisionReport = null">
+        <div class="bg-surface border border-line rounded-sm w-full max-w-2xl max-h-[85vh] overflow-auto">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-line sticky top-0 bg-surface">
+                <h3 class="text-sm font-medium text-white">
+                    决策报告
+                    <span class="ml-2 text-xs text-gray-500" x-text="decisionReport ? decisionReport.symbol : ''"></span>
+                </h3>
+                <button @click="decisionReport = null" class="text-gray-400 hover:text-white text-lg leading-none">×</button>
+            </div>
+            <div class="p-4 space-y-5 text-sm" x-show="decisionReport">
+                <!-- 状态与置信度 -->
+                <div class="flex flex-wrap items-center gap-3 text-xs">
+                    <span class="px-2 py-0.5 rounded-sm bg-elevated text-gray-300"
+                          x-text="'状态: ' + (decisionReport.status || '—') + (decisionReport.terminal ? ' (' + decisionReport.terminal + ')' : '')"></span>
+                    <span class="px-2 py-0.5 rounded-sm text-xs"
+                          :class="decisionReport.confidence && decisionReport.confidence.tier === 'high' ? 'bg-up-soft text-up' : decisionReport.confidence && decisionReport.confidence.tier === 'medium' ? 'bg-elevated text-warn' : 'bg-elevated text-danger'"
+                          x-text="decisionReport.confidence ? ('置信度: ' + (decisionReport.confidence.tier === 'high' ? '高' : decisionReport.confidence.tier === 'medium' ? '中' : '低') + ' ' + decisionReport.confidence.score.toFixed(0) + '/100') : '置信度: —'"></span>
+                </div>
+
+                <!-- 各步结论 -->
+                <div>
+                    <div class="text-xs text-gray-500 mb-2">各步结论</div>
+                    <div class="space-y-2">
+                        <template x-for="s in decisionReport.steps" :key="s.step">
+                            <div class="bg-elevated rounded-sm p-2.5">
+                                <div class="flex justify-between text-xs mb-1">
+                                    <span class="text-white font-medium" x-text="s.step + '. ' + s.name"></span>
+                                    <span class="text-gray-500" x-text="s.agent"></span>
+                                </div>
+                                <div class="text-xs text-gray-400 space-y-0.5">
+                                    <template x-for="(v, k) in s.summary" :key="k">
+                                        <div x-show="k !== 'checks'" class="flex gap-2">
+                                            <span class="text-gray-600" x-text="k"></span>
+                                            <span class="text-gray-300 break-all" x-text="typeof v === 'object' ? JSON.stringify(v) : v"></span>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- 风控逐项 -->
+                <template x-if="decisionReport.risk_checks && decisionReport.risk_checks.length">
+                    <div>
+                        <div class="text-xs text-gray-500 mb-2">风控逐项检查</div>
+                        <div class="bg-elevated rounded-sm p-2.5 space-y-1">
+                            <template x-for="(c, i) in decisionReport.risk_checks" :key="i">
+                                <div class="flex items-center gap-2 text-xs">
+                                    <span :class="c.passed ? 'text-ok' : 'text-danger'" x-text="c.passed ? '✓' : '✗'"></span>
+                                    <span class="text-white font-mono" x-text="c.name"></span>
+                                    <span class="text-gray-400" x-text="c.detail"></span>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- 工具调用 -->
+                <template x-if="decisionReport.tool_calls && decisionReport.tool_calls.length">
+                    <div>
+                        <div class="text-xs text-gray-500 mb-2">工具调用（前 20 条）</div>
+                        <div class="bg-elevated rounded-sm p-2.5 space-y-1 max-h-48 overflow-auto">
+                            <template x-for="(c, i) in decisionReport.tool_calls.slice(0, 20)" :key="i">
+                                <div class="flex items-center gap-2 text-xs">
+                                    <span :class="c.success ? 'text-ok' : 'text-danger'" x-text="c.success ? '✓' : '✗'"></span>
+                                    <span class="text-white font-mono" x-text="c.tool_name"></span>
+                                    <span class="text-gray-500" x-text="'by ' + (c.caller || '—')"></span>
+                                    <span class="text-gray-400 truncate" x-text="c.return_summary || ''"></span>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- 完整报告下载 -->
+                <div class="flex gap-2">
+                    <a :href="'/api/agents/report/' + decisionReport.run_id" target="_blank"
+                       class="text-xs text-accent hover:underline">查看完整 JSON</a>
+                    <span class="text-xs text-gray-600" x-text="decisionReport.md_path ? '· ' + decisionReport.md_path.split(/[\\\\/]/).pop() : ''"></span>
+                </div>
+            </div>
         </div>
     </div>
 </div>

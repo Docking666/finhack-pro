@@ -1867,6 +1867,7 @@ function agentsPage() {
         pipelineRuns: [],
         pipelineHistory: [],
         expandedLogs: [],
+        decisionReport: null,   // 决策报告弹窗数据（阶段4：确定性生成）
         _lastThinkingTs: 0,          // 看门狗：最后一次 agent_thinking 事件时间戳
 
         // 未完成任务（非当前发起 run）：提供续跑入口
@@ -1935,8 +1936,20 @@ function agentsPage() {
             }
         },
 
-        togglePipelineLog(runId) {
-            const idx = this.expandedLogs.indexOf(runId);
+        async showDecisionReport(runId) {
+            try {
+                const resp = await API.get(`/api/agents/report/${runId}`);
+                if (resp.success && resp.data && resp.data.report) {
+                    this.decisionReport = resp.data.report;
+                } else {
+                    window.__alpineApp.showToast('决策报告生成失败', 'error');
+                }
+            } catch (e) {
+                window.__alpineApp.showToast('获取决策报告失败: ' + e.message, 'error');
+            }
+        },
+
+        togglePipelineLog(runId) {            const idx = this.expandedLogs.indexOf(runId);
             if (idx >= 0) {
                 this.expandedLogs.splice(idx, 1);
             } else {

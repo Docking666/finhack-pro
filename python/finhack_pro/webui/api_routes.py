@@ -421,6 +421,38 @@ async def get_pipeline_run(request: Request, run_id: str):
     return APIResponse(data=run)
 
 
+@router.get("/api/agents/report/{run_id}", response_model=APIResponse)
+async def get_agent_decision_report(request: Request, run_id: str):
+    """获取结构化决策报告（阶段4：确定性生成，非 LLM）
+
+    汇总 run 目录 7 步结论 + 辩论 + 工具调用 + 风控逐项 + 置信度分档，
+    输出 decision_report.json/.md（不存在时现场生成落盘，幂等）。
+    """
+    import os
+
+    from finhack_pro.pipeline.decision_report import save_decision_report
+
+    # 与 coordinator._get_pipeline_dir 同款默认值解析
+    agent_svc = _get_agent_service(request)
+    coordinator = getattr(agent_svc, "_coordinator", None)
+    if coordinator is not None and hasattr(coordinator, "_get_pipeline_dir"):
+        run_dir = coordinator._get_pipeline_dir(run_id)
+    else:
+        run_dir = os.path.join("data", "pipeline", run_id)
+
+    if not os.path.isdir(run_dir):
+        raise HTTPException(status_code=404, detail=f"流水线运行不存在: {run_id}")
+
+    saved = save_decision_report(run_dir)
+    if saved.get("error"):
+        raise HTTPException(status_code=500, detail=f"决策报告生成失败: {saved['error']}")
+    return APIResponse(data={
+        "report": saved["report"],
+        "json_path": saved["json_path"],
+        "md_path": saved["md_path"],
+    })
+
+
 @router.post("/api/agents/pipeline/{run_id}/cancel", response_model=APIResponse)
 async def cancel_pipeline(request: Request, run_id: str):
     """取消运行中的流水线（协作式标志 + task.cancel 即时中断，落盘 cancelled 终态）"""

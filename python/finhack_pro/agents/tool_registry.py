@@ -24,6 +24,30 @@ _POSITIVE_WORDS = ["增长", "上涨", "突破", "超预期", "利好", "盈利"
 _NEGATIVE_WORDS = ["下跌", "亏损", "下滑", "不及预期", "利空", "减持", "风险", "暴跌", "制裁", "调查"]
 
 
+def _summarize_return(result: Any, max_len: int = 300) -> str:
+    """工具返回值摘要（阶段4）：dict/list 取关键信息并截断，防落盘体积爆炸"""
+    try:
+        if result is None:
+            return ""
+        if isinstance(result, dict):
+            # 常见大数据容器：只保留结构摘要
+            for key in ("data", "records", "rows", "items"):
+                if isinstance(result.get(key), list):
+                    return f"{key}[{len(result[key])}条] 首条: {str(result[key][0])[:200] if result[key] else '空'}"
+            parts = []
+            for k, v in list(result.items())[:8]:
+                if isinstance(v, (dict, list)):
+                    parts.append(f"{k}={type(v).__name__}({len(v)})")
+                else:
+                    parts.append(f"{k}={v}")
+            return ", ".join(parts)[:max_len]
+        if isinstance(result, list):
+            return f"list[{len(result)}] 首条: {str(result[0])[:200] if result else '空'}"
+        return str(result)[:max_len]
+    except Exception:
+        return type(result).__name__
+
+
 def _classify_sentiment(text: str) -> str:
     """基于关键词的简单情感分类，与 AnalyzeSentimentTool 保持一致的判定规则。"""
     score = 0
@@ -237,8 +261,15 @@ class ToolRegistry:
         definitions = self.list_tools(category=category, agent_role=agent_role)
         return [d.to_anthropic_tool() for d in definitions]
 
-    async def call_tool(self, tool_name: str, args: Dict[str, Any], caller_agent_id: str = "system") -> Dict[str, Any]:
-        """调用工具"""
+    async def call_tool(self, tool_name: str, args: Dict[str, Any], caller_agent_id: str = "system", run_id: Optional[str] = None) -> Dict[str, Any]:
+        """调用工具
+
+        Args:
+            tool_name: 工具名
+            args: 参数
+            caller_agent_id: 调用方 Agent
+            run_id: 流水线 run_id（阶段4：工具调用与 run 关联，供决策报告落盘）
+        """
         tool = self._tools.get(tool_name)
         if not tool:
             return {"success": False, "error": f"工具 '{tool_name}' 不存在"}
@@ -259,6 +290,8 @@ class ToolRegistry:
                 "caller": caller_agent_id,
                 "args": {k: str(v) for k, v in args.items()},
                 "success": True,
+                "run_id": run_id,
+                "return_summary": _summarize_return(result),
                 "timestamp": __import__("datetime").datetime.now().isoformat(),
             }
             self._call_log.append(log_entry)
@@ -267,6 +300,30 @@ class ToolRegistry:
         except Exception as e:
             logger.error(f"[ToolRegistry] 工具调用失败 {tool_name}: {e}")
             return {"success": False, "error": str(e)}
+
+    def persist(self, run_dir: str, run_id: Optional[str] = None) -> str:
+        """把工具调用日志落盘到 run 目录（阶段4：决策报告数据源）
+
+        Args:
+            run_dir: 流水线 run 目录
+            run_id: 只写该 run 的调用（None 写全量）
+
+        Returns:
+            落盘文件路径；失败返回 ''
+        """
+        try:
+            import json as _json
+            import os as _os
+
+            _os.makedirs(run_dir, exist_ok=True)
+            entries = [e for e in self._call_log if run_id is None or e.get("run_id") == run_id]
+            path = _os.path.join(run_dir, "tool_calls.json")
+            with open(path, "w", encoding="utf-8") as f:
+                _json.dump(entries, f, ensure_ascii=False, indent=2)
+            return path
+        except Exception as e:
+            logger.warning(f"[ToolRegistry] 调用日志落盘失败: {e}")
+            return ""
 
     def get_call_log(self, limit: int = 50) -> List[Dict[str, Any]]:
         """获取工具调用日志"""

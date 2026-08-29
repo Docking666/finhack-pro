@@ -1519,6 +1519,12 @@ class AgentCoordinator:
         except Exception:
             self._logger.warning("恢复 LLM 流回调失败", exc_info=True)
 
+        # 阶段4：工具调用日志落盘到 run 目录（决策报告数据源，含失败/取消路径）
+        try:
+            self.tool_registry.persist(self._get_pipeline_dir(run_id), run_id)
+        except Exception:
+            self._logger.warning("工具调用日志落盘失败", exc_info=True)
+
         self._logger.info(f"========== 分析流水线完成: {symbol} ==========")
         return result
 

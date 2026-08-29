@@ -40,6 +40,8 @@ class RiskDecision(BaseModel):
     reasoning: str = ""
     original_signal: Dict[str, Any] = Field(default_factory=dict)
     adjustments: str = ""
+    # B6 补充：规则引擎逐项结构化检查 [{name, passed, detail}]，供决策报告/置信度消费
+    checks: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class PortfolioState(BaseModel):
@@ -219,10 +221,13 @@ class RiskManagerAgent(BaseAgent):
                 risk_alerts=rule_result["reasons"],
                 reasoning="; ".join(rule_result["reasons"]),
                 original_signal=signal.model_dump(),
+                checks=rule_result.get("checks", []),
             )
 
         # 第二步: LLM综合评估
         decision = await self._llm_evaluate(signal, rule_result)
+        # B6 补充：LLM 决策同样携带规则引擎逐项检查（供报告/置信度消费）
+        decision.checks = rule_result.get("checks", [])
 
         self._logger.info(
             f"风控决策: {signal.symbol} -> "
