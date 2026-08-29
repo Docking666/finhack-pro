@@ -202,6 +202,8 @@ class ToolRegistry:
     def __init__(self):
         self._tools: Dict[str, BaseTool] = {}
         self._call_log: List[Dict[str, Any]] = []
+        # 阶段8 数据绑定：自增证据 id 计数器（每条工具调用分配 ev_N）
+        self._evidence_counter: int = 0
 
     def register(self, tool: BaseTool) -> None:
         """注册工具"""
@@ -285,6 +287,7 @@ class ToolRegistry:
 
         try:
             result = await tool.execute(**args)
+            self._evidence_counter += 1
             log_entry = {
                 "tool_name": tool_name,
                 "caller": caller_agent_id,
@@ -292,11 +295,13 @@ class ToolRegistry:
                 "success": True,
                 "run_id": run_id,
                 "return_summary": _summarize_return(result),
+                # 阶段8：证据 id，辩论环节 prompt 引用，后处理校验引用有效性
+                "evidence_id": f"ev_{self._evidence_counter}",
                 "timestamp": __import__("datetime").datetime.now().isoformat(),
             }
             self._call_log.append(log_entry)
             logger.info(f"[ToolRegistry] {caller_agent_id} 调用 {tool_name} 成功")
-            return {"success": True, "result": result}
+            return {"success": True, "result": result, "evidence_id": log_entry["evidence_id"]}
         except Exception as e:
             logger.error(f"[ToolRegistry] 工具调用失败 {tool_name}: {e}")
             return {"success": False, "error": str(e)}

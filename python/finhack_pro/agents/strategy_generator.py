@@ -119,6 +119,9 @@ class BullBearDebateResult(BaseModel):
     confidence: float = Field(default=0.0)                        # 共识置信度(0-1)
     key_debates: List[str] = Field(default_factory=list)          # 关键争议点
     conclusion: str = ""                                          # 综合结论
+    # 阶段8 数据绑定试点：结论中引用到的有效证据 id；issues 记录无效/缺失引用
+    evidence_ids: List[str] = Field(default_factory=list)
+    evidence_issues: List[str] = Field(default_factory=list)
 
 
 # 多头研究员系统提示词
@@ -453,6 +456,10 @@ class StrategyGeneratorAgent(BaseAgent):
             report_paths=report_paths, sentiment_data=sentiment_data,
         )
 
+        # 阶段8 数据绑定试点：从 run 目录加载工具调用证据（tool_calls.json 阶段4 落盘），
+        # 注入辩论 prompt；要求结论引用 [ev_N]，后处理校验引用有效性
+        evidence_block = self._load_evidence_block(run_dir)
+
         max_rounds = int(getattr(self, "max_debate_rounds", 2) or 2)
         bull_strength, bear_strength = 0.5, 0.5
         prev_bull = prev_bear = prev_judge = ""
@@ -465,7 +472,7 @@ class StrategyGeneratorAgent(BaseAgent):
             # 第一角色：多头（第2轮起需反驳空头论点 + 参考裁判反馈）
             await self.emit_progress(f"📊 多头论点生成中（第 {round_i} 轮）...")
             bull_prompt = (
-                f"## 标的: {symbol}\n\n{context}\n\n"
+                f"## 标的: {symbol}\n\n{context}{evidence_block}\n\n"
                 "请作为多头研究员，列出所有支持看涨的理由。\n"
                 "先在开头用 3-5 句逐步展示你的推理过程（关键证据与逻辑链条），"
                 "然后再输出JSON格式：\n"
@@ -489,7 +496,7 @@ class StrategyGeneratorAgent(BaseAgent):
             # 第二角色：空头（同理反驳多头）
             await self.emit_progress(f"📉 空头论点生成中（第 {round_i} 轮）...")
             bear_prompt = (
-                f"## 标的: {symbol}\n\n{context}\n\n"
+                f"## 标的: {symbol}\n\n{context}{evidence_block}\n\n"
                 "请作为空头研究员，列出所有支持看跌的理由。\n"
                 "先在开头用 3-5 句逐步展示你的推理过程（关键证据与逻辑链条），"
                 "然后再输出JSON格式：\n"
@@ -514,7 +521,7 @@ class StrategyGeneratorAgent(BaseAgent):
             await self.emit_progress(f"⚖️ 裁判综合评估中（第 {round_i} 轮）...")
             judge_prompt = (
                 f"## 标的: {symbol}\n\n"
-                f"### 原始分析\n{context}\n\n"
+                f"### 原始分析\n{context}{evidence_block}\n\n"
                 f"### 多头论点\n{bull_response}\n\n"
                 f"### 空头论点\n{bear_response}\n\n"
                 "请作为裁判，综合多空双方论点做出最终判断。\n"
@@ -560,6 +567,19 @@ class StrategyGeneratorAgent(BaseAgent):
                 break
 
         # 最终裁判结果（末轮或收敛轮）
+        # 阶段8：先收集有效证据 id（tool_calls.json 中带 evidence_id 的调用）
+        valid_evidence_ids: List[str] = []
+        if run_dir:
+            try:
+                _tc_path = os.path.join(run_dir, "tool_calls.json")
+                if os.path.exists(_tc_path):
+                    with open(_tc_path, encoding="utf-8") as _f:
+                        valid_evidence_ids = [
+                            c.get("evidence_id") for c in json.load(_f) if c.get("evidence_id")
+                        ]
+            except Exception as e:
+                self._logger.warning(f"[{symbol}] 证据 id 收集失败: {e}")
+
         try:
             debate_result = BullBearDebateResult(
                 symbol=symbol,
@@ -575,6 +595,25 @@ class StrategyGeneratorAgent(BaseAgent):
         except Exception as e:
             self._logger.error(f"[{symbol}] 裁判结果解析失败: {e}")
             raise ValueError(f"裁判结果解析失败: {e}") from e
+
+        # 阶段8：校验结论/论点中的 [ev_N] 引用有效性；无效引用标记"未验证来源"
+        if valid_evidence_ids:
+            _ev_valid, _ev_invalid = self._check_evidence_refs(
+                [debate_result.conclusion]
+                + list(debate_result.bull_arguments)
+                + list(debate_result.bear_arguments)
+                + list(debate_result.key_debates),
+                valid_evidence_ids,
+            )
+            debate_result.evidence_ids = _ev_valid
+            if _ev_invalid:
+                debate_result.evidence_issues += [
+                    f"引用了无效证据 {i}（不在可用清单，标记为未验证来源）" for i in _ev_invalid
+                ]
+            if not _ev_valid:
+                debate_result.evidence_issues.append(
+                    "结论未引用任何可用证据（涉及数值时可能为未验证来源）"
+                )
 
         self._logger.info(
             f"[{symbol}] 多空辩论完成: consensus={debate_result.consensus}, "
@@ -602,6 +641,59 @@ class StrategyGeneratorAgent(BaseAgent):
             debate_result=debate_result,
             current_price=current_price,
         )
+
+    # ------------------------------------------------------------------
+    # 阶段8 数据绑定试点：证据清单注入 + 引用校验（仅辩论环节）
+    # ------------------------------------------------------------------
+
+    def _load_evidence_block(self, run_dir: Optional[str]) -> str:
+        """从 run 目录 tool_calls.json 构造证据清单 prompt 块
+
+        仅列出带 evidence_id 的调用（阶段4 persist 落盘、阶段8 分配 id）；
+        无证据时返回空串（辩论 prompt 与行为完全不变，向后兼容）。
+        """
+        if not run_dir:
+            return ""
+        try:
+            path = os.path.join(run_dir, "tool_calls.json")
+            if not os.path.exists(path):
+                return ""
+            with open(path, encoding="utf-8") as f:
+                calls = json.load(f)
+            evs = [c for c in calls if c.get("evidence_id")]
+            if not evs:
+                return ""
+            lines = [
+                "### 可用证据清单（结论涉及数据/数值时用 [证据id] 标注来源，如 [ev_1]；"
+                "未引用证据的数值会被标记为未验证来源）"
+            ]
+            for c in evs:
+                lines.append(
+                    f"- [{c['evidence_id']}] {c.get('tool_name', '')}"
+                    f"(by {c.get('caller', '')}) → {str(c.get('return_summary', ''))[:120]}"
+                )
+            return "\n" + "\n".join(lines) + "\n"
+        except Exception as e:
+            self._logger.warning(f"证据清单加载失败: {e}")
+            return ""
+
+    @staticmethod
+    def _check_evidence_refs(text_fields: List[str], valid_ids: List[str]) -> tuple:
+        """校验文本中的 [ev_N] 引用是否在有效清单内
+
+        Returns:
+            (valid_ids, invalid_ids) —— 引用到但清单不存在的 id 记入 issues
+        """
+        import re
+
+        refs: set = set()
+        for t in text_fields:
+            if not t:
+                continue
+            refs.update(re.findall(r"\[(ev_\d+)\]", str(t)))
+        valid = sorted(refs & set(valid_ids))
+        invalid = sorted(refs - set(valid_ids))
+        return valid, invalid
 
     async def _generate_signal_from_debate(
         self,
