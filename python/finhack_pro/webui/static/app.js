@@ -1341,6 +1341,7 @@ function backtestPage() {
                 y: { name: 'k2', min: 0.2, max: 0.8, step: 0.1 },
             },
             registry: {},        // 策略 → 可扫描参数对
+            helpOpen: false,     // 热力图帮助浮窗显示开关
             cells: [],           // SweepCell[]
             best: null,
             running: false,
