@@ -8,6 +8,7 @@ from finhack_pro.data.cache import CacheStats, DataCache
 from finhack_pro.data.collector import CollectReport, MarketDataCollector
 from finhack_pro.data.features import FeatureEngineer
 from finhack_pro.data.fetcher import DataFetcher
+from finhack_pro.data.levels import LevelScan, PriceLevel, SupportResistanceDetector, screen_near_level
 from finhack_pro.data.technical import TechnicalIndicator
 from finhack_pro.data.validator import DataAnomaly, DataQualityReport, DataValidator, ValidationResult
 from finhack_pro.data.versioning import DataVersion, DataVersionManager, VersionDiff
@@ -33,4 +34,9 @@ __all__ = [
     "CollectReport",
     "WarehouseStats",
     "CORE_COLUMNS",
+    # 支撑阻力区域检测（全市场筛选的结构信号层）
+    "SupportResistanceDetector",
+    "PriceLevel",
+    "LevelScan",
+    "screen_near_level",
 ]
