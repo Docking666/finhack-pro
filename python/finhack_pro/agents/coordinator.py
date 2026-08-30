@@ -175,8 +175,15 @@ class AgentCoordinator:
         self._decay_hours = memory_config.get("decay_hours", 24)
 
         # 共享工具集
-        self.tool_registry = create_default_toolkit()
-        
+        # 必须注入真实 DataFetcher / TechnicalIndicator：此前 create_default_toolkit()
+        # 无参调用，使 fetch_market_data 恒返回"数据源未配置"、
+        # calculate_indicator 恒返回静态释义文本，LLM 拿不到任何真实数值。
+        self._data_fetcher = self._build_data_fetcher()
+        self.tool_registry = create_default_toolkit(
+            data_fetcher=self._data_fetcher,
+            technical_indicator=self._build_technical_indicator(),
+        )
+
         # 注册另类数据工具
         register_alternative_data_tools(self.tool_registry)
 
@@ -1898,6 +1905,37 @@ class AgentCoordinator:
 
         return {"recent_bars": recent_bars, "current": current}
 
+    def _build_data_fetcher(self):
+        """按 data 配置构造 DataFetcher。
+
+        构造失败（如未安装数据源依赖）时返回 None 而非抛出——工具集会据此
+        显式返回"数据源未配置"，而不是让 Coordinator 初始化整体失败。
+        """
+        try:
+            from finhack_pro.data.fetcher import DataFetcher
+
+            data_cfg = (self.config or {}).get("data", {})
+            return DataFetcher(
+                source=data_cfg.get("source", "akshare"),
+                tushare_token=data_cfg.get("tushare_token", "") or "",
+                cache_dir=data_cfg.get("cache_dir", "data/cache"),
+                sources=data_cfg.get("sources") or None,
+                custom_source=data_cfg.get("custom_source", "") or "",
+            )
+        except Exception as e:  # noqa: BLE001 - 初始化降级不得中断流水线构造
+            self._logger.warning(f"DataFetcher 构造失败，行情类工具将不可用: {e}")
+            return None
+
+    def _build_technical_indicator(self):
+        """构造 TechnicalIndicator；依赖缺失时返回 None（工具内部会自行兜底）。"""
+        try:
+            from finhack_pro.data.technical import TechnicalIndicator
+
+            return TechnicalIndicator()
+        except Exception as e:  # noqa: BLE001
+            self._logger.warning(f"TechnicalIndicator 构造失败，指标工具将降级: {e}")
+            return None
+
     def _fetch_real_market_data(self, symbol: str) -> Dict[str, Any]:
         """L5d：从配置的数据源真实拉取行情并转换为分析上下文。
 
@@ -1907,16 +1945,14 @@ class AgentCoordinator:
         """
         import datetime as _dt
 
-        from finhack_pro.data.fetcher import DataFetcher
-
-        data_cfg = (self.config or {}).get("data", {})
-        fetcher = DataFetcher(
-            source=data_cfg.get("source", "akshare"),
-            tushare_token=data_cfg.get("tushare_token", "") or "",
-            cache_dir=data_cfg.get("cache_dir", "data/cache"),
-            sources=data_cfg.get("sources") or None,
-            custom_source=data_cfg.get("custom_source", "") or "",
-        )
+        fetcher = self._data_fetcher
+        if fetcher is None:
+            # __init__ 构造失败时的兜底：重新尝试一次，仍失败则显式抛出
+            fetcher = self._build_data_fetcher()
+            if fetcher is None:
+                raise RuntimeError(
+                    "数据源未配置或不可用，无法拉取真实行情（拒绝返回空行情兜底）"
+                )
         end_date = _dt.date.today().strftime("%Y-%m-%d")
         start_date = (_dt.date.today() - _dt.timedelta(days=180)).strftime("%Y-%m-%d")
         df = fetcher.get_daily(symbol=symbol, start_date=start_date, end_date=end_date)

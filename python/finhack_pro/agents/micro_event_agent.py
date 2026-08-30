@@ -340,19 +340,33 @@ class MicroEventAgent(BaseAgent):
             if result.get("success") and result.get("result"):
                 for dt in result["result"].get("records", []):
                     # 分析龙虎榜数据
-                    buy_amount = float(dt.get("buy_amount", 0))
-                    sell_amount = float(dt.get("sell_amount", 0))
-                    net_buy = buy_amount - sell_amount
-                    
-                    impact_direction = "positive" if net_buy > 0 else "negative"
+                    # 字段名必须与 FetchDragonTigerTool 的返回保持一致：
+                    # net_buy / total_buy / total_sell（见 alternative_data_tools.py）。
+                    # 修复前此处误读 buy_amount / sell_amount，导致 net_buy 恒为 0、
+                    # 方向恒判 negative（0 不 > 0）、等级恒判 medium。
+                    raw_net = dt.get("net_buy")
+                    total_buy = float(dt.get("total_buy") or 0)
+                    total_sell = float(dt.get("total_sell") or 0)
+                    if raw_net is None:
+                        # 兼容仅提供买卖总额、未提供净额的数据源
+                        net_buy = total_buy - total_sell
+                    else:
+                        net_buy = float(raw_net or 0)
+
+                    if net_buy > 0:
+                        impact_direction = "positive"
+                    elif net_buy < 0:
+                        impact_direction = "negative"
+                    else:
+                        impact_direction = "neutral"
                     impact_level = "high" if abs(net_buy) > 1e8 else "medium"
-                    
+
                     event = MicroEvent(
                         event_id=f"dt_{dt.get('date', '')}_{symbol}",
                         event_type=MicroEventType.DRAGON_TIGER,
                         symbol=symbol,
-                        title=f"龙虎榜: 净{'买入' if net_buy > 0 else '卖出'}{abs(net_buy)/1e8:.2f}亿",
-                        content=f"买入{buy_amount/1e8:.2f}亿, 卖出{sell_amount/1e8:.2f}亿",
+                        title=f"龙虎榜: 净{'买入' if net_buy > 0 else ('卖出' if net_buy < 0 else '持平')}{abs(net_buy)/1e8:.2f}亿",
+                        content=f"买入{total_buy/1e8:.2f}亿, 卖出{total_sell/1e8:.2f}亿, 净额{net_buy/1e8:.2f}亿",
                         source="dragon_tiger",
                         event_time=dt.get("date", ""),
                         impact_level=impact_level,

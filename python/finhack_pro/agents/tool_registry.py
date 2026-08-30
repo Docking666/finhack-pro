@@ -399,52 +399,154 @@ class FetchMarketDataTool(BaseTool):
 
 
 class CalculateIndicatorTool(BaseTool):
-    """计算技术指标"""
+    """计算技术指标
 
-    def __init__(self, technical_indicator=None):
+    真实计算：先经 data_fetcher 取日线，再委托 ``data.technical.TechnicalIndicator``
+    计算，返回**指标数值** + 释义。修复前本工具只返回静态释义文本、从不返回数值，
+    导致 LLM 拿到的是"指标说明书"而非指标本身。
+
+    无行情数据源时诚实返回未配置，不伪造数值（SDD：禁止 mock 兜底）。
+    """
+
+    # 指标名 -> (TechnicalIndicator 方法名, 输出列名集合)
+    _INDICATOR_SPECS: Dict[str, Dict[str, Any]] = {
+        "rsi": {"method": "add_rsi", "columns": ["rsi"], "accepts_period": True},
+        "macd": {"method": "add_macd", "columns": ["macd", "macd_signal", "macd_hist"], "accepts_period": False},
+        "bollinger": {"method": "add_bollinger_bands", "columns": ["bb_upper", "bb_middle", "bb_lower", "bb_width"], "accepts_period": True},
+        "ma": {"method": "add_ma", "columns": ["ma_5", "ma_10", "ma_20", "ma_60", "ma_120"], "accepts_period": False},
+        "atr": {"method": "add_atr", "columns": ["atr"], "accepts_period": True},
+        "obv": {"method": "add_obv", "columns": ["obv"], "accepts_period": False},
+        "kdj": {"method": "add_kdj", "columns": ["k", "d", "j"], "accepts_period": False},
+    }
+
+    _INTERPRETATION: Dict[str, str] = {
+        "rsi": "RSI>70超买, RSI<30超卖, 50为多空分界",
+        "macd": "DIF上穿DEA金叉看多, DIF下穿DEA死叉看空",
+        "bollinger": "触及上轨可能超买, 触及下轨可能超卖",
+        "ma": "短期均线上穿长期均线为金叉, 反之为死叉",
+        "atr": "ATR越大波动越剧烈, 可用于设置止损",
+        "obv": "OBV上升表示买方力量增强",
+        "kdj": "K>80超买, K<20超卖, K上穿D为金叉",
+    }
+
+    def __init__(self, technical_indicator=None, data_fetcher=None):
         super().__init__()
         self._indicator = technical_indicator
+        self._fetcher = data_fetcher
 
     def define(self) -> ToolDefinition:
         return ToolDefinition(
             name="calculate_indicator",
-            description="计算股票的技术指标，包括RSI、MACD、布林带、均线、ATR、OBV、KDJ等",
+            description="计算股票的真实技术指标数值，包括RSI、MACD、布林带、均线、ATR、OBV、KDJ等",
             category=ToolCategory.TECHNICAL_ANALYSIS,
             parameters=[
                 ToolParameter("symbol", "string", "股票代码"),
                 ToolParameter("indicator", "string", "指标名称: rsi/macd/bollinger/ma/atr/obv/kdj/all"),
                 ToolParameter("period", "string", "计算周期(日), 如 14/26/20", required=False, default="14"),
+                ToolParameter("start_date", "string", "开始日期 YYYY-MM-DD，默认近一年", required=False),
+                ToolParameter("end_date", "string", "结束日期 YYYY-MM-DD，默认今天", required=False),
             ],
             examples=["calculate_indicator(symbol='600519.SH', indicator='rsi', period='14')"],
         )
 
-    async def execute(self, **kwargs) -> Any:
-        indicator_name = kwargs["indicator"].lower()
-        period = kwargs.get("period", "14")
-        symbol = kwargs.get("symbol", "unknown")
-
-        # 返回指标说明和计算指引
-        indicator_info = {
-            "rsi": {"name": "相对强弱指标", "range": "0-100", "overbought": 70, "oversold": 30,
-                    "interpretation": "RSI>70超买, RSI<30超卖, 50为多空分界"},
-            "macd": {"name": "指数平滑异同移动平均线", "components": "DIF/DEA/柱状图",
-                     "interpretation": "DIF上穿DEA金叉看多, DIF下穿DEA死叉看空"},
-            "bollinger": {"name": "布林带", "components": "上轨/中轨/下轨",
-                          "interpretation": "触及上轨可能超买, 触及下轨可能超卖"},
-            "ma": {"name": "移动平均线", "types": "MA5/MA10/MA20/MA60/MA120/MA250",
-                   "interpretation": "短期均线上穿长期均线为金叉, 反之为死叉"},
-            "atr": {"name": "真实波动幅度", "interpretation": "ATR越大波动越剧烈, 可用于设置止损"},
-            "obv": {"name": "能量潮指标", "interpretation": "OBV上升表示买方力量增强"},
-            "kdj": {"name": "随机指标", "range": "0-100",
-                    "interpretation": "K>80超买, K<20超卖, K上穿D为金叉"},
+    def _unavailable(self, symbol: str, indicator_name: str, reason: str) -> Dict[str, Any]:
+        """数据不可用时的统一返回（显式说明，禁止伪造数值）"""
+        return {
+            "symbol": symbol,
+            "indicator": indicator_name,
+            "values": {},
+            "available": False,
+            "note": reason,
         }
 
+    async def execute(self, **kwargs) -> Any:
+        symbol = kwargs.get("symbol", "unknown")
+        indicator_name = str(kwargs.get("indicator", "all")).lower()
+
+        try:
+            period = int(kwargs.get("period", "14"))
+        except (TypeError, ValueError):
+            period = 14
+
+        if self._fetcher is None:
+            return self._unavailable(
+                symbol, indicator_name,
+                "行情数据源未配置，无法计算技术指标。请在创建工具集时注入 DataFetcher。",
+            )
+
+        end_date = kwargs.get("end_date") or datetime.now().strftime("%Y-%m-%d")
+        start_date = kwargs.get("start_date") or (
+            datetime.now() - timedelta(days=365)
+        ).strftime("%Y-%m-%d")
+
+        try:
+            df = self._fetcher.get_daily(symbol, start_date, end_date)
+        except Exception as e:  # noqa: BLE001 - 数据源异常需显式回传，不静默吞掉
+            return self._unavailable(symbol, indicator_name, f"行情获取失败: {e}")
+
+        if df is None or df.empty:
+            return self._unavailable(symbol, indicator_name, "无行情数据，无法计算技术指标")
+
+        # 延迟导入，避免在未安装 pandas/ta 的环境下 import 即失败
+        from finhack_pro.data.technical import TechnicalIndicator
+
+        ti = self._indicator or TechnicalIndicator()
+
+        try:
+            if indicator_name == "all":
+                computed = ti.add_all_indicators(df, rsi_period=period, atr_period=period)
+                columns: List[str] = [
+                    c for spec in self._INDICATOR_SPECS.values() for c in spec["columns"]
+                ]
+            else:
+                spec = self._INDICATOR_SPECS.get(indicator_name)
+                if spec is None:
+                    return {
+                        "error": f"未知指标: {indicator_name}",
+                        "available": ["all", *self._INDICATOR_SPECS.keys()],
+                    }
+                method = getattr(ti, spec["method"])
+                if spec["accepts_period"]:
+                    computed = method(df.copy(), period=period)
+                else:
+                    computed = method(df.copy())
+                columns = spec["columns"]
+        except Exception as e:  # noqa: BLE001
+            return self._unavailable(symbol, indicator_name, f"指标计算失败: {e}")
+
+        latest = computed.iloc[-1]
+        values: Dict[str, Any] = {}
+        for col in columns:
+            if col in computed.columns:
+                raw = latest[col]
+                if raw is None or (isinstance(raw, float) and raw != raw):  # NaN 自检
+                    values[col] = None
+                else:
+                    values[col] = round(float(raw), 4)
+
+        as_of = None
+        if "date" in computed.columns:
+            as_of = str(computed["date"].iloc[-1])
+
+        result: Dict[str, Any] = {
+            "symbol": symbol,
+            "indicator": indicator_name,
+            "period": period,
+            "as_of": as_of,
+            "bars": len(computed),
+            "values": values,
+            "available": True,
+        }
         if indicator_name == "all":
-            return {"symbol": symbol, "available_indicators": indicator_info}
-        info = indicator_info.get(indicator_name)
-        if info:
-            return {"symbol": symbol, "indicator": indicator_name, "period": period, **info}
-        return {"error": f"未知指标: {indicator_name}", "available": list(indicator_info.keys())}
+            result["interpretation"] = dict(self._INTERPRETATION)
+        elif indicator_name in self._INTERPRETATION:
+            result["interpretation"] = self._INTERPRETATION[indicator_name]
+
+        # 数值不足（如上市不足周期长度）时显式标注，避免 LLM 把 None 当 0 解读
+        if any(v is None for v in values.values()):
+            result["note"] = "部分指标因历史数据不足无法计算（值为 null），请勿按 0 解读。"
+
+        return result
 
 
 class SearchNewsTool(BaseTool):
@@ -580,17 +682,16 @@ class AnalyzeSentimentTool(BaseTool):
         context = kwargs.get("context", "")
 
         # 基于关键词的简单情感分析(实际应使用NLP模型)
-        positive_words = ["增长", "上涨", "突破", "超预期", "利好", "盈利", "回升", "强势", "创新高", "增持"]
-        negative_words = ["下跌", "亏损", "下滑", "不及预期", "利空", "减持", "风险", "暴跌", "制裁", "调查"]
-
+        # 词典统一复用模块级单一来源 _POSITIVE_WORDS / _NEGATIVE_WORDS，
+        # 避免与 _classify_sentiment()（search_news 用）两份定义漂移。
         score = 0
         matched_positive = []
         matched_negative = []
-        for word in positive_words:
+        for word in _POSITIVE_WORDS:
             if word in text:
                 score += 1
                 matched_positive.append(word)
-        for word in negative_words:
+        for word in _NEGATIVE_WORDS:
             if word in text:
                 score -= 1
                 matched_negative.append(word)
@@ -699,7 +800,12 @@ def create_default_toolkit(data_fetcher=None, technical_indicator=None) -> ToolR
     """创建默认工具集"""
     registry = ToolRegistry()
     registry.register(FetchMarketDataTool(data_fetcher=data_fetcher))
-    registry.register(CalculateIndicatorTool(technical_indicator=technical_indicator))
+    registry.register(
+        CalculateIndicatorTool(
+            technical_indicator=technical_indicator,
+            data_fetcher=data_fetcher,
+        )
+    )
     registry.register(SearchNewsTool())
     registry.register(AnalyzeSentimentTool())
     registry.register(FetchFundamentalTool())
