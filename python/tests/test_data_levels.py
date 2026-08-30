@@ -21,7 +21,6 @@ from finhack_pro.data.levels import (
     screen_near_level,
 )
 
-
 # ============================================================================
 # 合成数据
 # ============================================================================
@@ -175,9 +174,9 @@ def test_detect_identifies_uptrend_channel_slope():
     df = _oscillator(n=300, center=11.0, slope=0.02, period=40)
     scan = SupportResistanceDetector().detect(df)
 
-    supports = [l for l in scan.levels if l.kind == "support"]
+    supports = [lv for lv in scan.levels if lv.kind == "support"]
     assert supports, "应识别出支撑区域"
-    best = max(supports, key=lambda l: l.strength)
+    best = max(supports, key=lambda lv: lv.strength)
     assert best.slope > 0
     assert best.slope == pytest.approx(0.02, abs=0.01)
 
@@ -195,7 +194,7 @@ def test_touches_and_volume_score_are_meaningful():
     """极值处放量的构造数据，其区域 volume_score 应 > 1。"""
     df = _oscillator()
     scan = SupportResistanceDetector().detect(df)
-    strong = max(scan.levels, key=lambda l: l.strength)
+    strong = max(scan.levels, key=lambda lv: lv.strength)
     assert strong.touches >= 2
     assert strong.volume_score > 1.0
 
@@ -205,7 +204,7 @@ def test_min_touches_filters_single_touch_noise():
     strict = SupportResistanceDetector(min_touches=4).detect(df)
     loose = SupportResistanceDetector(min_touches=2).detect(df)
     assert len(strict.levels) <= len(loose.levels)
-    assert all(l.touches >= 4 for l in strict.levels)
+    assert all(lv.touches >= 4 for lv in strict.levels)
 
 
 def test_max_levels_caps_output():

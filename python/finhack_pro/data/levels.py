@@ -287,15 +287,17 @@ class SupportResistanceDetector:
             "support", lo_idx, low[lo_idx], high, low, volume, dates, atr, n
         )
 
-        levels = [l for l in levels if l.touches >= self.min_touches]
-        levels.sort(key=lambda l: l.strength, reverse=True)
+        levels = [lv for lv in levels if lv.touches >= self.min_touches]
+        levels.sort(key=lambda lv: lv.strength, reverse=True)
         levels = levels[: self.max_levels]
 
         as_of = self._as_of(work)
         last_close = float(close[-1])
 
-        supports = [l for l in levels if l.kind == "support" and l.center <= last_close]
-        resistances = [l for l in levels if l.kind == "resistance" and l.center >= last_close]
+        supports = [lv for lv in levels if lv.kind == "support" and lv.center <= last_close]
+        resistances = [
+            lv for lv in levels if lv.kind == "resistance" and lv.center >= last_close
+        ]
 
         return LevelScan(
             symbol=symbol,
@@ -305,8 +307,10 @@ class SupportResistanceDetector:
             atr=float(atr),
             levels=levels,
             # 取距离最近（而非强度最高）的作为"最近支撑/阻力"
-            nearest_support=max(supports, key=lambda l: l.center) if supports else None,
-            nearest_resistance=min(resistances, key=lambda l: l.center) if resistances else None,
+            nearest_support=max(supports, key=lambda lv: lv.center) if supports else None,
+            nearest_resistance=(
+                min(resistances, key=lambda lv: lv.center) if resistances else None
+            ),
         )
 
     def detect_batch(

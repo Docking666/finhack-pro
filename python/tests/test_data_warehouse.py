@@ -19,7 +19,6 @@ from finhack_pro.data.collector import CollectReport, MarketDataCollector
 from finhack_pro.data.fetcher import DataFetcher
 from finhack_pro.data.warehouse import MarketWarehouse
 
-
 # ============================================================================
 # 测试替身与工具
 # ============================================================================
