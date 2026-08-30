@@ -1,5 +1,7 @@
 # FinHack Pro Python层依赖
-# 与 pyproject.toml 保持同步；ta/numba 为可选加速（见 pyproject optional-dependencies）
+# 与 pyproject.toml 保持同步；可选依赖见 pyproject optional-dependencies：
+#   accelerate = ta/numba（技术指标与 JIT 加速，无则自动降级到内置实现）
+#   data       = pyarrow（本地量化仓库的 parquet 后端，无则降级为 gzip CSV）
 # 核心依赖
 pydantic>=2.0
 pydantic-settings>=2.0

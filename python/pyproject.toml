@@ -45,6 +45,11 @@ accelerate = [
     "ta>=0.11",
     "numba>=0.57",
 ]
+# 本地量化仓库的列存后端。缺失时 MarketWarehouse 自动降级为 gzip CSV
+# （降级是显式的：backend 属性可查，初始化日志会打印，不静默）。
+data = [
+    "pyarrow>=14.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",

@@ -5,11 +5,13 @@ FinHack Pro 数据模块
 """
 
 from finhack_pro.data.cache import CacheStats, DataCache
+from finhack_pro.data.collector import CollectReport, MarketDataCollector
 from finhack_pro.data.features import FeatureEngineer
 from finhack_pro.data.fetcher import DataFetcher
 from finhack_pro.data.technical import TechnicalIndicator
 from finhack_pro.data.validator import DataAnomaly, DataQualityReport, DataValidator, ValidationResult
 from finhack_pro.data.versioning import DataVersion, DataVersionManager, VersionDiff
+from finhack_pro.data.warehouse import CORE_COLUMNS, IngestResult, MarketWarehouse, WarehouseStats
 
 __all__ = [
     "DataFetcher",
@@ -24,4 +26,11 @@ __all__ = [
     "DataVersionManager",
     "DataVersion",
     "VersionDiff",
+    # 本地量化仓库：与 DataCache（TTL 缓存）职责不同，见 warehouse.py 模块文档
+    "MarketWarehouse",
+    "MarketDataCollector",
+    "IngestResult",
+    "CollectReport",
+    "WarehouseStats",
+    "CORE_COLUMNS",
 ]

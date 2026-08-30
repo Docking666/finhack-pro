@@ -98,6 +98,10 @@ class DataConfig(BaseModel):
     source: str = "akshare"  # akshare / tushare（legacy，未提供 sources 时映射为多源链）
     tushare_token: str = ""
     cache_dir: str = "data/cache"
+    # 本地量化仓库（永久事实库）。与 cache_dir 的 TTL 缓存职责不同：
+    # 全市场扫描与回测可复现都依赖它，勿指向 cache_dir。
+    warehouse_dir: str = "data/warehouse"
+    warehouse_backend: str = "auto"  # auto / parquet / csv（parquet 需可选依赖 pyarrow）
     default_start: str = "2020-01-01"
     default_end: str = "2024-12-31"
     akshare_hist_api: str = "tx"  # akshare 日线端点：tx=腾讯证券(默认，绕开东财封锁) / em=东方财富

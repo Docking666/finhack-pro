@@ -88,11 +88,22 @@ class DataVersionManager:
         self.versions_dir.mkdir(parents=True, exist_ok=True)
 
         # 检测 parquet 支持
-        self._parquet_available = True
+        # 不可用 `pd.DataFrame().to_parquet("/dev/null")` 探测：该路径在 Windows 上
+        # 不存在（OSError）与缺引擎（ImportError）都走同一 except 分支，无法区分，
+        # 会在装了 pyarrow 的 Windows 上误判为不可用并静默降级到 CSV。
+        # 直接探测引擎模块本身（与 data/warehouse.py::_detect_backend 保持一致）。
+        self._parquet_available = False
         try:
-            pd.DataFrame().to_parquet("/dev/null")
-        except Exception:
-            self._parquet_available = False
+            import pyarrow  # noqa: F401
+
+            self._parquet_available = True
+        except ImportError:
+            try:
+                import fastparquet  # noqa: F401
+
+                self._parquet_available = True
+            except ImportError:
+                pass
 
         logger.debug(
             f"版本管理器初始化: dir={self.versions_dir}, "

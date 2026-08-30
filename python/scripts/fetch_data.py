@@ -89,6 +89,32 @@ def parse_args() -> argparse.Namespace:
         help="是否添加技术指标",
     )
     parser.add_argument(
+        "--warehouse",
+        action="store_true",
+        help=(
+            "写入本地量化仓库（永久事实库）而非 CSV。全市场扫描与回测可复现依赖该模式： "
+            "支持断点续传（已覆盖区间自动跳过）、限流抖动、失败清单落盘。"
+        ),
+    )
+    parser.add_argument(
+        "--warehouse-dir",
+        type=str,
+        default="",
+        help=f"仓库根目录 (默认取配置 data.warehouse_dir)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="并发数 (默认: 4；过高易触发数据源反爬)",
+    )
+    parser.add_argument(
+        "--freq",
+        type=str,
+        default="daily",
+        help="频率分区: daily / min5 / min15 / min30 / min60 (默认: daily)",
+    )
+    parser.add_argument(
         "--config",
         type=str,
         default="",
@@ -153,8 +179,31 @@ def main() -> None:
         cache_dir=str(output_dir / "cache"),
     )
 
-    # 批量下载
-    results = fetcher.batch_download(symbols, args.start, args.end)
+    # ---- 仓库模式：断点续传 + 限流 + 失败显式化 ----
+    if args.warehouse:
+        from finhack_pro.data.collector import MarketDataCollector
+        from finhack_pro.data.warehouse import MarketWarehouse
+
+        wh_dir = args.warehouse_dir or config.data.warehouse_dir
+        wh = MarketWarehouse(wh_dir, backend=config.data.warehouse_backend)
+        collector = MarketDataCollector(wh, fetcher, max_workers=args.workers)
+        report = collector.run(symbols, start=args.start, end=args.end, freq=args.freq)
+
+        logger.info("=" * 60)
+        logger.info(report.summary())
+        logger.info(f"仓库目录: {Path(wh_dir).absolute()}")
+        if not report.ok:
+            # 非随机失败必须中断 CI：静默继续会让股票池系统性偏离
+            for sym, reason in list(report.failed.items())[:20]:
+                logger.error(f"  取数失败 {sym}: {reason}")
+            for sym, reasons in list(report.rejected.items())[:20]:
+                logger.error(f"  校验拒收 {sym}: {'；'.join(reasons)}")
+            sys.exit(1)
+        return
+
+    # ---- 传统 CSV 模式 ----
+    errors: dict[str, str] = {}
+    results = fetcher.batch_download(symbols, args.start, args.end, errors=errors)
 
     # 保存数据
     success_count = 0
@@ -178,6 +227,13 @@ def main() -> None:
     logger.info("=" * 60)
     logger.info(f"数据采集完成: {success_count}/{len(symbols)} 成功")
     logger.info(f"数据保存在: {output_dir.absolute()}")
+
+    if errors:
+        # 退出码非 0 才能让 CI / 定时任务感知"数据不全"
+        for sym, reason in errors.items():
+            logger.error(f"  失败 {sym}: {reason}")
+        logger.error(f"共 {len(errors)}/{len(symbols)} 个标的取数失败")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

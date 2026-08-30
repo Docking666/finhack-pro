@@ -311,6 +311,7 @@ class DataFetcher:
         symbols: List[str],
         start_date: str = "2020-01-01",
         end_date: str = "",
+        errors: Optional[Dict[str, str]] = None,
     ) -> Dict[str, pd.DataFrame]:
         """批量下载数据（串行版，兼容同步调用方）
 
@@ -320,9 +321,16 @@ class DataFetcher:
             symbols: 标的代码列表
             start_date: 开始日期
             end_date: 结束日期
+            errors: 可选**出参**。传入一个 dict，失败的 {symbol: 原因} 会写入其中。
+
+        Note:
+            失败必须可被调用方获取（``errors`` 出参），不能只进日志。
+            在线取数的失败是**非随机**的 —— 停牌 / ST / 次新 / 退市标的更容易失败，
+            仅凭 ``len(results)`` 无法判断股票池是否被系统性污染。
+            返回空 DataFrame 与抛异常同样记为失败，两者都进 ``errors``。
 
         Returns:
-            {symbol: DataFrame} 字典
+            {symbol: DataFrame} 字典（仅含成功项）
         """
         results: Dict[str, pd.DataFrame] = {}
         total = len(symbols)
@@ -333,7 +341,14 @@ class DataFetcher:
                 df = self.get_daily(symbol, start_date, end_date)
                 if not df.empty:
                     results[symbol] = df
+                else:
+                    if errors is not None:
+                        errors[symbol] = "数据源返回空数据"
+                    logger.warning(f"{symbol}: 数据源返回空数据")
             except Exception as e:
+                reason = f"{type(e).__name__}: {e}"
+                if errors is not None:
+                    errors[symbol] = reason
                 logger.error(f"下载 {symbol} 失败: {e}")
 
         logger.info(f"批量下载完成: {len(results)}/{total} 成功")
@@ -345,6 +360,7 @@ class DataFetcher:
         start_date: str = "2020-01-01",
         end_date: str = "",
         max_concurrent: int = 8,
+        errors: Optional[Dict[str, str]] = None,
     ) -> Dict[str, pd.DataFrame]:
         """批量下载数据（异步并发版）
 
@@ -356,9 +372,12 @@ class DataFetcher:
             start_date: 开始日期
             end_date: 结束日期
             max_concurrent: 最大并发数（默认 8）
+            errors: 可选**出参**。传入一个 dict，失败的 {symbol: 原因} 会写入其中。
+                    语义见 :meth:`batch_download` 的 Note —— 失败是非随机的，
+                    静默吞掉会让股票池系统性偏离。
 
         Returns:
-            {symbol: DataFrame} 字典
+            {symbol: DataFrame} 字典（仅含成功项）
         """
         import asyncio
 
@@ -372,7 +391,14 @@ class DataFetcher:
                     df = self.get_daily(symbol, start_date, end_date)
                     if not df.empty:
                         results[symbol] = df
+                    else:
+                        if errors is not None:
+                            errors[symbol] = "数据源返回空数据"
+                        logger.warning(f"{symbol}: 数据源返回空数据")
                 except Exception as e:
+                    reason = f"{type(e).__name__}: {e}"
+                    if errors is not None:
+                        errors[symbol] = reason
                     logger.error(f"下载 {symbol} 失败: {e}")
 
         # 分片并发，避免一次性创建过多任务
@@ -393,6 +419,7 @@ class DataFetcher:
         start_date: str = "2020-01-01",
         end_date: str = "",
         max_concurrent: int = 8,
+        errors: Optional[Dict[str, str]] = None,
     ) -> Dict[str, pd.DataFrame]:
         """批量下载（同步入口，内部运行事件循环）
 
@@ -403,9 +430,10 @@ class DataFetcher:
             start_date: 开始日期
             end_date: 结束日期
             max_concurrent: 最大并发数（默认 8）
+            errors: 可选**出参**，失败的 {symbol: 原因}。语义见 :meth:`batch_download`。
 
         Returns:
-            {symbol: DataFrame} 字典
+            {symbol: DataFrame} 字典（仅含成功项）
         """
         import asyncio
 
@@ -418,11 +446,11 @@ class DataFetcher:
         if loop.is_running():
             # 已在事件循环内：不能嵌套 run_until_complete，退回串行
             logger.warning("已在运行事件循环中，使用串行批量下载")
-            return self.batch_download(symbols, start_date, end_date)
+            return self.batch_download(symbols, start_date, end_date, errors=errors)
 
         return loop.run_until_complete(
             self.batch_download_async(
-                symbols, start_date, end_date, max_concurrent
+                symbols, start_date, end_date, max_concurrent, errors=errors
             )
         )
 
