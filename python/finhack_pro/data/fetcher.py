@@ -45,6 +45,8 @@ class DataFetcher:
         akshare_hist_api: str = "tx",
         sources: Optional[List[str]] = None,
         custom_source: str = "",
+        warehouse_dir: str = "",
+        warehouse_backend: str = "auto",
     ) -> None:
         """初始化数据获取器
 
@@ -55,9 +57,12 @@ class DataFetcher:
             adjust: 复权方式 (qfq 前复权 / hfq 后复权 / "" 不复权)
             akshare_hist_api: akshare 日线取数端点 (tx=腾讯证券 / em=东方财富)。
                 东财接口常被远端反爬断开（RemoteDisconnected），故默认 tx（腾讯）以绕开封锁。
-            sources: 显式数据源优先级列表，如 ["akshare_tx", "baostock", "tushare"]；
+            sources: 显式数据源优先级列表，如 ["warehouse", "akshare_tx", "baostock"]；
                 含 "custom" 时启用自定义源（需配合 custom_source）。None 时用 legacy source 映射。
+                名称解析走数据源注册中心，第三方插件注册后即可直接写在这里。
             custom_source: 用户自定义数据源，如 "my_module.MyDataSource"（须继承 BaseDataSource）。
+            warehouse_dir: 本地量化仓库根目录（sources 含 "warehouse" 时必需）
+            warehouse_backend: 仓库后端 auto / parquet / csv
         """
         self.source = source
         self.cache_dir = Path(cache_dir)
@@ -81,6 +86,8 @@ class DataFetcher:
             adjust=adjust,
             sources=sources,
             custom_source=custom_source,
+            warehouse_dir=warehouse_dir,
+            warehouse_backend=warehouse_backend,
         )
 
         # 兼容属性（供既有调用方/测试使用）

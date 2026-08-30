@@ -74,6 +74,11 @@ class BaseDataSource(ABC):
 
     name: str = "base"
 
+    #: 是否为"可能瞬时失败"的源（网络接口通常是）。False 表示失败是**确定性**的，
+    #: 重试只是浪费 —— 例如本地仓库未覆盖某标的，重试一万次也一样空。
+    #: build_source_chain 据此决定是否包 RetryDataSource。
+    retryable: bool = True
+
     def __init__(self, adjust: str = "qfq", **params: Any) -> None:
         self.adjust = adjust
         self.params = params
@@ -232,6 +237,47 @@ class TushareDataSource(BaseDataSource):
         return df.sort_values("date").reset_index(drop=True)
 
 
+class WarehouseDataSource(BaseDataSource):
+    """本地量化仓库作为数据源（全市场扫描首选）
+
+    把 P1 建好的永久事实库挂进数据源链，使"本地优先、在线补新"成为
+    **配置**而非代码：``data.sources = ["warehouse", "akshare_tx", "baostock"]``。
+
+    关键约束：本类**只读本地，绝不联网**。请求区间未覆盖时返回空表，
+    由 ``DataFetcher`` 依序回退到下一个（在线）源。若在此处偷偷回源，
+    会把不受控的网络请求混进全市场扫描路径 —— 既破坏限流，又让
+    "这次扫描到底读的哪份数据"变得不可追溯。
+    """
+
+    name = "warehouse"
+
+    #: 本地读取不存在网络抖动：未覆盖就是未覆盖，重试纯属浪费
+    #: （全市场扫描若有数百只未覆盖，会把每次 miss 放大成 3 次读盘）
+    retryable = False
+
+    def __init__(self, adjust: str = "qfq", **params: Any) -> None:
+        super().__init__(adjust=adjust, **params)
+        root = params.get("warehouse_dir") or params.get("root")
+        if not root:
+            raise ValueError(
+                "WarehouseDataSource 需要 warehouse_dir 参数（本地仓库根目录）"
+            )
+        # 延迟到 __init__ 内导入：warehouse 依赖 validator，与 sources 无循环
+        from finhack_pro.data.warehouse import MarketWarehouse
+
+        self.warehouse = MarketWarehouse(
+            root,
+            backend=params.get("warehouse_backend", "auto"),
+        )
+        self.freq: str = str(params.get("freq", "daily"))
+        logger.info("本地仓库数据源就绪: %s (backend=%s)", root, self.warehouse.backend)
+
+    def get_daily(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+        df = self.warehouse.get(symbol, start_date, end_date, freq=self.freq)
+        # 未覆盖 -> 返回空表，交给上层回退到在线源（失败显式化，不伪造数据）
+        return df if df is not None else pd.DataFrame()
+
+
 class RetryDataSource(BaseDataSource):
     """重试包装器：对内部数据源 get_daily 做有限次重试，缓解网络抖动 /
     反爬瞬时断开（RemoteDisconnected）导致的假失败。重试耗尽仍失败则抛出最后异常，
@@ -301,20 +347,38 @@ def build_source_chain(
     adjust: str = "qfq",
     sources: Optional[List[str]] = None,
     custom_source: str = "",
+    warehouse_dir: str = "",
+    warehouse_backend: str = "auto",
 ) -> List[BaseDataSource]:
     """按配置构建数据源链（按优先级排列，失败时依序真实回退）。
+
+    本函数不认识任何具体数据源 —— 只按名字去 :mod:`finhack_pro.data.registry`
+    取。新增一个源只需注册，无需改动此处（配置即组装）。
 
     Args:
         source: 兼容旧配置（akshare / tushare），未提供 sources 时生效
         tushare_token: tushare token（提供时才启用 tushare 源）
         adjust: 复权方式
-        sources: 显式源优先级列表，如 ["akshare_tx", "baostock", "tushare"]；
+        sources: 显式源优先级列表，如 ["warehouse", "akshare_tx", "baostock"]；
                  含 "custom" 时启用自定义源（需同时提供 custom_source）
         custom_source: 用户自定义源，如 "my_module.MyDataSource"
+        warehouse_dir: 本地量化仓库根目录（sources 含 "warehouse" 时必需）
+        warehouse_backend: 仓库后端 auto / parquet / csv
     """
     chain: List[BaseDataSource] = []
 
     if sources:
+        # 经注册中心解析，本函数不再认识任何具体源：
+        # 新增数据源只需注册，不必改动这里（配置即组装）。
+        from finhack_pro.data.registry import _register_builtins, default_registry
+
+        _register_builtins()
+        config: Dict[str, Any] = {
+            "adjust": adjust,
+            "tushare_token": tushare_token,
+            "warehouse_dir": warehouse_dir,
+            "warehouse_backend": warehouse_backend,
+        }
         for name in sources:
             name = (name or "").strip().lower()
             if not name:
@@ -325,17 +389,19 @@ def build_source_chain(
                 else:
                     logger.warning("配置了 custom 源但未提供 custom_source，跳过")
                 continue
-            if name not in SOURCE_REGISTRY:
-                logger.warning("未知数据源: %s，跳过", name)
+            if name not in default_registry:
+                logger.warning(
+                    "未知数据源: %s，跳过。已注册: %s", name, sorted(default_registry.names())
+                )
                 continue
-            cls = SOURCE_REGISTRY[name]
-            if name == "tushare":
-                if tushare_token:
-                    chain.append(cls(token=tushare_token, adjust=adjust))
-                else:
-                    logger.warning("配置了 tushare 源但未提供 tushare_token，跳过")
+            try:
+                src = default_registry.try_create(name, **config)
+            except Exception as e:
+                # 单个源构造失败不得拖垮整条链；但必须可见
+                logger.warning("构造数据源 %s 失败: %s，跳过", name, e)
                 continue
-            chain.append(cls(adjust=adjust))
+            if src is not None:
+                chain.append(src)
     else:
         # 兼容旧配置映射（legacy）
         tushare_ok = bool(tushare_token)
@@ -356,5 +422,12 @@ def build_source_chain(
             "或 data.custom_source 后重试。"
         )
     # 统一加重试包装（SDD：瞬时失败真实重试，避免单源网络抖动导致全链路失败；
-    # 重试耗尽仍失败则抛最后异常，由 fetcher 依序回退到下一个源）
-    return [RetryDataSource(s, retries=3, timeout=15) for s in chain]
+    # 重试耗尽仍失败则抛最后异常，由 fetcher 依序回退到下一个源）。
+    # 跳过 retryable=False 的源（如本地仓库）：它们的失败是确定性的，
+    # 重试只会把每次 miss 放大成 3 倍开销，却不会改变结果。
+    return [
+        RetryDataSource(s, retries=3, timeout=15)
+        if getattr(s, "retryable", True)
+        else s
+        for s in chain
+    ]

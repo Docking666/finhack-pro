@@ -9,6 +9,15 @@ from finhack_pro.data.collector import CollectReport, MarketDataCollector
 from finhack_pro.data.features import FeatureEngineer
 from finhack_pro.data.fetcher import DataFetcher
 from finhack_pro.data.levels import LevelScan, PriceLevel, SupportResistanceDetector, screen_near_level
+from finhack_pro.data.registry import (
+    ENTRY_POINT_GROUP,
+    DataSourceRegistry,
+    MissingSourceConfig,
+    RegistryError,
+    SourceSpec,
+    default_registry,
+)
+from finhack_pro.data.sources import BaseDataSource, build_source_chain
 from finhack_pro.data.technical import TechnicalIndicator
 from finhack_pro.data.validator import DataAnomaly, DataQualityReport, DataValidator, ValidationResult
 from finhack_pro.data.versioning import DataVersion, DataVersionManager, VersionDiff
@@ -39,4 +48,13 @@ __all__ = [
     "PriceLevel",
     "LevelScan",
     "screen_near_level",
+    # 数据源插件化：注册中心 + 契约基类 + 配置即组装
+    "BaseDataSource",
+    "build_source_chain",
+    "DataSourceRegistry",
+    "SourceSpec",
+    "RegistryError",
+    "MissingSourceConfig",
+    "default_registry",
+    "ENTRY_POINT_GROUP",
 ]
