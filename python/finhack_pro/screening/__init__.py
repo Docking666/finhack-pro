@@ -39,6 +39,13 @@ from finhack_pro.screening.factors import (
     build_default_factor_registry,
     register_level_factors,
 )
+from finhack_pro.screening.funnel import (
+    FinalSelectFn,
+    FunnelConfig,
+    FunnelReport,
+    StageResult,
+    StockFunnel,
+)
 from finhack_pro.screening.spec import (
     ALL_OPS,
     CATEGORY_OPS,
@@ -71,4 +78,10 @@ __all__ = [
     "ScreenEngine",
     "ScreenResult",
     "ScreenHit",
+    # 漏斗编排
+    "StockFunnel",
+    "FunnelConfig",
+    "FunnelReport",
+    "StageResult",
+    "FinalSelectFn",
 ]
