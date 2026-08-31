@@ -324,6 +324,7 @@ def _register_builtins() -> None:
     放在函数里而非模块顶层：避免 registry 与 sources 形成模块级循环导入
     （sources.build_source_chain 需要用 default_registry）。
     """
+    from finhack_pro.data.free_stockdb import FreeStockDBSource
     from finhack_pro.data.sources import (
         AkshareEMDataSource,
         AkshareSinaDataSource,
@@ -364,6 +365,12 @@ def _register_builtins() -> None:
             lambda **cfg: WarehouseDataSource(**cfg),
             "本地量化仓库（永久事实库，全市场扫描首选）",
             ("warehouse_dir",),
+        ),
+        (
+            "free_stockdb",
+            lambda **cfg: FreeStockDBSource(**cfg),
+            "free-stockdb 本地数据引擎（须先启动 stockdb.exe；只连本机，见其模块文档的 mock 数据风险）",
+            (),
         ),
     ]
 

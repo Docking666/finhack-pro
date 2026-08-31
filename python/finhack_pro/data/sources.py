@@ -349,6 +349,8 @@ def build_source_chain(
     custom_source: str = "",
     warehouse_dir: str = "",
     warehouse_backend: str = "auto",
+    free_stockdb_host: str = "",
+    free_stockdb_port: int = 7899,
 ) -> List[BaseDataSource]:
     """按配置构建数据源链（按优先级排列，失败时依序真实回退）。
 
@@ -364,6 +366,9 @@ def build_source_chain(
         custom_source: 用户自定义源，如 "my_module.MyDataSource"
         warehouse_dir: 本地量化仓库根目录（sources 含 "warehouse" 时必需）
         warehouse_backend: 仓库后端 auto / parquet / csv
+        free_stockdb_host / free_stockdb_port: free-stockdb 引擎地址，
+            默认 127.0.0.1:7899。**勿指向公共服务器**——批量拉取触发风控后会
+            返回随机 mock 数据（见 free_stockdb.py 模块文档）。
     """
     chain: List[BaseDataSource] = []
 
@@ -378,6 +383,8 @@ def build_source_chain(
             "tushare_token": tushare_token,
             "warehouse_dir": warehouse_dir,
             "warehouse_backend": warehouse_backend,
+            "free_stockdb_host": free_stockdb_host,
+            "free_stockdb_port": free_stockdb_port,
         }
         for name in sources:
             name = (name or "").strip().lower()

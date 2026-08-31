@@ -8,6 +8,7 @@ from finhack_pro.data.cache import CacheStats, DataCache
 from finhack_pro.data.collector import CollectReport, MarketDataCollector
 from finhack_pro.data.features import FeatureEngineer
 from finhack_pro.data.fetcher import DataFetcher
+from finhack_pro.data.free_stockdb import FreeStockDBClient, FreeStockDBError, FreeStockDBSource
 from finhack_pro.data.levels import LevelScan, PriceLevel, SupportResistanceDetector, screen_near_level
 from finhack_pro.data.registry import (
     ENTRY_POINT_GROUP,
@@ -48,6 +49,10 @@ __all__ = [
     "PriceLevel",
     "LevelScan",
     "screen_near_level",
+    # free-stockdb 本地数据引擎适配（须先启动 stockdb.exe）
+    "FreeStockDBClient",
+    "FreeStockDBSource",
+    "FreeStockDBError",
     # 数据源插件化：注册中心 + 契约基类 + 配置即组装
     "BaseDataSource",
     "build_source_chain",
