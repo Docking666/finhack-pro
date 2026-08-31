@@ -13,6 +13,7 @@
 - [系统概述](#系统概述)
 - [核心特性](#核心特性)
 - [系统架构](#系统架构)
+- [本地量化数据与选股链路](#本地量化数据与选股链路)
 - [安全与可靠性](#安全与可靠性)
 - [回测引擎系统](#回测引擎系统)
 - [撮合精度约束](#撮合精度约束-backtestexecutionpy)
@@ -289,6 +290,151 @@ FinHack Pro 是一个面向A股市场的多智能体量化交易系统，采用 
 │  └── Grafana    (监控面板)                                       │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 本地量化数据与选股链路
+
+近几轮新增的**全市场选股能力**，由四层可插拔组件组成，链路完整可复现：
+
+```
+本地量化仓库(MarketWarehouse) → 支撑阻力检测(S/R) → 数据源插件注册中心
+  → 条件编译器+筛选引擎(LLM 仅编译期出场) → 选股漏斗 → [可选 LLM 终选]
+```
+
+### 本地量化仓库 (`data/warehouse.py`)
+
+与 `DataCache`（TTL 24h / 500MB / 30 天清理的短期缓存）严格区分，仓库是
+**永久事实库**：`data/warehouse/{freq}/{symbol}.parquet`（缺 pyarrow 时
+显式降级 gzip CSV）。全市场扫描与回测可复现都依赖它。
+
+- **PIT first-write-wins**：已存在的历史 bar 默认不被后续取数覆盖（重新拉取
+  可能带不同复权因子，静默覆盖会篡改既有回测结论）。需覆盖必须显式
+  `overwrite=True`。
+- 覆盖度索引 `_index.json` + `missing_range()`/`holes()`，支持增量补数与空洞检测。
+- 原子写入（临时文件 + replace）；入库前经 `DataValidator` 校验，拒收即不落盘。
+- 全市场采集器 `data/collector.py`：**三态结果**（ingested / failed / rejected），
+  取数失败与校验拒收分开暴露 —— 在线取数失败是**非随机**的（停牌/ST/次新更易
+  失败），只进日志会让股票池系统性偏离。支持断点续传（按 missing_range 只取缺口）、
+  限流抖动（并发 4 + 随机 sleep）、失败清单落盘 `_failures_{freq}.json`。
+
+```bash
+# 建库（断点续传，可中断重跑；失败清单在 data/warehouse/_failures_daily.json）
+python scripts/fetch_data.py --symbols 600519.SH,000001.SZ --start 2020-01-01 \
+  --warehouse --workers 4
+```
+
+### 支撑阻力区域检测 (`data/levels.py`)
+
+**输出"区域"而非"线"**：对每簇极值做最小二乘拟合，给出 `center/lower/upper/slope`。
+聚类判据是**拟合残差**而非价格距离 —— 价格距离识别不了倾斜通道（上行通道下轨
+各触点价格相差很远但彼此共线），每点重 fit 整簇还能拦下链式误合并。
+触碰次数 + 成交量双重确认后按强度评分。`detect_batch` 单标的失败不中断整批，
+但调用方可从差集发现（静默丢弃会让机会池偏向数据干净的大盘股）。
+**无未来函数**：`detect()` 只用传入的 bar，回测必须传截至决策时点的截断序列
+（模块文档有明确用法）。
+
+### 数据源插件注册中心 (`data/registry.py`)
+
+原 `SOURCE_REGISTRY` 是静态字典，外部能力挂不进来。现为可插拔注册中心：
+
+- **可逆副作用**：`register()` 返回 disposer，调用即完整还原注册前状态
+  （含"原本不存在"与"原本是别的源"两种情形，保持注册顺序）。
+- **配置即组装**：`build_source_chain` 不认识任何具体源，只按名字查注册中心；
+  `required_config` 声明必需配置，缺失则跳过并告警（调用方可见的主动降级，
+  区别于 factory 内部静默降级）。
+- **entry_points 自动发现**（组名 `finhack_pro.data_sources`），默认不覆盖已注册源。
+- 内置源：`akshare_tx / akshare_em / akshare_sina / baostock / tushare /
+  warehouse / free_stockdb`。第三方插件声明 entry_points 组即可挂载。
+
+```yaml
+# 本地优先、在线补新（配置即组装）
+data:
+  sources: ["warehouse", "akshare_tx", "baostock"]
+  warehouse_dir: "data/warehouse"
+```
+
+### 选股筛选层 (`screening/`)
+
+**LLM 只在编译期出场一次**，不参与任何单只股票的评价 —— 5400 只 × 1 次 LLM
+编译可行，5400 只 × 1 次 LLM 评价在成本、延迟、可复现性上全不过关。
+
+| 模块 | 职责 |
+|---|---|
+| `factors.py` | 因子注册表（13 内置因子 + 结构类因子按需挂载），注册可逆 |
+| `spec.py` | `FilterSpec` 契约（LLM 的产出止步于此），字段白名单校验 |
+| `compiler.py` | 自然语言 → `FilterSpec`（LLM 唯一出场处，`chat_fn` 注入式） |
+| `engine.py` | 确定性执行，无 LLM，同输入必同输出 |
+
+四条硬约束：字段白名单（LLM 编造的字段名进 `unresolved`，绝不静默忽略）；
+`unresolved` 显式化（"用户提三个条件只执行两个"是最危险的失效模式）；
+时间锚定 `as_of`（"最近5天"相对决策日而非今天）；编译器不得输出股票代码
+（LLM 顺带推荐标的一律视为编译失败）。
+
+执行引擎：**NaN ≠ 不满足**（算不出是 unavailable 进 skipped，混同会让股票池
+系统性剔除新上市/停牌标的）；空条件必须报错（等价于没筛选）。
+
+```python
+from finhack_pro.screening import ConditionCompiler, ScreenEngine, build_default_factor_registry
+reg = build_default_factor_registry()
+spec = ConditionCompiler(chat_fn, reg).compile("放量突破20日线的强势股", as_of="2024-06-30")
+if not spec.ok: print("未能解析:", spec.unresolved)
+spec.validate(reg)
+result = ScreenEngine(reg).screen(market_data, spec)
+```
+
+### 全市场选股漏斗 (`screening/funnel.py`)
+
+**便宜且区分度高的过滤放前面**，让昂贵的结构检测只作用于小候选集：
+
+```
+5000+ → ①数据可用性 → ②流动性 → ③条件筛选 → ④结构检测 → ⑤终选(20只)
+```
+
+每条纪律：每层丢弃可归因（`FunnelReport.why_dropped()` 一步定位"为什么没进池"）；
+截断到 `as_of` 在第①层完成（PIT）；LLM 是可选第⑤层不是过滤器（默认确定性
+综合打分，注入 `final_select` 后 LLM 只在 60→20 出场）；启用 LLM 即如实标记
+`deterministic=False`。实测 500 只合成数据 3.2s 完成全链路。
+
+### free-stockdb 本地数据引擎接入 (`data/free_stockdb.py`)
+
+上游 [free-stockdb](https://github.com/hello245m/free-stockdb)（代码 MIT）：
+本地 C++ 时序引擎，A 股 2000 年至今日/周/月/1/5/15/30 分钟 K 线 + tick（按需），
+含复权因子、市值估值、ST 标记。上游「数据更新.exe」增量同步到本地磁盘
+（断点续传），`stockdb.exe` 起本地 HTTP 服务（默认 `127.0.0.1:7899`）。
+
+```bash
+# 使用顺序（勿跳步）：
+# 1. 上游「数据更新.exe」把历史数据同步到本地磁盘
+# 2. 启动 stockdb.exe
+# 3. 验证引擎与响应形态（本机）
+python scripts/import_free_stockdb.py probe
+# 4. 列出标的
+python scripts/import_free_stockdb.py list
+# 5. 全量导入本地仓库（复用采集器：断点续传 + 失败清单 + 诱饵拒收）
+python scripts/import_free_stockdb.py import --start 2000-01-01 --workers 4
+```
+
+三个关键约束（违反任何一个都会污染数据）：
+
+1. **复权口径对齐**：上游 `日k` 表存不复权原始价，前复权按上游同一公式
+   （qfq = 原价 × f_current / f_latest，含 ETF 三位小数差异）默认折算，
+   与项目内其他源（默认 qfq）一致 —— 否则仓库混入两套价格口径，回测作废。
+   需要原始价须显式 `adjust=""`。
+2. **只连本机**：公共无鉴权服务器仅供测试，连续批量拉取触发风控后会返回
+   **随机 mock 数据**（cache_decoy）。客户端默认 `127.0.0.1`；内置两道诱饵
+   检测（pct_chg 与 close/pre_close 交叉校验、整段重复），命中即拒收不入库。
+   连公共服务器须显式改 host 并自担风险。
+3. **数据许可**：代码 MIT 可放心用；数据本身的上游许可未在仓库声明，
+   再分发需自行确认。
+
+### 既有工程约定（持续生效）
+
+- 提交前必跑 `cd python && python -m ruff check finhack_pro/ tests/`（CI Lint 会拦）。
+- 日志风格按模块分清：`utils/logger.get_logger` 是 loguru（`{}` 占位符）；
+  `data/sources.py` 用 std logging（`%s` 占位符）。不可混用。
+- 测试执行：`tests/` 全量约 95s，`test_pipeline_resume.py` /
+  `test_evidence_binding.py` 另需 ~115s，需单独跑避免前台超时。
 
 ---
 
