@@ -341,7 +341,9 @@ class MarketWarehouse:
         if start:
             df = df[df["date"] >= pd.to_datetime(start)]
         if end:
-            df = df[df["date"] <= pd.to_datetime(end)]
+            # 半开区间 [start, end+1day)：end 当天 00:00 时刻的日线 bar 要保留；
+            # 而分钟 bar 的 end 当天（如 09:35）若按 `<= end` 过滤会被整段丢弃。
+            df = df[df["date"] < pd.to_datetime(end) + pd.Timedelta(days=1)]
         return df.reset_index(drop=True)
 
     def exists(self, symbol: str, freq: str = "daily") -> bool:

@@ -337,3 +337,170 @@ def test_collector_rejects_decoy_data(tmp_path):
     assert "600519" in report.failed
     assert "mock" in report.failed["600519"]
     assert not wh.exists("600519")  # 拒收即不落盘
+
+
+# ============================================================================
+# 分钟线
+# ============================================================================
+
+
+def _min_record(ymd_hms: str, close: float, volume: int = 100) -> dict:
+    o = close
+    return {
+        "code": "600519",
+        "date": int(ymd_hms),
+        "open": o,
+        "high": round(close * 1.001, 3),
+        "low": round(close * 0.999, 3),
+        "close": close,
+        "volume": volume,
+        "amount": volume * close,
+    }
+
+
+def test_minute_frame_url_uses_14_digit_range():
+    eng = _StubEngine({"分钟k": [_min_record("20240605093000", 10.0)]})
+    client = FreeStockDBClient(transport=eng)
+    client.get_minute_frame("600519", "2024-06-05", "2024-06-05", period=1)
+    assert "t=分钟k:600519:20240605000000<20240605235959" in eng.urls[0]
+
+
+def test_minute_frame_datetime_column(tmp_path):
+    recs = [_min_record("20240605093000", 10.0), _min_record("20240605093100", 10.1)]
+    client = FreeStockDBClient(transport=_StubEngine({"分钟k": recs}))
+    df = client.get_minute_frame("600519", "2024-06-05", "2024-06-05", period=1, adjust="")
+    assert str(df["date"].dtype).startswith("datetime64")
+    assert df["date"].is_monotonic_increasing
+
+
+def test_minute_qfq_uses_date_part_of_timestamp():
+    """分钟 bar 复权按日期查因子（时间戳截前 8 位）。"""
+    recs = [_min_record("20240605100000", 100.0)]
+    eng = _StubEngine(
+        {"分钟k": recs, "复权": [_factor_record("2024-01-01", 1.0), _factor_record("2024-06-10", 2.0)]}
+    )
+    client = FreeStockDBClient(transport=eng)
+    df = client.get_minute_frame("600519", "2024-06-05", "2024-06-05", period=1, adjust="qfq")
+    assert df["close"].iloc[0] == pytest.approx(50.0)  # 100 * 1.0/2.0
+
+
+def test_source_get_minute_contract():
+    """MarketDataCollector 的 min* 频率会以 (symbol, start, end, period) 调用。"""
+    src = FreeStockDBSource()
+    src.client._transport = _StubEngine(
+        {"分钟k": [_min_record("20240605093000", 10.0), _min_record("20240605093100", 10.1)]}
+    )
+    df = src.get_minute("600519", "2024-06-05", "2024-06-05", period="5")
+    assert len(df) == 1  # 两根 1 分钟聚成一根 5 分钟
+    assert df["date"].iloc[0] == pd.Timestamp("2024-06-05 09:35:00")
+
+
+def test_collector_imports_min5_into_warehouse(tmp_path):
+    """freq=min5 -> 仓库 min5 分区，端到端。"""
+    wh = MarketWarehouse(tmp_path / "wh")
+    source = FreeStockDBSource()
+    source.client._transport = _StubEngine(
+        {"分钟k": [_min_record("20240605093000", 10.0), _min_record("20240605093100", 10.1)]}
+    )
+    collector = MarketDataCollector(wh, source, max_workers=1, jitter=(0, 0))
+    report = collector.run(["600519"], start="2024-06-05", end="2024-06-05", freq="min5")
+
+    assert report.ok and report.ingested == 1
+    df = wh.get("600519", "2024-06-05", "2024-06-05", freq="min5")
+    assert len(df) == 1
+
+
+# ============================================================================
+# 分钟线
+# ============================================================================
+
+
+def _min_record(ymd_hms: str, close: float, volume: int = 100) -> dict:
+    o = close
+    return {
+        "code": "600519",
+        "date": int(ymd_hms),
+        "open": o,
+        "high": round(close * 1.001, 3),
+        "low": round(close * 0.999, 3),
+        "close": close,
+        "volume": volume,
+        "amount": volume * close,
+    }
+
+
+def test_aggregate_5min_buckets_morning():
+    """09:30-09:34 五根 1 分钟聚成一根标 09:35 的 5 分钟 bar。"""
+    recs = [
+        _min_record("20240605" + f"{930 + m:04d}" + "00", 10.0 + i * 0.1)
+        for i, m in enumerate(range(0, 5))  # 09:30..09:34
+    ]
+    out = FreeStockDBClient.aggregate_minutes(recs, 5)
+    assert len(out) == 1
+    bar = out[0]
+    assert bar["date"] == 20240605 * 1000000 + 93500  # 09:35:00
+    assert bar["open"] == 10.0
+    assert bar["close"] == 10.4
+    # _min_record 的 high 是 round(close*1.001, 3)，断言须对齐同样的舍入
+    assert bar["high"] == round(max(10.0 + i * 0.1 for i in range(5)) * 1.001, 3)
+    assert bar["volume"] == 500
+
+
+def test_aggregate_afternoon_alignment():
+    """13:00 与 13:01 同属 elapsed=121 桶（上游约定）。"""
+    recs = [
+        _min_record("20240605130000", 20.0),
+        _min_record("20240605130100", 20.1),
+        _min_record("20240605130200", 20.2),
+    ]
+    out = FreeStockDBClient.aggregate_minutes(recs, 5)
+    assert len(out) == 1
+    # bucket_end = ceil(121/5)*5 = 125 -> label 13:05
+    assert out[0]["date"] == 20240605130500
+
+
+def test_aggregate_skips_lunch_and_offhours():
+    """午休与盘外数据必须丢弃，不得混进 bar。"""
+    recs = [
+        _min_record("20240605113000", 10.0),   # 11:30 上午收盘，elapsed=120
+        _min_record("20240605120000", 99.0),   # 午休，丢弃
+        _min_record("20240605150000", 20.0),   # 15:00 收盘，elapsed=240
+        _min_record("20240605091500", 88.0),   # 盘前，丢弃
+    ]
+    out = FreeStockDBClient.aggregate_minutes(recs, 30)
+    dates = [b["date"] for b in out]
+    assert all(99.0 not in (b["open"], b["close"]) for b in out)
+    assert 20240605120000 not in dates
+    assert 20240605091500 not in dates
+    assert len(out) == 2  # 11:30 -> 上午末桶；15:00 -> 下午末桶
+
+
+def test_aggregate_1min_returns_as_is():
+    recs = [_min_record("20240605093000", 10.0)]
+    out = FreeStockDBClient.aggregate_minutes(recs, 1)
+    assert out is not recs and len(out) == 1
+
+
+def test_aggregate_invalid_period_raises():
+    with pytest.raises(ValueError):
+        FreeStockDBClient.aggregate_minutes([_min_record("20240605093000", 1.0)], 0)
+
+def test_datafetcher_passthrough_free_stockdb_config():
+    """coordinator 侧透传的 host/port 必须到达链上的 free_stockdb 源。
+
+    回归：曾因 DataFetcher 未声明 free_stockdb_host/port 参数，coordinator
+    调用直接 TypeError，被 _build_data_fetcher 的兜底 except 吞掉，
+    所有行情工具静默降级为"数据源未配置"——失败被隐藏，比报错更危险。
+    """
+    from finhack_pro.data.fetcher import DataFetcher
+
+    fetcher = DataFetcher(
+        sources=["free_stockdb"],
+        free_stockdb_host="10.0.0.8",
+        free_stockdb_port=9999,
+    )
+    # free_stockdb 是 retryable 源，链上被 RetryDataSource 包装，取 inner
+    src = fetcher._sources[0].inner
+    assert src.name == "free_stockdb"
+    assert src.client.host == "10.0.0.8"
+    assert src.client.port == 9999

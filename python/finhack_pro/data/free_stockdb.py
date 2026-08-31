@@ -76,6 +76,15 @@ class FreeStockDBDecoyError(FreeStockDBError):
     """检测到疑似风控 mock 数据（cache_decoy）。拒绝入库。"""
 
 
+def interval_bucket_end(elapsed: int, period: int) -> int:
+    """elapsed 分钟所属桶的末端时刻（对齐上游：elapsed<=0 也归入第一个桶）。"""
+    import math
+
+    bucket = period if elapsed <= 0 else math.ceil(elapsed / period) * period
+    return bucket
+
+
+
 class FreeStockDBClient:
     """free-stockdb HTTP 客户端（默认只连本机）
 
@@ -233,6 +242,138 @@ class FreeStockDBClient:
             )
 
     # ------------------------------------------------------------------
+    # 分钟线（上游 分钟k 表存 1 分钟基础 bar，N 分钟由客户端聚合）
+    # ------------------------------------------------------------------
+
+    def get_minute_records(
+        self, code: str, start: str, end: str
+    ) -> List[Dict[str, Any]]:
+        """原始 1 分钟 bar。范围键为 14 位时间戳 YYYYMMDDHHMMSS。"""
+        lo = _naked(start)
+        hi = _naked(end)
+        lo14 = f"{lo}000000" if lo else ""
+        hi14 = f"{hi}235959" if hi else ""
+        time_expr = f"{lo14}<{hi14}" if lo14 and hi14 else (hi14 or lo14 or "*")
+        raw = self._get_json(f"分钟k:{code}:{time_expr}")
+        return self._parse_records(raw, table_expr=f"分钟k:{code}")
+
+    def get_minute_frame(
+        self,
+        code: str,
+        start: str,
+        end: str,
+        period: int = 1,
+        adjust: str = "qfq",
+    ) -> pd.DataFrame:
+        """取分钟线并聚合为 period 分钟 bar，标准化为仓库列布局。
+
+        上游 分钟k 表只存 1 分钟基础数据，5/15/30/60 分钟由客户端按
+        交易时段对齐聚合（与上游 _merge_minutes_to_period 同规则）。
+        """
+        if int(period) < 1:
+            raise ValueError(f"period 必须为正整数，收到 {period}")
+        records = self.get_minute_records(code, start, end)
+        if not records:
+            return pd.DataFrame()
+
+        if int(period) > 1:
+            records = self.aggregate_minutes(records, int(period))
+
+        if not records:
+            # 全部落在午休/盘外被丢弃时，必须返回带标准列的空表，
+            # 而不是无列的空 DF（后者会让下游 KeyError: 'date'）
+            return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+
+        self.check_decoy(records)
+
+        if adjust == "qfq":
+            dates, cums = self.get_adjust_factors(code)
+            records = self.apply_qfq(records, dates, cums, code)
+
+        rows = []
+        for r in sorted(records, key=lambda x: int(x["date"])):
+            rows.append(
+                {
+                    "date": pd.to_datetime(str(int(r["date"])), format="%Y%m%d%H%M%S"),
+                    "open": r.get("open"),
+                    "high": r.get("high"),
+                    "low": r.get("low"),
+                    "close": r.get("close"),
+                    "volume": r.get("volume"),
+                    **({"amount": r["amount"]} if r.get("amount") is not None else {}),
+                }
+            )
+        df = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+        if df["date"].duplicated().any():
+            logger.warning("free-stockdb 分钟线返回重复时间 {}，保留最后一条", code)
+            df = df.drop_duplicates(subset="date", keep="last").reset_index(drop=True)
+        return df
+
+    @staticmethod
+    def aggregate_minutes(records: List[Dict[str, Any]], period: int) -> List[Dict[str, Any]]:
+        """1 分钟 bar 聚合为 period 分钟 bar。
+
+        时段对齐与上游一致：上午 09:30-11:30（elapsed 0-120）、
+        下午 13:00-15:00（elapsed 121-240），午休与盘外数据丢弃。
+        bar 的时间戳取桶末端对齐时刻（如 09:30-09:34 聚成一根标 09:35 的 bar）。
+        """
+        if period < 1:
+            raise ValueError(f"period 必须为正整数，收到 {period}")
+        if period == 1:
+            return list(records)
+
+        def trading_elapsed(minute_of_day: int) -> Optional[int]:
+            if 570 <= minute_of_day <= 690:
+                return minute_of_day - 570
+            if 780 <= minute_of_day <= 900:
+                return 121 if minute_of_day == 780 else 120 + (minute_of_day - 780)
+            return None
+
+        def label_of(bucket_end: int) -> int:
+            """桶末端 minute_of_day -> HHMM 标签。
+
+            上游约定：bar 时间戳取桶末端对齐时刻（09:30-09:34 聚成一根
+            标 09:35 的 bar）。09:35 的 minute_of_day 是 575，
+            但作为 HHMM 标签是 935 —— 必须先换算再拼进 14 位时间戳，
+            否则拼出 57500（05:75:00）这种非法时刻。
+            """
+            e = min(bucket_end, 240)
+            mod = (570 + e) if e <= 120 else (780 + (e - 120))
+            return ((mod // 60) * 100) + (mod % 60)
+
+        groups: Dict[Tuple[int, int], List[Dict[str, Any]]] = {}
+        for r in sorted(records, key=lambda x: int(x["date"])):
+            date_int = int(r["date"])
+            if date_int < 10**13:  # 非 14 位时间戳，跳过
+                continue
+            hhmm = (date_int // 100) % 10000  # HHMM
+            minute_of_day = (hhmm // 100) * 60 + (hhmm % 100)
+            elapsed = trading_elapsed(minute_of_day)
+            if elapsed is None:
+                continue
+            bucket_end = interval_bucket_end(elapsed, period)
+            groups.setdefault((date_int // 1000000, bucket_end), []).append(r)
+
+        merged: List[Dict[str, Any]] = []
+        for (ymd, bucket_end), items in groups.items():
+            vols = [float(i.get("volume") or 0) for i in items]
+            amts = [float(i.get("amount") or 0) for i in items]
+            merged.append(
+                {
+                    "code": items[0].get("code", ""),
+                    "date": ymd * 1000000 + label_of(bucket_end) * 100,
+                    "open": items[0].get("open"),
+                    "high": max(float(i["high"]) for i in items if i.get("high") is not None),
+                    "low": min(float(i["low"]) for i in items if i.get("low") is not None),
+                    "close": items[-1].get("close"),
+                    "volume": sum(vols),
+                    "amount": sum(amts),
+                }
+            )
+        merged.sort(key=lambda x: x["date"])
+        return merged
+
+    # ------------------------------------------------------------------
     # 复权
     # ------------------------------------------------------------------
 
@@ -340,6 +481,15 @@ class FreeStockDBSource(BaseDataSource):
 
     def get_daily(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         df = self.client.get_daily_frame(symbol, start_date, end_date, adjust=self.adjust)
+        return df if df is not None else pd.DataFrame()
+
+    def get_minute(
+        self, symbol: str, start_date: str, end_date: str, period: str = "5"
+    ) -> pd.DataFrame:
+        """分钟线（供 MarketDataCollector 的 min* 频率使用）。"""
+        df = self.client.get_minute_frame(
+            symbol, start_date, end_date, period=int(period or 1), adjust=self.adjust
+        )
         return df if df is not None else pd.DataFrame()
 
 

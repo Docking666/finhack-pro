@@ -47,6 +47,8 @@ class DataFetcher:
         custom_source: str = "",
         warehouse_dir: str = "",
         warehouse_backend: str = "auto",
+        free_stockdb_host: str = "127.0.0.1",
+        free_stockdb_port: int = 7899,
     ) -> None:
         """初始化数据获取器
 
@@ -88,6 +90,8 @@ class DataFetcher:
             custom_source=custom_source,
             warehouse_dir=warehouse_dir,
             warehouse_backend=warehouse_backend,
+            free_stockdb_host=free_stockdb_host,
+            free_stockdb_port=free_stockdb_port,
         )
 
         # 兼容属性（供既有调用方/测试使用）

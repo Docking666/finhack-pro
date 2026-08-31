@@ -1923,6 +1923,8 @@ class AgentCoordinator:
                 custom_source=data_cfg.get("custom_source", "") or "",
                 warehouse_dir=data_cfg.get("warehouse_dir", "") or "",
                 warehouse_backend=data_cfg.get("warehouse_backend", "auto") or "auto",
+                free_stockdb_host=data_cfg.get("free_stockdb_host", "127.0.0.1") or "127.0.0.1",
+                free_stockdb_port=int(data_cfg.get("free_stockdb_port", 7899) or 7899),
             )
         except Exception as e:  # noqa: BLE001 - 初始化降级不得中断流水线构造
             self._logger.warning(f"DataFetcher 构造失败，行情类工具将不可用: {e}")

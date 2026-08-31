@@ -102,6 +102,10 @@ class DataConfig(BaseModel):
     # 全市场扫描与回测可复现都依赖它，勿指向 cache_dir。
     warehouse_dir: str = "data/warehouse"
     warehouse_backend: str = "auto"  # auto / parquet / csv（parquet 需可选依赖 pyarrow）
+    # free-stockdb 本地引擎（数据源名 free_stockdb）。默认只连本机；
+    # 勿指向公共服务器——批量拉取触发风控后会返回随机 mock 数据。
+    free_stockdb_host: str = "127.0.0.1"
+    free_stockdb_port: int = 7899
     default_start: str = "2020-01-01"
     default_end: str = "2024-12-31"
     akshare_hist_api: str = "tx"  # akshare 日线端点：tx=腾讯证券(默认，绕开东财封锁) / em=东方财富
